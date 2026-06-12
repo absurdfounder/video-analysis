@@ -2,4 +2,6 @@ node_modules
 .env
 *.csv
 *.json
+!package.json
+!package-lock.json
 .DS_Store
