@@ -1,4 +1,6 @@
 [build]
+  # Force Netlify to build from repo root even if the UI still has Base directory = app/public.
+  base = "."
   command = "npm --prefix app install"
   publish = "app/public"
   functions = "app/netlify/functions"
