@@ -1,11 +1,16 @@
-const { json } = require('./_utils');
+const { json, runYtdlp } = require('./_utils');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json(204, {});
-  return json(200, {
-    ok: true,
-    ytdlpVersion: 'bundled via youtube-dl-exec during Netlify build',
-    openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
-    note: 'Netlify Functions are active. Start with small batches because serverless functions have time limits.',
-  });
+  try {
+    const { stdout } = await runYtdlp('', { version: true }, { timeout: 15000 });
+    return json(200, {
+      ok: true,
+      ytdlpVersion: stdout.trim(),
+      openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+      note: 'Netlify Functions are active. Start with small batches because serverless functions have time limits.',
+    });
+  } catch (error) {
+    return json(500, { ok: false, error: error.stderr || error.message });
+  }
 };

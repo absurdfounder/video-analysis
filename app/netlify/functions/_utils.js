@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const youtubedl = require('youtube-dl-exec');
+const { execFile } = require('child_process');
 
 function json(statusCode, body) {
   return {
@@ -138,27 +138,58 @@ function guessLanguage(fileName) {
   return 'unknown';
 }
 
+function flagToArg(name) {
+  return `--${String(name).replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`;
+}
+
+function flagsToArgs(flags = {}) {
+  const args = [];
+  for (const [name, value] of Object.entries(flags)) {
+    if (value === false || value === null || value === undefined) continue;
+    const arg = flagToArg(name);
+    if (value === true) {
+      args.push(arg);
+    } else if (Array.isArray(value)) {
+      for (const item of value) args.push(arg, String(item));
+    } else {
+      args.push(arg, String(value));
+    }
+  }
+  return args;
+}
+
+function getYtdlpPath() {
+  const candidates = [
+    process.env.YTDLP_PATH,
+    path.resolve(__dirname, '../../bin/yt-dlp'),
+    path.resolve(process.cwd(), 'app/bin/yt-dlp'),
+  ].filter(Boolean);
+  const ytdlpPath = candidates.find(candidate => fs.existsSync(candidate));
+  if (!ytdlpPath) {
+    throw new Error('yt-dlp binary not found. Netlify build should run npm --prefix app run install-ytdlp.');
+  }
+  try { fs.chmodSync(ytdlpPath, 0o755); } catch {}
+  return ytdlpPath;
+}
+
 function runYtdlp(url, flags = {}, options = {}) {
   return new Promise((resolve, reject) => {
-    const subprocess = youtubedl.exec(url, flags, {
+    const args = [...flagsToArgs(flags), url].filter(Boolean);
+    execFile(getYtdlpPath(), args, {
       timeout: options.timeout || 25000,
       killSignal: 'SIGKILL',
       cwd: options.cwd || process.cwd(),
       env: { ...process.env, ...(options.env || {}) },
-    });
-    let stdout = '';
-    let stderr = '';
-    if (subprocess.stdout) subprocess.stdout.on('data', chunk => { stdout += chunk.toString(); });
-    if (subprocess.stderr) subprocess.stderr.on('data', chunk => { stderr += chunk.toString(); });
-    subprocess.then(
-      result => resolve({ stdout: stdout || (typeof result === 'string' ? result : JSON.stringify(result || '')), stderr }),
-      error => {
+      maxBuffer: options.maxBuffer || 1024 * 1024 * 80,
+    }, (error, stdout, stderr) => {
+      if (error) {
         const e = new Error(stderr || error.message || 'yt-dlp failed');
         e.stdout = stdout;
         e.stderr = stderr;
-        reject(e);
+        return reject(e);
       }
-    );
+      resolve({ stdout, stderr });
+    });
   });
 }
 
