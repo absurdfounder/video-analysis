@@ -1,21 +1,12 @@
 [build]
-  command = "cd app && npm install"
+  command = "npm --prefix app install"
   publish = "app/public"
   functions = "app/netlify/functions"
 
 [functions]
-  node_bundler = "esbuild"
   external_node_modules = ["youtube-dl-exec"]
-  included_files = ["app/node_modules/youtube-dl-exec/bin/**"]
-
-[functions."list-videos"]
-  timeout = 26
-
-[functions."transcript"]
-  timeout = 26
-
-[functions."extract-prices-ai"]
-  timeout = 26
+  included_files = ["app/package.json"]
+  node_bundler = "esbuild"
 
 [[redirects]]
   from = "/api/*"
