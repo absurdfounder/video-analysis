@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Delhi Fruit Market Transcript Miner</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">YouTube → Hindi transcript → timestamped prices</p>
+        <h1>Fruit Price Transcript Miner</h1>
+        <p class="subtext">Pull videos from a Hindi fruit-market channel, collect timestamped captions, use AI for messy Hindi, and jump back to the exact YouTube moment where a price was said.</p>
+      </div>
+      <div class="status-card" id="statusCard">
+        <span class="dot"></span>
+        <span id="statusText">Setup not checked</span>
+      </div>
+    </section>
+
+    <section class="panel controls">
+      <label>
+        Channel / playlist URL
+        <input id="channelUrl" value="https://www.youtube.com/@delhifruitmarket/videos?view=0&sort=dd&shelf_id=2" />
+      </label>
+
+      <div class="grid-3">
+        <label>
+          Max videos
+          <input id="maxVideos" type="number" min="1" max="1000" value="25" />
+        </label>
+        <label>
+          Subtitle languages
+          <input id="languages" value="hi.*,hi,en.*" />
+        </label>
+        <label>
+          Delay per video, ms
+          <input id="delayMs" type="number" min="0" value="1500" />
+        </label>
+      </div>
+
+      <div class="buttons">
+        <button id="checkBtn" class="secondary">Check setup</button>
+        <button id="fetchVideosBtn">1. Fetch videos</button>
+        <button id="fetchTranscriptsBtn">2. Pull timestamped transcripts</button>
+        <button id="extractPricesBtn" class="secondary">3A. Basic extraction</button>
+      </div>
+      <p class="hint">Start with 10 to 25 videos. Once it behaves, increase slowly. YouTube does not enjoy being poked with a broomstick.</p>
+    </section>
+
+    <section class="panel ai-panel">
+      <div>
+        <h2>AI cleanup + extraction</h2>
+        <p>Use this when Hindi captions are broken. The AI reads timestamped segments and returns clean fruit/variety/unit/min/max rows with clickable timestamps.</p>
+      </div>
+      <div class="grid-4">
+        <label>
+          OpenAI API key <span class="muted">optional if set in terminal</span>
+          <input id="openaiKey" type="password" placeholder="sk-..." autocomplete="off" />
+        </label>
+        <label>
+          Model
+          <input id="openaiModel" value="gpt-4o-mini" />
+        </label>
+        <label>
+          AI max videos this run
+          <input id="aiMaxVideos" type="number" min="1" max="100" value="5" />
+        </label>
+        <label>
+          Max chars per AI call
+          <input id="aiMaxChars" type="number" min="2500" max="20000" value="10000" />
+        </label>
+      </div>
+      <div class="buttons">
+        <button id="extractAiBtn">3B. AI clean & extract prices</button>
+      </div>
+      <p class="hint">For safety, API key is sent only to your local server. Better: run with <code>OPENAI_API_KEY=your_key npm start</code> and leave this field blank.</p>
+    </section>
+
+    <section class="stats">
+      <article>
+        <strong id="videoCount">0</strong>
+        <span>videos</span>
+      </article>
+      <article>
+        <strong id="okCount">0</strong>
+        <span>transcripts</span>
+      </article>
+      <article>
+        <strong id="priceCount">0</strong>
+        <span>price rows</span>
+      </article>
+      <article>
+        <strong id="failCount">0</strong>
+        <span>failed</span>
+      </article>
+    </section>
+
+    <section class="panel export-panel">
+      <div>
+        <h2>Exports</h2>
+        <p>Export raw transcript, timestamped segments, AI/regex price rows, or the full project JSON.</p>
+      </div>
+      <div class="buttons">
+        <button id="exportTranscriptsBtn" class="secondary">Export transcript CSV</button>
+        <button id="exportSegmentsBtn" class="secondary">Export timestamp segments CSV</button>
+        <button id="exportPricesBtn" class="secondary">Export price CSV</button>
+        <button id="exportJsonBtn" class="secondary">Export JSON</button>
+        <button id="clearBtn" class="ghost">Clear local data</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Videos</h2>
+        <input id="videoSearch" placeholder="Search title/status..." />
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Title</th>
+              <th>Language</th>
+              <th>Segments</th>
+              <th>Chars</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody id="videoTable"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head multi">
+        <div>
+          <h2>Transcript segments</h2>
+          <p>Every line has a YouTube timestamp link. This is your source-of-truth table.</p>
+        </div>
+        <div class="segment-controls">
+          <select id="segmentVideoSelect"></select>
+          <input id="segmentSearch" placeholder="Search transcript text..." />
+        </div>
+      </div>
+      <div class="table-wrap tall">
+        <table class="segment-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Caption text</th>
+            </tr>
+          </thead>
+          <tbody id="segmentTable"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Extracted price rows</h2>
+        <input id="priceSearch" placeholder="Search fruit/variety/context..." />
+      </div>
+      <div class="table-wrap tall">
+        <table>
+          <thead>
+            <tr>
+              <th>Source</th>
+              <th>Fruit</th>
+              <th>Variety</th>
+              <th>Unit</th>
+              <th>Min</th>
+              <th>Max</th>
+              <th>Jump</th>
+              <th>Video</th>
+              <th>Clean/context line</th>
+              <th>Conf.</th>
+            </tr>
+          </thead>
+          <tbody id="priceTable"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel log-panel">
+      <h2>Run log</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
