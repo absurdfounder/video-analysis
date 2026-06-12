@@ -5,6 +5,10 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+function isFilePreview() {
+  return window.location.protocol === 'file:';
+}
+
 function log(message) {
   const now = new Date().toLocaleTimeString();
   $('log').textContent += `[${now}] ${message}\n`;
@@ -16,6 +20,10 @@ function sleep(ms) {
 }
 
 async function api(path, body) {
+  if (isFilePreview()) {
+    throw new Error('This app needs a web server for /api calls. Open the Netlify site or run it locally with npm start at http://localhost:3000.');
+  }
+
   const res = await fetch(path, {
     method: body ? 'POST' : 'GET',
     headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -408,3 +416,8 @@ $('segmentVideoSelect').addEventListener('change', renderSegmentsPreview);
 $('segmentSearch').addEventListener('input', renderSegmentsPreview);
 
 loadLocal();
+
+if (isFilePreview()) {
+  setStatus('bad', 'Open via Netlify or localhost');
+  log('This file preview cannot call /api. Use the deployed Netlify URL or run the app locally with npm start and open http://localhost:3000.');
+}
