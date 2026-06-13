@@ -615,7 +615,7 @@ async function fetchVideosStep() {
 }
 
 async function fetchTranscriptsStep() {
-  const delayMs = Number($('delayMs')?.value || 1500);
+  const delayMs = Number($('delayMs')?.value || 200);
   const pending = pendingTranscripts();
   if (!pending.length) {
     log('No pending transcripts.');
@@ -955,7 +955,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.26 — API only in batch, no scroll';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.26 — fast API path, 200ms batch gap';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
