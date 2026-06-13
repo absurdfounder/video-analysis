@@ -1,3 +1,80 @@
+function wakeYouTubePageInPage() {
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  function ensureMuted(video) {
+    if (!video) return;
+    video.muted = true;
+    video.volume = 0;
+    video.defaultMuted = true;
+  }
+
+  function scrollToDescription() {
+    const targets = [
+      'ytd-video-description-transcript-section-renderer',
+      'ytd-structured-description-content-renderer',
+      'ytd-text-inline-expander',
+      '#description',
+      'ytd-watch-metadata',
+      '#below',
+    ];
+    for (const selector of targets) {
+      const el = document.querySelector(selector);
+      if (el) {
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        return el;
+      }
+    }
+    window.scrollTo(0, document.body.scrollHeight * 0.35);
+    return null;
+  }
+
+  return (async () => {
+    const video = document.querySelector('video');
+    ensureMuted(video);
+
+    if (video) {
+      try {
+        const playPromise = video.play();
+        if (playPromise?.then) await playPromise;
+      } catch {
+        try {
+          document.querySelector('#movie_player, .html5-video-player, .ytp-large-play-button')?.click();
+          const retry = video.play();
+          if (retry?.then) await retry;
+        } catch { /* ignore */ }
+      }
+      ensureMuted(video);
+    }
+
+    for (const offset of [0, 240, 380, 520]) {
+      window.scrollTo({ top: offset, behavior: 'instant' });
+      window.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await sleep(180);
+    }
+    scrollToDescription();
+
+    const expandButton = document.querySelector('ytd-text-inline-expander #expand, tp-yt-paper-button#expand, #expand');
+    if (expandButton) {
+      try { expandButton.click(); } catch { /* ignore */ }
+      await sleep(400);
+    }
+    scrollToDescription();
+
+    for (let attempt = 0; attempt < 14; attempt++) {
+      const hasTranscriptUi = document.querySelector(
+        'ytd-video-description-transcript-section-renderer, button[aria-label="Show transcript"], ytd-engagement-panel-section-list-renderer[target-id*="transcript"]',
+      );
+      if (hasTranscriptUi) {
+        return { ok: true, woke: true, playing: !video?.paused, hasTranscriptUi: true };
+      }
+      scrollToDescription();
+      await sleep(220);
+    }
+
+    return { ok: true, woke: true, playing: !video?.paused, hasTranscriptUi: false };
+  })();
+}
+
 function fetchTranscriptInPage(languages, backgroundOnly = false) {
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -35,7 +112,7 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
     if (!video) return;
     video.muted = true;
     video.volume = 0;
-    try { video.pause(); } catch { /* ignore */ }
+    video.defaultMuted = true;
   }
 
   function getLivePlayerResponse() {
@@ -398,6 +475,7 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
   return (async () => {
     const errors = [];
     const { player } = await waitForPageReady();
+    await wakeYouTubePageInPage();
     mutePlayer();
 
     const visibleSegments = extractSegmentsFromPanel();
@@ -433,15 +511,13 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
       errors.push('Caption track download returned empty.');
     }
 
-    const panelResult = backgroundOnly ? null : await tryPanelDom();
+    const panelResult = await tryPanelDom();
     if (panelResult?.segments?.length) return panelResult;
     if (panelResult?.error) errors.push(panelResult.error);
 
     return {
       ok: false,
-      error: errors.filter(Boolean).join(' · ') || (backgroundOnly
-        ? 'Background caption APIs returned no lines. Retry this video manually if needed.'
-        : 'No transcript methods returned caption lines.'),
+      error: errors.filter(Boolean).join(' · ') || 'No transcript methods returned caption lines.',
     };
   })();
 }
@@ -451,6 +527,7 @@ function fetchTranscriptFromPanelInPage() {
 }
 
 function fetchVisibleTranscriptPanelOnlyInPage() {
+  return wakeYouTubePageInPage().then(() => {
   const stripText = (text) => String(text || '').replace(/\s+/g, ' ').trim();
   const parseClock = (label) => {
     const parts = String(label || '').trim().split(':').map(Number);
@@ -532,6 +609,7 @@ function fetchVisibleTranscriptPanelOnlyInPage() {
     rowNodes: rowNodes.length,
     url: window.location.href,
   };
+  });
 }
 
 function findTranscriptParamsInObject(value, seen = new Set()) {

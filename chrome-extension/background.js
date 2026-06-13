@@ -989,11 +989,6 @@ function installMuteHookInPage() {
     video.muted = true;
     video.volume = 0;
     video.defaultMuted = true;
-    try {
-      video.pause();
-    } catch {
-      // ignore
-    }
   };
 
   enforce();
@@ -1268,6 +1263,8 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options
   await prepareWorkerTab(tabId);
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
   await waitForYouTubePageReady(tabId, videoId);
+  await runInYouTubeTab('wakeYouTubePageInPage', [], tabId);
+  await sleep(700);
 
   try {
     const html = await fetchTextViaYouTubeTab(videoUrl);
