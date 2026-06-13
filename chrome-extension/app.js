@@ -54,12 +54,35 @@ function isProcessable(video) {
   return video.relevance !== 'irrelevant' && video.status !== 'skipped';
 }
 
+function segmentCount(video) {
+  return Array.isArray(video?.segments) ? video.segments.length : 0;
+}
+
+function hasTranscriptData(video) {
+  return segmentCount(video) > 0;
+}
+
+function displayStatus(video) {
+  if (hasTranscriptData(video)) return 'ok';
+  if (video.status === 'running') return 'running';
+  if (video.status === 'failed') return 'failed';
+  if (video.status === 'skipped') return 'skipped';
+  return 'pending';
+}
+
+function normalizeVideos() {
+  for (const video of state.videos) {
+    if (video.status === 'ok' && !hasTranscriptData(video)) video.status = 'pending';
+    if (hasTranscriptData(video)) video.status = 'ok';
+  }
+}
+
 function pendingTranscripts() {
-  return state.videos.filter(v => isProcessable(v) && v.status !== 'ok');
+  return state.videos.filter(v => isProcessable(v) && !hasTranscriptData(v));
 }
 
 function transcriptReady() {
-  return state.videos.filter(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
+  return state.videos.filter(v => hasTranscriptData(v));
 }
 
 function parseVideoDate(video) {
@@ -114,18 +137,24 @@ function groupVideosByDate(videos) {
 }
 
 function renderVideoCard(video) {
-  const segCount = Array.isArray(video.segments) ? video.segments.length : 0;
-  const hasTranscript = video.status === 'ok' && segCount > 0;
+  const segCount = segmentCount(video);
+  const hasData = hasTranscriptData(video);
+  const status = displayStatus(video);
+  const showBtn = isProcessable(video);
+  const btnLabel = hasData
+    ? `Read transcript (${segCount} lines)`
+    : 'Fetch & read transcript';
+
   return `
-    <article class="video-card ${video.isNew ? 'is-new' : ''} ${video.status === 'skipped' ? 'is-skipped' : ''} ${hasTranscript ? 'has-transcript' : ''}">
+    <article class="video-card ${video.isNew ? 'is-new' : ''} ${status === 'skipped' ? 'is-skipped' : ''} ${hasData ? 'has-transcript' : ''}">
       <h3><a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a></h3>
       <div class="card-tags">
-        ${tag(video.status || 'pending', video.status || 'pending')}
+        ${tag(status, status)}
         ${tag(video.relevance || 'unclassified', `relevance-${video.relevance || 'unclassified'}`)}
-        ${hasTranscript ? tag(`${segCount} segments`, 'relevance-relevant') : ''}
+        ${hasData ? tag(`${segCount} lines`, 'relevance-relevant') : ''}
       </div>
       ${video.relevanceReason ? `<div class="mini">${escapeHtml(video.relevanceReason)}</div>` : ''}
-      ${hasTranscript ? `<button type="button" class="btn-view-transcript" data-open-transcript="${escapeHtml(video.id)}">Read transcript by time</button>` : ''}
+      ${showBtn ? `<button type="button" class="btn-view-transcript" data-open-transcript="${escapeHtml(video.id)}">${escapeHtml(btnLabel)}</button>` : ''}
     </article>
   `;
 }
@@ -172,21 +201,66 @@ function timestampUrl(videoUrl, seconds) {
 
 let modalVideoId = '';
 
-function openTranscriptModal(videoId) {
+async function fetchTranscriptForVideo(video) {
+  const languages = ($('languages')?.value || 'hi.*,hi,en.*').trim();
+  video.status = 'running';
+  renderVideos();
+  try {
+    const data = await api('/api/transcript', { id: video.id, videoUrl: video.url, languages });
+    Object.assign(video, {
+      status: 'ok',
+      language: data.language,
+      transcriptText: data.transcriptText,
+      segments: data.segments || [],
+      error: '',
+      isNew: false,
+      needsWork: false,
+    });
+    if (hasTranscriptData(video)) await markVideosProcessed([video.id]);
+    log(`Transcript loaded: ${video.title} (${segmentCount(video)} lines)`);
+  } catch (error) {
+    video.status = 'failed';
+    video.error = error.message.slice(0, 200);
+    log(`Transcript failed: ${video.title}: ${error.message}`);
+    throw error;
+  } finally {
+    renderVideos();
+    await saveLocal();
+  }
+}
+
+async function openTranscriptModal(videoId) {
   const video = state.videos.find(v => v.id === videoId);
   const modal = $('transcriptModal');
-  if (!video || !modal || !Array.isArray(video.segments) || !video.segments.length) return;
+  if (!video || !modal) return;
 
   modalVideoId = videoId;
   if ($('modalTitle')) $('modalTitle').textContent = video.title || video.id;
-  if ($('modalMeta')) {
-    $('modalMeta').textContent = `${video.segments.length} segments · ${video.language || 'unknown'} · ${parseVideoDate(video).label}`;
-  }
   if ($('modalYoutube')) $('modalYoutube').href = video.url;
   if ($('modalSearch')) $('modalSearch').value = '';
-  renderModalSegments(video);
+  if ($('modalMeta')) $('modalMeta').textContent = 'Loading...';
+  if ($('modalSegments')) $('modalSegments').innerHTML = '<div class="empty-state">Loading transcript...</div>';
   modal.classList.remove('hidden');
   document.body.classList.add('modal-open');
+
+  try {
+    if (!hasTranscriptData(video)) await fetchTranscriptForVideo(video);
+  } catch (error) {
+    if ($('modalSegments')) {
+      $('modalSegments').innerHTML = `<div class="empty-state">Could not load transcript: ${escapeHtml(error.message)}</div>`;
+    }
+    return;
+  }
+
+  if (!hasTranscriptData(video)) {
+    if ($('modalSegments')) $('modalSegments').innerHTML = '<div class="empty-state">No caption lines found for this video.</div>';
+    return;
+  }
+
+  if ($('modalMeta')) {
+    $('modalMeta').textContent = `${segmentCount(video)} lines · ${video.language || 'unknown'} · ${parseVideoDate(video).label}`;
+  }
+  renderModalSegments(video);
 }
 
 function closeTranscriptModal() {
@@ -346,23 +420,49 @@ function setBusy(busy) {
   updateUI();
 }
 
-function saveLocal() {
-  localStorage.setItem('fruitTranscriptMinerStateV2', JSON.stringify({
+async function saveLocal() {
+  normalizeVideos();
+  const payload = {
     videos: state.videos,
     priceRows: state.priceRows,
     lastSync: state.lastSync,
     currentStep: state.currentStep,
-  }));
+  };
+
+  try {
+    localStorage.setItem('fruitTranscriptMinerStateV2', JSON.stringify(payload));
+  } catch (error) {
+    log(`localStorage save failed (${error.message}). Using chrome.storage.`);
+  }
+
+  if (chrome.storage?.local) {
+    await chrome.storage.local.set({ fruitTranscriptMinerStateV2: payload });
+  }
 }
 
-function loadLocal() {
-  try {
-    const saved = JSON.parse(localStorage.getItem('fruitTranscriptMinerStateV2') || '{}');
-    if (Array.isArray(saved.videos)) state.videos = saved.videos;
-    if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
-    if (saved.lastSync) state.lastSync = saved.lastSync;
-    if (saved.currentStep) state.currentStep = saved.currentStep;
-  } catch {}
+async function loadLocal() {
+  let saved = null;
+
+  if (chrome.storage?.local) {
+    const stored = await chrome.storage.local.get('fruitTranscriptMinerStateV2');
+    saved = stored.fruitTranscriptMinerStateV2 || null;
+  }
+
+  if (!saved) {
+    try {
+      saved = JSON.parse(localStorage.getItem('fruitTranscriptMinerStateV2') || '{}');
+    } catch {
+      saved = {};
+    }
+  }
+
+  if (Array.isArray(saved.videos)) state.videos = saved.videos;
+  if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
+  if (saved.lastSync) state.lastSync = saved.lastSync;
+  if (saved.currentStep) state.currentStep = saved.currentStep;
+
+  normalizeVideos();
+
   const savedKey = localStorage.getItem('fruitTranscriptMinerOpenAIKey') || '';
   if (savedKey && $('openaiKey')) $('openaiKey').value = savedKey;
   renderVideos();
@@ -416,7 +516,6 @@ async function fetchVideosStep() {
 }
 
 async function fetchTranscriptsStep() {
-  const languages = ($('languages')?.value || 'hi.*,hi,en.*').trim();
   const delayMs = Number($('delayMs')?.value || 1500);
   const pending = pendingTranscripts();
   if (!pending.length) {
@@ -426,35 +525,16 @@ async function fetchTranscriptsStep() {
   }
 
   log(`Fetching ${pending.length} transcript(s)...`);
-  const processedIds = [];
 
-  for (const video of state.videos) {
-    if (video.status === 'ok' || !isProcessable(video)) continue;
-    video.status = 'running';
-    renderVideos();
+  for (const video of pending) {
     try {
-      const data = await api('/api/transcript', { id: video.id, videoUrl: video.url, languages });
-      Object.assign(video, {
-        status: 'ok',
-        language: data.language,
-        transcriptText: data.transcriptText,
-        segments: data.segments,
-        error: '',
-        isNew: false,
-        needsWork: false,
-      });
-      processedIds.push(video.id);
-      log(`✓ ${video.title}`);
-    } catch (error) {
-      video.status = 'failed';
-      video.error = error.message.slice(0, 200);
-      log(`× ${video.title}: ${error.message}`);
+      await fetchTranscriptForVideo(video);
+    } catch {
+      // error already logged
     }
-    renderVideos();
     if (delayMs > 0) await sleep(delayMs);
   }
 
-  await markVideosProcessed(processedIds);
   goToStep(3);
 }
 
@@ -617,7 +697,9 @@ document.addEventListener('click', (event) => {
   const openBtn = event.target.closest('[data-open-transcript]');
   if (openBtn) {
     event.preventDefault();
-    openTranscriptModal(openBtn.dataset.openTranscript);
+    openTranscriptModal(openBtn.dataset.openTranscript).catch((error) => {
+      log(`Transcript popup failed: ${error.message}`);
+    });
     return;
   }
   if (event.target.closest('[data-close-modal]') || event.target.closest('#modalClose')) {
@@ -637,7 +719,7 @@ document.addEventListener('keydown', (event) => {
 if ($('syncSiteUrl')) $('syncSiteUrl').value = localStorage.getItem('fruitTranscriptMinerSyncSiteUrl') || '';
 if ($('syncToken')) $('syncToken').value = localStorage.getItem('fruitTranscriptMinerSyncToken') || '';
 
-loadLocal();
+loadLocal().catch((error) => log(`Load failed: ${error.message}`));
 loadWatchSettings();
 
 (async () => {
