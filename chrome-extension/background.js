@@ -591,48 +591,49 @@ async function fetchTranscriptFromHtml(videoUrl, id, languages) {
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
   await prepareWorkerTab(tabId);
-  let lastHtml = '';
-
-  try {
-    lastHtml = await fetchTextViaYouTubeTab(videoUrl);
-    const apiResult = await buildTranscriptFromPlayerHtml(lastHtml, videoId, languages, tabId, 'fetch-html');
-    if (apiResult?.ok) return apiResult;
-  } catch {
-    // Fall through to navigated page context.
-  }
-
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
 
+  let lastHtml = '';
   try {
     lastHtml = await fetchTextViaYouTubeTab(videoUrl);
-    const apiResult = await buildTranscriptFromPlayerHtml(lastHtml, videoId, languages, tabId, 'navigated-html');
+    const apiResult = await buildTranscriptFromPlayerHtml(lastHtml, videoId, languages, tabId, 'page-html');
     if (apiResult?.ok) return apiResult;
   } catch {
-    // Fall through to innerTube in page.
+    // Fall through to panel scrape.
   }
 
-  let params = '';
-  try {
-    if (lastHtml) {
-      const player = extractJsonObject(lastHtml, 'ytInitialPlayerResponse');
-      params = extractTranscriptParams(player, lastHtml);
-    }
-  } catch {
-    // ignore
-  }
+  const panelResult = await withBriefTabFocus(tabId, async () => {
+    return runInYouTubeTab(fetchTranscriptFromPanelInPage, [], tabId);
+  });
 
-  const innerTubeResult = await runInYouTubeTab(fetchInnerTubeTranscriptInPage, [params], tabId);
-  if (innerTubeResult?.ok) {
+  if (panelResult?.ok && panelResult.segments?.length) {
     return {
       ok: true,
       language: 'unknown',
-      fileName: 'innertube-transcript',
-      segments: innerTubeResult.segments,
-      method: 'innertube-fallback',
+      fileName: 'youtube-transcript-panel',
+      segments: panelResult.segments,
+      method: `panel-${panelResult.format || 'dom'}`,
     };
   }
 
-  throw new Error(innerTubeResult?.error || 'Could not download captions. Stay signed in at youtube.com and retry.');
+  throw new Error(panelResult?.error || 'Could not download captions. Stay signed in at youtube.com and retry.');
+}
+
+async function withBriefTabFocus(tabId, fn) {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  try {
+    await chrome.tabs.update(tabId, { active: true });
+    await sleep(400);
+    return await fn();
+  } finally {
+    if (activeTab?.id && activeTab.id !== tabId) {
+      try {
+        await chrome.tabs.update(activeTab.id, { active: true });
+      } catch {
+        // Previous tab may have closed.
+      }
+    }
+  }
 }
 
 function extractPrices(body) {
@@ -906,10 +907,125 @@ async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, me
         method: `${methodPrefix}-innertube`,
       };
     }
-    throw new Error(innerTubeResult?.error || 'innerTube transcript failed.');
   }
 
   throw new Error(tracks.length ? 'Caption track download returned empty.' : 'No caption tracks on this video.');
+}
+
+function fetchTranscriptFromPanelInPage() {
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  function stripHtml(text) {
+    return String(text || '')
+      .replace(/<[^>]*>/g, '')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&#39;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function parseClockLabel(label) {
+    const parts = String(label || '').trim().split(':').map(Number);
+    if (parts.some(part => !Number.isFinite(part))) return 0;
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return parts[0] || 0;
+  }
+
+  function secondsToClock(seconds) {
+    const s = Math.max(0, Math.floor(Number(seconds) || 0));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  }
+
+  function mutePlayer() {
+    const video = document.querySelector('video');
+    if (!video) return;
+    video.muted = true;
+    video.volume = 0;
+    try { video.pause(); } catch { /* ignore */ }
+  }
+
+  function findShowTranscriptButton() {
+    const section = document.querySelector('ytd-video-description-transcript-section-renderer');
+    if (section) {
+      const button = section.querySelector('button, yt-button-shape button');
+      if (button) return button;
+    }
+    return document.querySelector('button[aria-label="Show transcript"]')
+      || [...document.querySelectorAll('button')].find((btn) => /show transcript/i.test(btn.getAttribute('aria-label') || ''));
+  }
+
+  function transcriptPanelRoot() {
+    return document.querySelector('ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]')
+      || document.querySelector('ytd-engagement-panel-section-list-renderer[target-id*="transcript"]');
+  }
+
+  function extractSegmentsFromPanel() {
+    const panel = transcriptPanelRoot();
+    const scope = panel || document;
+    const nodes = scope.querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model');
+    if (!nodes.length) return [];
+
+    const segments = [];
+    for (const node of nodes) {
+      const timestampEl = node.querySelector('.segment-timestamp, .segment-start-offset');
+      const textEl = node.querySelector('.segment-text, yt-formatted-string.segment-text');
+      const text = stripHtml(textEl?.textContent || '');
+      const start = parseClockLabel(timestampEl?.textContent || '');
+      if (!text) continue;
+      segments.push({
+        start: Number(start.toFixed(3)),
+        end: Number(start.toFixed(3)),
+        duration: 0,
+        timestamp_label: secondsToClock(start),
+        text,
+      });
+    }
+
+    for (let i = 0; i < segments.length; i++) {
+      const nextStart = segments[i + 1]?.start;
+      if (Number.isFinite(nextStart) && nextStart > segments[i].start) {
+        segments[i].end = Number(nextStart.toFixed(3));
+        segments[i].duration = Number((segments[i].end - segments[i].start).toFixed(3));
+      }
+    }
+
+    return segments;
+  }
+
+  return (async () => {
+    mutePlayer();
+
+    const moreButton = document.querySelector('#expand, ytd-text-inline-expander #expand, tp-yt-paper-button#expand');
+    if (moreButton) {
+      moreButton.click();
+      await sleep(800);
+    }
+
+    const transcriptButton = findShowTranscriptButton();
+    if (!transcriptButton) {
+      return { ok: false, error: 'Show transcript button not found on this video.' };
+    }
+
+    transcriptButton.click();
+    await sleep(1200);
+
+    for (let attempt = 0; attempt < 40; attempt++) {
+      mutePlayer();
+      const segments = extractSegmentsFromPanel();
+      if (segments.length) return { ok: true, segments, format: 'dom' };
+      await sleep(500);
+    }
+
+    return { ok: false, error: 'Transcript panel opened but segments did not load.' };
+  })();
 }
 
 function extractTranscriptParams(player, html) {
