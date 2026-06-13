@@ -247,9 +247,12 @@ async function fetchTranscriptForVideo(video) {
     log(`Transcript captured: ${video.title} (${segmentCount(video)} lines${data.method ? ` · ${data.method}` : ''})`);
   } catch (error) {
     video.status = 'failed';
-    video.error = error.message.slice(0, 200);
-    log(`Visible transcript capture failed: ${video.title}: ${error.message}`);
-    throw error;
+    const message = /Unknown extension API route/i.test(error.message)
+      ? 'Extension background is stale. Reload the unpacked extension at chrome://extensions, then retry.'
+      : error.message;
+    video.error = message.slice(0, 200);
+    log(`Visible transcript capture failed: ${video.title}: ${message}`);
+    throw new Error(message);
   } finally {
     renderVideos();
     await saveLocal();
@@ -857,7 +860,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.12 — direct capture API';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.13 — exact-tab capture only';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

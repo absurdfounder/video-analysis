@@ -587,7 +587,7 @@ async function captureVisibleTranscript(body) {
   const id = safeText(body.id || getVideoId(rawVideoUrl));
   if (!id) return { ok: false, error: 'Missing YouTube video ID.' };
 
-  const result = await fetchTranscriptFromAnyOpenWatchTab(id);
+  const result = await fetchTranscriptFromMatchingOpenWatchTab(id);
   if (!result?.ok || !result.segments?.length) {
     return {
       ok: false,
@@ -896,29 +896,34 @@ async function fetchTranscriptFromOpenWatchTab(videoId, excludeTabId = null) {
   return fetchVisibleTranscriptFromTab(openTab, videoId, true);
 }
 
-async function fetchTranscriptFromAnyOpenWatchTab(videoId, excludeTabId = null) {
+async function fetchTranscriptFromMatchingOpenWatchTab(videoId, excludeTabId = null) {
   const tabs = await listOpenWatchTabs(excludeTabId);
   if (!tabs.length) {
     return { ok: false, error: 'No YouTube watch tabs are open.', diagnostics: [] };
   }
 
-  const rankedTabs = tabs.sort((a, b) => {
-    const aExact = getVideoId(a.url || '') === videoId || String(a.url || '').includes(videoId);
-    const bExact = getVideoId(b.url || '') === videoId || String(b.url || '').includes(videoId);
-    return Number(bExact) - Number(aExact) || Number(b.active) - Number(a.active);
-  });
+  const matchingTabs = tabs
+    .filter(tab => getVideoId(tab.url || '') === videoId || String(tab.url || '').includes(videoId))
+    .sort((a, b) => Number(b.active) - Number(a.active));
+  if (!matchingTabs.length) {
+    return {
+      ok: false,
+      error: `No open YouTube tab matches video ${videoId}. Open that exact video, click Show transcript, then capture again.`,
+      diagnostics: tabs.map(tab => ({ url: tab.url || '', exact: false, error: 'Different YouTube video tab.' })),
+    };
+  }
+
   const diagnostics = [];
 
-  for (const tab of rankedTabs) {
-    const exact = getVideoId(tab.url || '') === videoId || String(tab.url || '').includes(videoId);
+  for (const tab of matchingTabs) {
     try {
-      const result = await fetchVisibleTranscriptFromTab(tab, videoId, exact);
+      const result = await fetchVisibleTranscriptFromTab(tab, videoId, true);
       if (result?.ok && result.segments?.length) {
         return { ...result, diagnostics };
       }
       diagnostics.push({
         url: tab.url || '',
-        exact,
+        exact: true,
         error: result?.error || 'No transcript rows returned.',
       });
     } catch (error) {
@@ -931,7 +936,7 @@ async function fetchTranscriptFromAnyOpenWatchTab(videoId, excludeTabId = null) 
   }
 
   const summary = diagnostics
-    .map(item => `${item.exact ? 'matching' : 'other'} tab: ${item.error}`)
+    .map(item => `matching tab: ${item.error}`)
     .join(' | ');
   return {
     ok: false,
@@ -941,6 +946,12 @@ async function fetchTranscriptFromAnyOpenWatchTab(videoId, excludeTabId = null) 
 }
 
 async function fetchVisibleTranscriptFromTab(tab, videoId, exact) {
+  if (!exact) {
+    return {
+      ok: false,
+      error: `Refusing to capture a different YouTube video tab for ${videoId}.`,
+    };
+  }
   const visibleResult = await runInYouTubeTab('fetchTranscriptFromPanelInPage', [], tab.id);
   if (visibleResult?.ok && visibleResult.segments?.length) {
     return {
@@ -948,7 +959,7 @@ async function fetchVisibleTranscriptFromTab(tab, videoId, exact) {
       language: visibleResult.language || 'unknown',
       fileName: visibleResult.fileName || 'youtube-visible-panel',
       segments: visibleResult.segments,
-      method: exact ? (visibleResult.format || 'open-tab-panel') : `${visibleResult.format || 'open-tab-panel'}-other-open-tab`,
+      method: visibleResult.format || 'open-tab-panel',
       sourceUrl: tab.url || visibleResult.url || '',
     };
   }
