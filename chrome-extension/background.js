@@ -805,28 +805,38 @@ async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
   await installMuteHook(tabId);
 }
 
-async function runInYouTubeTab(func, args = [], tabId = null) {
+async function injectTranscriptHelpers(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    files: ['transcript-fetch.js'],
+  });
+}
+
+async function runInYouTubeTab(functionName, args = [], tabId = null) {
   const targetTabId = tabId || await ensureYouTubeTab();
+  try {
+    await injectTranscriptHelpers(targetTabId);
+  } catch {
+    // File may already be injected on this tab.
+  }
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId: targetTabId },
     world: 'MAIN',
-    func,
-    args,
+    func: (name, fnArgs) => {
+      const handler = globalThis[name];
+      if (typeof handler !== 'function') {
+        return { ok: false, error: `Missing in-page handler: ${name}` };
+      }
+      return handler(...fnArgs);
+    },
+    args: [functionName, args],
   });
   return result;
 }
 
 async function fetchTextViaYouTubeTab(url) {
-  const result = await runInYouTubeTab(async (fetchUrl) => {
-    try {
-      const response = await fetch(fetchUrl, { credentials: 'include' });
-      const text = await response.text();
-      if (!response.ok) return { ok: false, error: `HTTP ${response.status}`, preview: text.slice(0, 180) };
-      return { ok: true, text };
-    } catch (error) {
-      return { ok: false, error: String(error?.message || error) };
-    }
-  }, [url]);
+  const result = await runInYouTubeTab('fetchTextInYouTubePage', [url]);
 
   if (!result?.ok) {
     throw new Error(result?.error || 'YouTube tab fetch failed. Open youtube.com and sign in.');
@@ -834,42 +844,49 @@ async function fetchTextViaYouTubeTab(url) {
   return result.text;
 }
 
+async function waitForYouTubePageReady(tabId, videoId) {
+  const ready = await runInYouTubeTab('waitForYouTubeVideoReadyInPage', [videoId], tabId);
+  if (!ready?.ok) throw new Error(ready?.error || 'YouTube watch page did not finish loading.');
+}
+
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
   await prepareWorkerTab(tabId);
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
+  await waitForYouTubePageReady(tabId, videoId);
 
-  let lastHtml = '';
-  try {
-    lastHtml = await fetchTextViaYouTubeTab(videoUrl);
-    const apiResult = await buildTranscriptFromPlayerHtml(lastHtml, videoId, languages, tabId, 'page-html');
-    if (apiResult?.ok && apiResult.segments?.length) return apiResult;
-  } catch {
-    // Fall through to panel scrape.
-  }
-
-  const panelResult = await withBriefTabFocus(tabId, async () => {
-    return runInYouTubeTab(fetchTranscriptFromPanelInPage, [], tabId);
+  const pageResult = await withBriefTabFocus(tabId, async () => {
+    return runInYouTubeTab('fetchTranscriptInPage', [languages], tabId);
   });
 
-  if (panelResult?.ok && panelResult.segments?.length) {
+  if (pageResult?.ok && pageResult.segments?.length) {
     return {
       ok: true,
-      language: 'unknown',
-      fileName: 'youtube-transcript-panel',
-      segments: panelResult.segments,
-      method: `panel-${panelResult.format || 'dom'}`,
+      language: pageResult.language || 'unknown',
+      fileName: pageResult.fileName || 'youtube-transcript',
+      segments: pageResult.segments,
+      method: pageResult.method || 'youtube-tab',
     };
   }
 
-  throw new Error(panelResult?.error || 'Could not download captions. Stay signed in at youtube.com and retry.');
+  let lastError = pageResult?.error || '';
+  try {
+    const html = await fetchTextViaYouTubeTab(videoUrl);
+    const apiResult = await buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, 'page-html');
+    if (apiResult?.ok && apiResult.segments?.length) return apiResult;
+    lastError = apiResult?.error || lastError;
+  } catch (error) {
+    lastError = cleanError(error) || lastError;
+  }
+
+  throw new Error(lastError || 'Could not download captions. Stay signed in at youtube.com and retry.');
 }
 
 async function withBriefTabFocus(tabId, fn) {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
-    await chrome.tabs.update(tabId, { active: true });
-    await sleep(400);
+    await chrome.tabs.update(tabId, { active: true, autoDiscardable: false });
+    await sleep(1200);
     return await fn();
   } finally {
     if (activeTab?.id && activeTab.id !== tabId) {
@@ -891,7 +908,7 @@ async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, me
   const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
   if (tracks.length) {
     const selected = chooseCaptionTrack(tracks, languages);
-    const captionResult = await runInYouTubeTab(fetchCaptionTrackInPage, [selected.baseUrl], tabId);
+    const captionResult = await runInYouTubeTab('fetchCaptionTrackInPage', [selected.baseUrl], tabId);
     if (captionResult?.segments?.length) {
       return {
         ok: true,
@@ -905,7 +922,7 @@ async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, me
 
   const params = extractTranscriptParams(player, html);
   if (params) {
-    const innerTubeResult = await runInYouTubeTab(fetchInnerTubeTranscriptInPage, [params], tabId);
+    const innerTubeResult = await runInYouTubeTab('fetchInnerTubeTranscriptInPage', [params], tabId);
     if (innerTubeResult?.ok && innerTubeResult.segments?.length) {
       return {
         ok: true,

@@ -805,7 +805,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'API caption fetch in background — no transcript panel clicks needed';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.1 — worker tab + Show transcript click';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

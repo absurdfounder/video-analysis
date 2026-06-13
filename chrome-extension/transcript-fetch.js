@@ -1,4 +1,4 @@
-function fetchTranscriptFromPanelInPage() {
+function fetchTranscriptInPage(languages) {
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   function stripHtml(text) {
@@ -38,19 +38,98 @@ function fetchTranscriptFromPanelInPage() {
     try { video.pause(); } catch { /* ignore */ }
   }
 
+  function getLivePlayerResponse() {
+    return window.ytInitialPlayerResponse
+      || window.ytplayer?.config?.args?.player_response
+      || null;
+  }
+
+  async function waitForElement(selector, timeoutMs = 15000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const el = document.querySelector(selector);
+      if (el) return el;
+      await sleep(250);
+    }
+    return null;
+  }
+
+  async function waitForPageReady() {
+    mutePlayer();
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const player = getLivePlayerResponse();
+      const videoId = player?.videoDetails?.videoId || '';
+      const hasDescription = document.querySelector('ytd-watch-metadata, #description, ytd-text-inline-expander');
+      if (videoId && (hasDescription || document.querySelector('video'))) return { player, videoId };
+      await sleep(500);
+    }
+    return { player: getLivePlayerResponse(), videoId: getLivePlayerResponse()?.videoDetails?.videoId || '' };
+  }
+
+  function scrollToDescription() {
+    const targets = [
+      'ytd-video-description-transcript-section-renderer',
+      'ytd-text-inline-expander',
+      '#description',
+      'ytd-watch-metadata',
+      '#below',
+    ];
+    for (const selector of targets) {
+      const el = document.querySelector(selector);
+      if (el) {
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        return el;
+      }
+    }
+    window.scrollTo(0, document.body.scrollHeight * 0.35);
+    return null;
+  }
+
+  function clickElement(el) {
+    if (!el) return false;
+    try {
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    } catch { /* ignore */ }
+    try { el.focus({ preventScroll: true }); } catch { /* ignore */ }
+    try { el.click(); } catch { /* ignore */ }
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + Math.min(rect.width / 2, 40);
+    const y = rect.top + Math.min(rect.height / 2, 20);
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      try {
+        el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
+      } catch { /* ignore */ }
+    }
+    return true;
+  }
+
+  function findExpandButton() {
+    return document.querySelector('ytd-text-inline-expander #expand')
+      || document.querySelector('tp-yt-paper-button#expand')
+      || document.querySelector('#expand')
+      || [...document.querySelectorAll('button, tp-yt-paper-button')].find((btn) => {
+        const label = `${btn.getAttribute('aria-label') || ''} ${btn.textContent || ''}`.toLowerCase();
+        return /\bmore\b/.test(label) && !/show transcript|transcript/.test(label);
+      });
+  }
+
   function findShowTranscriptButton() {
     const section = document.querySelector('ytd-video-description-transcript-section-renderer');
     if (section) {
-      const button = section.querySelector('button, yt-button-shape button');
+      const button = section.querySelector('button[aria-label="Show transcript"]')
+        || section.querySelector('#primary-button button')
+        || section.querySelector('yt-button-shape button')
+        || section.querySelector('button');
       if (button) return button;
     }
     return document.querySelector('button[aria-label="Show transcript"]')
-      || [...document.querySelectorAll('button')].find((btn) => /show transcript/i.test(btn.getAttribute('aria-label') || ''));
+      || [...document.querySelectorAll('button')].find((btn) => /show transcript/i.test(btn.getAttribute('aria-label') || btn.textContent || ''));
   }
 
   function transcriptPanelRoot() {
     return document.querySelector('ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]')
-      || document.querySelector('ytd-engagement-panel-section-list-renderer[target-id*="transcript"]');
+      || document.querySelector('ytd-engagement-panel-section-list-renderer[target-id*="transcript"]')
+      || document.querySelector('ytd-transcript-renderer');
   }
 
   function extractSegmentsFromPanel() {
@@ -61,8 +140,8 @@ function fetchTranscriptFromPanelInPage() {
 
     const segments = [];
     for (const node of nodes) {
-      const timestampEl = node.querySelector('.segment-timestamp, .segment-start-offset');
-      const textEl = node.querySelector('.segment-text, yt-formatted-string.segment-text');
+      const timestampEl = node.querySelector('.segment-timestamp, .segment-start-offset, [class*="timestamp"]');
+      const textEl = node.querySelector('.segment-text, yt-formatted-string.segment-text, [class*="segment-text"]');
       const text = stripHtml(textEl?.textContent || '');
       const start = parseClockLabel(timestampEl?.textContent || '');
       if (!text) continue;
@@ -86,32 +165,127 @@ function fetchTranscriptFromPanelInPage() {
     return segments;
   }
 
-  return (async () => {
-    mutePlayer();
+  function chooseCaptionTrack(tracks, wantedLanguages) {
+    const wanted = String(wantedLanguages || 'hi.*,hi,en.*').split(',').map(value => value.trim().replace('.*', '').toLowerCase()).filter(Boolean);
+    return [...tracks].sort((a, b) => {
+      const aScore = wanted.findIndex(lang => String(a.languageCode || '').toLowerCase().startsWith(lang));
+      const bScore = wanted.findIndex(lang => String(b.languageCode || '').toLowerCase().startsWith(lang));
+      return (aScore === -1 ? 99 : aScore) - (bScore === -1 ? 99 : bScore);
+    })[0];
+  }
 
-    const moreButton = document.querySelector('#expand, ytd-text-inline-expander #expand, tp-yt-paper-button#expand');
-    if (moreButton) {
-      moreButton.click();
-      await sleep(800);
+  async function tryCaptionTracks(player) {
+    const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+    if (!tracks.length) return null;
+    const selected = chooseCaptionTrack(tracks, languages);
+    if (!selected?.baseUrl) return null;
+    const result = await fetchCaptionTrackInPage(selected.baseUrl);
+    if (result?.segments?.length) {
+      return {
+        ok: true,
+        segments: result.segments,
+        language: selected.languageCode || 'unknown',
+        fileName: selected.name?.simpleText || selected.languageCode || 'caption',
+        method: `caption-${result.format || 'vtt'}`,
+      };
+    }
+    return null;
+  }
+
+  async function tryInnerTube(player) {
+    const params = extractTranscriptParams(player, document.documentElement.innerHTML);
+    if (!params) return null;
+    const result = await fetchInnerTubeTranscriptInPage(params);
+    if (result?.segments?.length) {
+      return {
+        ok: true,
+        segments: result.segments,
+        language: 'unknown',
+        fileName: 'innertube-transcript',
+        method: 'innertube',
+      };
+    }
+    return null;
+  }
+
+  async function tryPanelDom() {
+    mutePlayer();
+    scrollToDescription();
+    await sleep(600);
+
+    const expandButton = findExpandButton();
+    if (expandButton) {
+      clickElement(expandButton);
+      await sleep(1000);
     }
 
-    const transcriptButton = findShowTranscriptButton();
+    scrollToDescription();
+    let transcriptButton = findShowTranscriptButton();
+    for (let attempt = 0; attempt < 30 && !transcriptButton; attempt++) {
+      scrollToDescription();
+      transcriptButton = findShowTranscriptButton();
+      if (transcriptButton) break;
+      await sleep(500);
+    }
+
     if (!transcriptButton) {
       return { ok: false, error: 'Show transcript button not found on this video.' };
     }
 
-    transcriptButton.click();
-    await sleep(1200);
+    clickElement(transcriptButton);
+    await sleep(1500);
 
-    for (let attempt = 0; attempt < 40; attempt++) {
+    for (let attempt = 0; attempt < 50; attempt++) {
       mutePlayer();
       const segments = extractSegmentsFromPanel();
-      if (segments.length) return { ok: true, segments, format: 'dom' };
-      await sleep(500);
+      if (segments.length) {
+        return {
+          ok: true,
+          segments,
+          language: 'unknown',
+          fileName: 'youtube-transcript-panel',
+          method: 'panel-dom',
+        };
+      }
+      await sleep(400);
     }
 
     return { ok: false, error: 'Transcript panel opened but segments did not load.' };
+  }
+
+  return (async () => {
+    const errors = [];
+    const { player } = await waitForPageReady();
+    mutePlayer();
+    scrollToDescription();
+    await sleep(800);
+
+    const innerTubeResult = await tryInnerTube(player);
+    if (innerTubeResult?.segments?.length) return innerTubeResult;
+    if (innerTubeResult?.error) errors.push(innerTubeResult.error);
+
+    const captionResult = await tryCaptionTracks(player);
+    if (captionResult?.segments?.length) return captionResult;
+    if (captionResult === null && player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length) {
+      errors.push('Caption track download returned empty.');
+    }
+
+    const panelResult = await tryPanelDom();
+    if (panelResult?.segments?.length) return panelResult;
+    if (panelResult?.error) errors.push(panelResult.error);
+
+    return {
+      ok: false,
+      error: errors.filter(Boolean).join(' · ') || 'No transcript methods returned caption lines.',
+    };
   })();
+}
+
+function fetchTranscriptFromPanelInPage() {
+  return fetchTranscriptInPage('hi.*,hi,en.*').then((result) => {
+    if (result?.segments?.length) return { ok: true, segments: result.segments, format: result.method || 'dom' };
+    return { ok: false, error: result?.error || 'Panel transcript fetch failed.' };
+  });
 }
 
 function extractTranscriptParams(player, html) {
@@ -384,5 +558,34 @@ function fetchInnerTubeTranscriptInPage(params) {
     }
 
     return { ok: true, segments, format: 'innertube' };
+  })();
+}
+
+function fetchTextInYouTubePage(fetchUrl) {
+  return (async () => {
+    try {
+      const response = await fetch(fetchUrl, { credentials: 'include' });
+      const text = await response.text();
+      if (!response.ok) return { ok: false, error: `HTTP ${response.status}`, preview: text.slice(0, 180) };
+      return { ok: true, text };
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error) };
+    }
+  })();
+}
+
+function waitForYouTubeVideoReadyInPage(expectedVideoId) {
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  return (async () => {
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const player = window.ytInitialPlayerResponse;
+      const id = player?.videoDetails?.videoId || '';
+      const onWatch = /\/watch/.test(window.location.pathname);
+      if (onWatch && (!expectedVideoId || id === expectedVideoId)) {
+        return { ok: true, videoId: id };
+      }
+      await sleep(300);
+    }
+    return { ok: false, error: 'YouTube watch page did not finish loading.' };
   })();
 }
