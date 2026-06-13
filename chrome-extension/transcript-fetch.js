@@ -64,12 +64,12 @@ function fetchTranscriptInPage(languages) {
 
   async function waitForPageReady() {
     mutePlayer();
-    for (let attempt = 0; attempt < 60; attempt++) {
+    for (let attempt = 0; attempt < 24; attempt++) {
       const player = getLivePlayerResponse();
       const videoId = player?.videoDetails?.videoId || '';
-      const hasDescription = document.querySelector('ytd-watch-metadata, #description, ytd-text-inline-expander');
-      if (videoId && (hasDescription || document.querySelector('video'))) return { player, videoId };
-      await sleep(500);
+      const hasDescription = document.querySelector('ytd-watch-metadata, #description, ytd-text-inline-expander, video');
+      if (videoId && hasDescription) return { player, videoId };
+      await sleep(200);
     }
     return { player: getLivePlayerResponse(), videoId: getLivePlayerResponse()?.videoDetails?.videoId || '' };
   }
@@ -337,21 +337,21 @@ function fetchTranscriptInPage(languages) {
     }
 
     scrollToDescription();
-    await sleep(600);
+    await sleep(400);
 
     const expandButton = findExpandButton();
     if (expandButton) {
       clickElement(expandButton);
-      await sleep(1000);
+      await sleep(500);
     }
 
     scrollToDescription();
     let transcriptButton = findShowTranscriptButton();
-    for (let attempt = 0; attempt < 30 && !transcriptButton; attempt++) {
+    for (let attempt = 0; attempt < 12 && !transcriptButton; attempt++) {
       scrollToDescription();
       transcriptButton = findShowTranscriptButton();
       if (transcriptButton) break;
-      await sleep(500);
+      await sleep(250);
     }
 
     if (!transcriptButton) {
@@ -359,9 +359,9 @@ function fetchTranscriptInPage(languages) {
     }
 
     clickElement(transcriptButton);
-    await sleep(1500);
+    await sleep(700);
 
-    for (let attempt = 0; attempt < 50; attempt++) {
+    for (let attempt = 0; attempt < 20; attempt++) {
       mutePlayer();
       const segments = extractSegmentsFromPanel();
       if (segments.length) {
@@ -373,7 +373,7 @@ function fetchTranscriptInPage(languages) {
           method: 'panel-dom',
         };
       }
-      await sleep(400);
+      await sleep(250);
     }
 
     const htmlSegments = extractSegmentsFromTranscriptHtml(document.documentElement.innerHTML);
@@ -400,22 +400,42 @@ function fetchTranscriptInPage(languages) {
     const { player } = await waitForPageReady();
     mutePlayer();
 
-    const visiblePanelResult = await tryPanelDom();
-    if (visiblePanelResult?.segments?.length) return visiblePanelResult;
-    if (visiblePanelResult?.error) errors.push(visiblePanelResult.error);
+    const visibleSegments = extractSegmentsFromPanel();
+    if (visibleSegments.length) {
+      return {
+        ok: true,
+        segments: visibleSegments,
+        language: 'unknown',
+        fileName: 'youtube-visible-panel',
+        method: 'visible-panel-dom',
+      };
+    }
 
-    scrollToDescription();
-    await sleep(800);
+    const htmlSegments = extractSegmentsFromTranscriptHtml(document.documentElement.innerHTML);
+    if (htmlSegments.length) {
+      return {
+        ok: true,
+        segments: htmlSegments,
+        language: 'unknown',
+        fileName: 'youtube-visible-panel-html',
+        method: 'visible-panel-html',
+      };
+    }
 
-    const innerTubeResult = await tryInnerTube(player);
+    const [innerTubeResult, captionResult] = await Promise.all([
+      tryInnerTube(player),
+      tryCaptionTracks(player),
+    ]);
     if (innerTubeResult?.segments?.length) return innerTubeResult;
     if (innerTubeResult?.error) errors.push(innerTubeResult.error);
-
-    const captionResult = await tryCaptionTracks(player);
     if (captionResult?.segments?.length) return captionResult;
     if (captionResult === null && player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length) {
       errors.push('Caption track download returned empty.');
     }
+
+    const panelResult = await tryPanelDom();
+    if (panelResult?.segments?.length) return panelResult;
+    if (panelResult?.error) errors.push(panelResult.error);
 
     return {
       ok: false,
@@ -825,14 +845,14 @@ function fetchTextInYouTubePage(fetchUrl) {
 function waitForYouTubeVideoReadyInPage(expectedVideoId) {
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
   return (async () => {
-    for (let attempt = 0; attempt < 80; attempt++) {
+    for (let attempt = 0; attempt < 40; attempt++) {
       const player = window.ytInitialPlayerResponse;
       const id = player?.videoDetails?.videoId || '';
       const onWatch = /\/watch/.test(window.location.pathname);
       if (onWatch && (!expectedVideoId || id === expectedVideoId)) {
         return { ok: true, videoId: id };
       }
-      await sleep(300);
+      await sleep(150);
     }
     return { ok: false, error: 'YouTube watch page did not finish loading.' };
   })();

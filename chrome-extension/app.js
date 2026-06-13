@@ -314,7 +314,7 @@ async function captureTranscriptFromModal() {
     $('modalCapture').textContent = 'Capturing...';
   }
   if ($('modalMeta')) $('modalMeta').textContent = 'Opening YouTube worker tab and fetching transcript...';
-  if ($('modalSegments')) $('modalSegments').innerHTML = '<div class="empty-state">Checking open YouTube tabs...</div>';
+  if ($('modalSegments')) $('modalSegments').innerHTML = '<div class="empty-state">Starting capture...</div>';
 
   try {
     const result = await fetchTranscriptForVideo(video);
@@ -894,7 +894,24 @@ chrome.storage.onChanged.addListener((changes, area) => {
   syncFromStorageChanges(changes);
 });
 
+const CAPTURE_STAGE_LABELS = {
+  quick: 'Checking active YouTube tab',
+  worker: 'Opening worker tab',
+  load: 'Loading video page',
+  fetch: 'Fetching captions',
+  done: 'Capture complete',
+};
+
 chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'capture-progress' && message.videoId === modalVideoId) {
+    const label = CAPTURE_STAGE_LABELS[message.stage] || message.stage || 'Working';
+    const text = message.detail || label;
+    if ($('modalMeta')) $('modalMeta').textContent = text;
+    if ($('modalSegments')) {
+      $('modalSegments').innerHTML = `<div class="empty-state">${escapeHtml(text)}</div>`;
+    }
+    return;
+  }
   if (message?.type !== 'transcript-batch-event') return;
   if (message.event === 'complete') {
     setBusy(false);
@@ -938,7 +955,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.19 — auto batch with stall recovery';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.20 — fast worker path';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
