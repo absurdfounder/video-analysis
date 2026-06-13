@@ -1,6 +1,7 @@
 const state = {
   videos: [],
   priceRows: [],
+  runningTask: '',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -43,11 +44,88 @@ function setStatus(kind, text) {
   $('statusText').textContent = text;
 }
 
+function setStep(id, stateName, label) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.remove('active', 'done', 'error');
+  if (stateName) el.classList.add(stateName);
+  const small = el.querySelector('small');
+  if (small) small.textContent = label;
+}
+
+function workflowState() {
+  const hasVideos = state.videos.length > 0;
+  const okVideos = state.videos.filter(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
+  const failedVideos = state.videos.filter(v => v.status === 'failed');
+  const hasPrices = state.priceRows.length > 0;
+
+  if (!hasVideos) {
+    return {
+      next: 'Paste or keep the channel URL, then fetch videos.',
+      steps: [
+        ['stepVideos', 'active', 'Ready'],
+        ['stepTranscripts', '', 'Waiting'],
+        ['stepPrices', '', 'Waiting'],
+        ['stepExport', '', 'Waiting'],
+      ],
+    };
+  }
+
+  if (!okVideos.length) {
+    return {
+      next: `${state.videos.length} videos found. Pull transcripts next; rows will stay pending until captions are collected.`,
+      steps: [
+        ['stepVideos', 'done', `${state.videos.length} found`],
+        ['stepTranscripts', failedVideos.length ? 'error' : 'active', failedVideos.length ? `${failedVideos.length} failed` : 'Next'],
+        ['stepPrices', '', 'Waiting'],
+        ['stepExport', '', 'Waiting'],
+      ],
+    };
+  }
+
+  if (!hasPrices) {
+    return {
+      next: `${okVideos.length} transcript${okVideos.length === 1 ? '' : 's'} ready. Run basic extraction, or use AI cleanup for messy Hindi captions.`,
+      steps: [
+        ['stepVideos', 'done', `${state.videos.length} found`],
+        ['stepTranscripts', 'done', `${okVideos.length} ready`],
+        ['stepPrices', 'active', 'Next'],
+        ['stepExport', '', 'Waiting'],
+      ],
+    };
+  }
+
+  return {
+    next: `${state.priceRows.length} price row${state.priceRows.length === 1 ? '' : 's'} ready. Review confidence/context, then export what you need.`,
+    steps: [
+      ['stepVideos', 'done', `${state.videos.length} found`],
+      ['stepTranscripts', 'done', `${okVideos.length} ready`],
+      ['stepPrices', 'done', `${state.priceRows.length} rows`],
+      ['stepExport', 'active', 'Ready'],
+    ],
+  };
+}
+
+function updateWorkflow() {
+  const flow = workflowState();
+  for (const [id, stateName, label] of flow.steps) setStep(id, stateName, label);
+  if ($('nextAction')) $('nextAction').textContent = flow.next;
+
+  const hasVideos = state.videos.length > 0;
+  const hasTranscripts = state.videos.some(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
+  const busy = Boolean(state.runningTask);
+  $('fetchVideosBtn').disabled = busy;
+  $('fetchTranscriptsBtn').disabled = busy || !hasVideos;
+  $('extractPricesBtn').disabled = busy || !hasTranscripts;
+  $('extractAiBtn').disabled = busy || !hasTranscripts;
+}
+
 function counts() {
   $('videoCount').textContent = state.videos.length;
   $('okCount').textContent = state.videos.filter(v => v.status === 'ok').length;
   $('failCount').textContent = state.videos.filter(v => v.status === 'failed').length;
   $('priceCount').textContent = state.priceRows.length;
+  updateWorkflow();
 }
 
 function escapeHtml(text) {
@@ -87,6 +165,15 @@ function renderVideos() {
     const hay = [v.title, v.status, v.language, v.error].join(' ').toLowerCase();
     return !q || hay.includes(q);
   });
+
+  if (!rows.length) {
+    const message = state.videos.length ? 'No videos match this search.' : 'No videos loaded yet. Fetch videos to start.';
+    $('videoTable').innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(message)}</td></tr>`;
+    renderSegmentsPreview();
+    counts();
+    saveLocal();
+    return;
+  }
 
   $('videoTable').innerHTML = rows.map(v => {
     const firstSegment = Array.isArray(v.segments) && v.segments.length ? v.segments[0] : null;
@@ -131,6 +218,11 @@ function renderSegmentsPreview() {
     return !q || hay.includes(q);
   }).slice(0, 400) : [];
 
+  if (!segments.length) {
+    $('segmentTable').innerHTML = '<tr class="empty-row"><td colspan="2">No transcript segments yet. Pull transcripts after fetching videos.</td></tr>';
+    return;
+  }
+
   $('segmentTable').innerHTML = segments.map(seg => {
     const url = timestampUrl(selected.url, seg.start);
     return `
@@ -148,6 +240,13 @@ function renderPrices() {
     const hay = Object.values(row).join(' ').toLowerCase();
     return !q || hay.includes(q);
   });
+
+  if (!rows.length) {
+    $('priceTable').innerHTML = '<tr class="empty-row"><td colspan="10">No price rows yet. Extract prices after transcripts are ready.</td></tr>';
+    counts();
+    saveLocal();
+    return;
+  }
 
   $('priceTable').innerHTML = rows.map(row => {
     const timeUrl = row.timestamp_url || timestampUrl(row.video_url, row.timestamp_seconds);
@@ -232,7 +331,8 @@ $('checkBtn').addEventListener('click', async () => {
 
 $('fetchVideosBtn').addEventListener('click', async () => {
   try {
-    $('fetchVideosBtn').disabled = true;
+    state.runningTask = 'videos';
+    updateWorkflow();
     const channelUrl = $('channelUrl').value.trim();
     const maxVideos = Number($('maxVideos').value || 50);
     log(`Fetching up to ${maxVideos} videos...`);
@@ -242,10 +342,12 @@ $('fetchVideosBtn').addEventListener('click', async () => {
     renderVideos();
     renderPrices();
     log(`Found ${data.count} videos.`);
+    log('Next: pull transcripts. This fills the segments table and unlocks price extraction.');
   } catch (error) {
     log(`Video fetch failed: ${error.message}`);
   } finally {
-    $('fetchVideosBtn').disabled = false;
+    state.runningTask = '';
+    updateWorkflow();
   }
 });
 
@@ -259,7 +361,8 @@ $('fetchTranscriptsBtn').addEventListener('click', async () => {
     return;
   }
 
-  $('fetchTranscriptsBtn').disabled = true;
+  state.runningTask = 'transcripts';
+  updateWorkflow();
   log(`Pulling transcripts for ${pending.length} videos...`);
 
   for (let i = 0; i < state.videos.length; i++) {
@@ -293,8 +396,10 @@ $('fetchTranscriptsBtn').addEventListener('click', async () => {
     if (delayMs > 0) await sleep(delayMs);
   }
 
-  $('fetchTranscriptsBtn').disabled = false;
+  state.runningTask = '';
+  updateWorkflow();
   log('Transcript pull complete.');
+  log('Next: extract prices. Use AI cleanup if the captions look noisy or mixed Hindi/English.');
 });
 
 $('extractPricesBtn').addEventListener('click', async () => {
@@ -304,6 +409,8 @@ $('extractPricesBtn').addEventListener('click', async () => {
       log('No transcripts found yet.');
       return;
     }
+    state.runningTask = 'prices';
+    updateWorkflow();
     log(`Extracting basic timestamped price rows from ${items.length} transcripts...`);
     const data = await api('/api/extract-prices', { items });
     state.priceRows = data.rows;
@@ -311,6 +418,9 @@ $('extractPricesBtn').addEventListener('click', async () => {
     log(`Extracted ${data.count} regex price rows. Use AI extraction for messy Hindi captions.`);
   } catch (error) {
     log(`Price extraction failed: ${error.message}`);
+  } finally {
+    state.runningTask = '';
+    updateWorkflow();
   }
 });
 
@@ -329,7 +439,8 @@ $('extractAiBtn').addEventListener('click', async () => {
 
     if (apiKey) localStorage.setItem('fruitTranscriptMinerOpenAIKey', apiKey);
 
-    $('extractAiBtn').disabled = true;
+    state.runningTask = 'ai';
+    updateWorkflow();
     log(`AI extracting prices from ${Math.min(maxVideos, items.length)} video(s) using ${model}...`);
     const data = await api('/api/extract-prices-ai', {
       items,
@@ -344,7 +455,8 @@ $('extractAiBtn').addEventListener('click', async () => {
   } catch (error) {
     log(`AI extraction failed: ${error.message}`);
   } finally {
-    $('extractAiBtn').disabled = false;
+    state.runningTask = '';
+    updateWorkflow();
   }
 });
 

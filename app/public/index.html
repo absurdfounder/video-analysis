@@ -21,6 +21,31 @@
     </section>
 
     <section class="panel controls">
+      <div class="workflow" aria-label="Workflow progress">
+        <div class="workflow-step active" id="stepVideos">
+          <span>1</span>
+          <strong>Find videos</strong>
+          <small>Waiting</small>
+        </div>
+        <div class="workflow-step" id="stepTranscripts">
+          <span>2</span>
+          <strong>Pull transcripts</strong>
+          <small>Locked</small>
+        </div>
+        <div class="workflow-step" id="stepPrices">
+          <span>3</span>
+          <strong>Extract prices</strong>
+          <small>Locked</small>
+        </div>
+        <div class="workflow-step" id="stepExport">
+          <span>4</span>
+          <strong>Review/export</strong>
+          <small>Locked</small>
+        </div>
+      </div>
+
+      <div class="next-action" id="nextAction">Paste or keep the channel URL, then fetch videos.</div>
+
       <label>
         Channel / playlist URL
         <input id="channelUrl" value="https://www.youtube.com/@delhifruitmarket/videos?view=0&sort=dd&shelf_id=2" />
@@ -43,11 +68,11 @@
 
       <div class="buttons">
         <button id="checkBtn" class="secondary">Check setup</button>
-        <button id="fetchVideosBtn">1. Fetch videos</button>
-        <button id="fetchTranscriptsBtn">2. Pull timestamped transcripts</button>
-        <button id="extractPricesBtn" class="secondary">3A. Basic extraction</button>
+        <button id="fetchVideosBtn">Fetch videos</button>
+        <button id="fetchTranscriptsBtn">Pull transcripts</button>
+        <button id="extractPricesBtn" class="secondary">Basic extraction</button>
       </div>
-      <p class="hint">Start with 10 to 25 videos. Once it behaves, increase slowly. YouTube does not enjoy being poked with a broomstick.</p>
+      <p class="hint">Start with 10 to 25 videos. Pulling transcripts is the slow step because each video is checked one at a time.</p>
     </section>
 
     <section class="panel ai-panel">
@@ -74,7 +99,7 @@
         </label>
       </div>
       <div class="buttons">
-        <button id="extractAiBtn">3B. AI clean & extract prices</button>
+        <button id="extractAiBtn">AI clean & extract prices</button>
       </div>
       <p class="hint">For safety, API key is sent only to your local server. Better: run with <code>OPENAI_API_KEY=your_key npm start</code> and leave this field blank.</p>
     </section>
