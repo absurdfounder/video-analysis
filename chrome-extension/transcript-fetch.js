@@ -202,9 +202,22 @@ function fetchTranscriptInPage(languages) {
   }
 
   function decodeHtmlEntities(text) {
-    const textarea = document.createElement('textarea');
-    textarea.innerHTML = String(text || '');
-    return textarea.value;
+    return String(text || '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&#(\d+);/g, (_, code) => {
+        const value = Number(code);
+        return Number.isFinite(value) ? String.fromCodePoint(value) : _;
+      })
+      .replace(/&#x([0-9a-fA-F]+);/g, (_, code) => {
+        const value = parseInt(code, 16);
+        return Number.isFinite(value) ? String.fromCodePoint(value) : _;
+      })
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
+      .replace(/&quot;/g, '"');
   }
 
   function extractSegmentsFromTranscriptHtml(html) {

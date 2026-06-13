@@ -805,7 +805,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.6 — panel HTML transcript fallback';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.7 — Trusted Types-safe parser';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
