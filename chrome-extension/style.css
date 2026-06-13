@@ -199,17 +199,6 @@ h1 {
   margin-bottom: 16px;
 }
 
-.batch-controls {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
-  align-items: stretch;
-}
-
-.batch-controls .btn-large {
-  margin-bottom: 16px;
-}
-
 .btn-secondary { background: var(--soft-green); color: var(--green-dark); }
 .btn-ghost { background: #eceee9; color: var(--muted); }
 
@@ -310,6 +299,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 
 .badge.ok, .badge.relevance-relevant { background: var(--soft-green); color: var(--green-dark); }
+.badge.channel-index { background: #eef2ff; color: #3730a3; font-variant-numeric: tabular-nums; }
 .badge.failed { background: #ffe8e8; color: var(--danger); }
 .badge.running { background: #fff4d6; color: var(--warn); }
 .badge.skipped, .badge.relevance-irrelevant { background: #f1f1f1; color: #666; }
@@ -334,41 +324,62 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   border-color: rgba(26, 122, 76, 0.35);
 }
 
-.card-actions {
-  display: grid;
-  grid-template-columns: minmax(120px, 0.45fr) 1fr;
-  gap: 8px;
-  margin-top: 10px;
+.embed-worker {
+  margin: 14px 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  overflow: hidden;
+  background: #0f1411;
 }
 
-.btn-view-transcript,
-.btn-open-youtube {
+.embed-worker.hidden {
+  display: none;
+}
+
+.embed-worker-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #f4f7f5;
+}
+
+.embed-worker-head strong {
+  display: block;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.embed-worker-status {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: rgba(244, 247, 245, 0.72);
+}
+
+#embedWorkerFrame {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  background: #000;
+}
+
+.btn-view-transcript {
+  margin-top: 10px;
   width: 100%;
   border: 0;
   border-radius: 12px;
   padding: 10px 12px;
-  font: inherit;
-  font-weight: 800;
-  text-align: center;
-}
-
-.btn-view-transcript {
   background: var(--soft-green);
   color: var(--green-dark);
+  font: inherit;
+  font-weight: 800;
   cursor: pointer;
-}
-
-.btn-open-youtube {
-  background: #eef1ed;
-  color: var(--muted);
 }
 
 .btn-view-transcript:hover {
   background: #d8edde;
-}
-
-.btn-open-youtube:hover {
-  color: var(--green-dark);
 }
 
 /* Transcript modal */
@@ -594,6 +605,4 @@ input {
   .step-line { display: none; }
   .step { grid-template-columns: auto 1fr; justify-items: start; text-align: left; }
   .step-num { grid-row: span 2; }
-  .card-actions { grid-template-columns: 1fr; }
-  .batch-controls { grid-template-columns: 1fr; }
 }

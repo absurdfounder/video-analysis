@@ -48,8 +48,8 @@
     </nav>
 
     <section class="step-panel active" id="panel-1">
-      <p class="step-desc" id="stepDesc1">Pull the latest videos from the YouTube channel. Irrelevant titles (gold, silver, etc.) are auto-filtered.</p>
-      <button id="stepBtn1" class="btn-primary btn-large" type="button">Fetch videos from channel</button>
+      <p class="step-desc" id="stepDesc1">Build a numbered channel index (newest = #1) by paginating through all uploads, then filter irrelevant titles.</p>
+      <button id="stepBtn1" class="btn-primary btn-large" type="button">Fetch full channel index</button>
       <div class="panel-tools">
         <input id="videoSearch" placeholder="Search videos..." />
       </div>
@@ -88,7 +88,7 @@
       <div class="settings-body">
         <label>Channel URL<input id="channelUrl" value="https://www.youtube.com/@delhifruitmarket/videos" /></label>
         <div class="grid-2">
-          <label>Max videos<input id="maxVideos" type="number" min="1" max="100" value="25" /></label>
+          <label>Max videos (0 = all)<input id="maxVideos" type="number" min="0" max="1000" value="0" /></label>
           <label>Poll every (min)<input id="pollIntervalMinutes" type="number" min="30" max="1440" value="360" /></label>
         </div>
         <label class="check-row"><input id="notificationsEnabled" type="checkbox" checked /> Notify on new uploads</label>

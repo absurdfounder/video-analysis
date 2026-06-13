@@ -1054,3 +1054,58 @@ function waitForYouTubeVideoReadyInPage(expectedVideoId) {
     return { ok: false, error: 'YouTube watch page did not finish loading.' };
   })();
 }
+
+function fetchBrowseContinuationInPage(continuation) {
+  return (async () => {
+    if (!continuation) return { ok: false, error: 'No browse continuation token.' };
+
+    const apiKey = window.ytcfg?.data_?.INNERTUBE_API_KEY || window.ytcfg?.get?.('INNERTUBE_API_KEY') || '';
+    const clientVersion = window.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION || window.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION') || '2.20260101.00.00';
+    const visitorData = window.ytcfg?.data_?.VISITOR_DATA || window.ytcfg?.get?.('VISITOR_DATA') || '';
+    const hl = window.ytcfg?.data_?.HL || window.ytcfg?.get?.('HL') || 'en';
+    const gl = window.ytcfg?.data_?.GL || window.ytcfg?.get?.('GL') || 'US';
+
+    if (!apiKey) return { ok: false, error: 'YouTube API key missing in page context.' };
+
+    const headers = {
+      'content-type': 'application/json',
+      'X-Youtube-Client-Name': '1',
+      'X-Youtube-Client-Version': clientVersion,
+    };
+    if (visitorData) headers['X-Goog-Visitor-Id'] = visitorData;
+
+    const response = await fetch(`https://www.youtube.com/youtubei/v1/browse?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: 'WEB',
+            clientVersion,
+            hl,
+            gl,
+            userAgent: navigator.userAgent,
+            originalUrl: window.location.href,
+          },
+        },
+        continuation,
+      }),
+    });
+
+    const raw = await response.text();
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return { ok: false, error: `Browse continuation parse failed (HTTP ${response.status}).` };
+    }
+
+    if (!response.ok) {
+      const apiError = data?.error?.message || data?.errors?.[0]?.message || '';
+      return { ok: false, error: apiError || `Browse continuation failed (HTTP ${response.status}).` };
+    }
+
+    return { ok: true, data };
+  })();
+}

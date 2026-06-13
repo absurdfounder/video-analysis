@@ -209,6 +209,7 @@ function renderVideoCard(video) {
     <article class="video-card ${video.isNew ? 'is-new' : ''} ${status === 'skipped' ? 'is-skipped' : ''} ${hasData ? 'has-transcript' : ''}">
       <h3><a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a></h3>
       <div class="card-tags">
+        ${video.channelIndex ? tag(`#${video.channelIndex}`, 'channel-index') : ''}
         ${tag(status, status)}
         ${tag(video.relevance || 'unclassified', `relevance-${video.relevance || 'unclassified'}`)}
         ${hasData ? tag(`${segCount} lines`, 'relevance-relevant') : ''}
@@ -222,6 +223,26 @@ function renderVideoCard(video) {
       ` : ''}
     </article>
   `;
+}
+
+function renderVideoIndexList(videos, containerId, emptyMessage) {
+  const container = $(containerId);
+  if (!container) return;
+
+  const q = (containerId === 'videoList' ? ($('videoSearch')?.value || '') : '').toLowerCase().trim();
+  const filtered = videos.filter((v) => {
+    if (!q) return true;
+    const hay = [v.title, v.status, v.relevance, v.channelIndex, parseVideoDate(v).label].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+
+  if (!filtered.length) {
+    container.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
+    return;
+  }
+
+  const sorted = [...filtered].sort((a, b) => (a.channelIndex || 999999) - (b.channelIndex || 999999));
+  container.innerHTML = sorted.map((video) => renderVideoCard(video)).join('');
 }
 
 function renderDateGroups(videos, containerId, emptyMessage) {
@@ -450,10 +471,10 @@ function renderPrices() {
 }
 
 function renderVideos() {
-  renderDateGroups(
+  renderVideoIndexList(
     state.videos,
     'videoList',
-    'No videos yet. Click “Fetch videos from channel” in step 1.',
+    'No videos yet. Click “Fetch full channel index” in step 1.',
   );
   renderDateGroups(
     state.videos.filter(v => isProcessable(v)),
@@ -489,7 +510,7 @@ function deriveStepStatus() {
     : done ? 'All relevant transcripts fetched.' : 'Fetch all transcripts in the background worker tab.';
 
   return {
-    1: { done: total > 0, meta: total ? `${total} videos` : 'Start here', desc: total ? `${total} videos loaded (${relevant} relevant).` : 'Pull latest videos from the channel.' },
+    1: { done: total > 0, meta: total ? `${total} indexed` : 'Start here', desc: total ? `${total} videos indexed (${relevant} relevant). #1 = newest upload.` : 'Paginate the full channel uploads list.' },
     2: { done: relevant > 0 && pending === 0, meta: transcriptMeta, desc: transcriptDesc },
     3: { done: prices > 0, meta: prices ? `${prices} rows` : 'Waiting', desc: prices ? `${prices} price rows extracted.` : 'Run AI on transcripts to extract mandi prices.' },
     4: { done: Boolean(state.lastSync), meta: state.lastSync ? 'Synced' : 'Waiting', desc: state.lastSync ? `Last pushed ${new Date(state.lastSync).toLocaleString()}` : 'Push results to your website dataset.' },
@@ -625,26 +646,32 @@ async function classifyCurrentVideos() {
 
 async function fetchVideosStep() {
   const channelUrl = ($('channelUrl')?.value || '').trim();
-  const maxVideos = Number($('maxVideos')?.value || 25);
+  const maxVideos = Number($('maxVideos')?.value ?? 0);
 
-  try {
-    const check = await api('/api/check-new-videos', {
-      channelUrl,
-      maxVideos,
-      pollIntervalMinutes: Number($('pollIntervalMinutes')?.value || 360),
-      notificationsEnabled: $('notificationsEnabled')?.checked !== false,
-    });
-    if (check.videos?.length) {
-      const merged = new Map(state.videos.map(video => [video.id, video]));
-      for (const video of check.videos) merged.set(video.id, { ...merged.get(video.id), ...video });
-      state.videos = [...merged.values()];
-      log(check.newCount ? `Found ${check.newCount} new video(s).` : `Loaded ${check.videos.length} videos.`);
-    }
-  } catch {
-    const data = await api('/api/list-videos', { channelUrl, maxVideos });
-    state.videos = data.videos;
-    log(`Fetched ${data.count} videos.`);
+  log(maxVideos === 0 ? 'Fetching full channel index (paginated)...' : `Fetching up to ${maxVideos} videos...`);
+  const data = await api('/api/list-videos', { channelUrl, maxVideos });
+  const existingById = new Map(state.videos.map(video => [video.id, video]));
+  const indexedIds = new Set(data.videos.map(video => video.id));
+
+  state.videos = data.videos.map((fresh) => {
+    const prev = existingById.get(fresh.id);
+    if (!prev) return fresh;
+    return {
+      ...fresh,
+      ...prev,
+      channelIndex: fresh.channelIndex,
+      title: fresh.title || prev.title,
+      upload_date: fresh.upload_date || prev.upload_date,
+      duration: fresh.duration || prev.duration,
+    };
+  });
+
+  for (const [id, prev] of existingById) {
+    if (!indexedIds.has(id)) state.videos.push(prev);
   }
+
+  state.videos.sort((a, b) => (a.channelIndex || 999999) - (b.channelIndex || 999999));
+  log(`Indexed ${data.count} videos${data.pagesFetched ? ` (${data.pagesFetched} page(s))` : ''} — newest is #1.`);
 
   await classifyCurrentVideos();
   renderVideos();
@@ -1009,7 +1036,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.27 — batch errors + stall recovery';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.28 — full channel index + #order';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

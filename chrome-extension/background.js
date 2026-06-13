@@ -385,7 +385,9 @@ async function fetchTranscriptsBatch(body) {
   const delayMs = Math.max(50, Number(body.delayMs ?? 200));
   const languages = safeText(body.languages || 'hi.*,hi,en.*');
   const project = await loadProjectState();
-  const pending = (project.videos || []).filter(isBatchProcessable);
+  const pending = (project.videos || [])
+    .filter(isBatchProcessable)
+    .sort((a, b) => (a.channelIndex || 999999) - (b.channelIndex || 999999));
 
   if (!pending.length) {
     return { ok: true, started: false, total: 0, message: 'No pending transcripts.' };
@@ -860,49 +862,38 @@ chrome.runtime.onStartup.addListener(() => {
 
 async function listVideos(body) {
   const channelUrl = normalizeChannelUrl(body.channelUrl);
-  const maxVideos = Math.max(1, Math.min(Number(body.maxVideos || 25), 100));
+  const requestedMax = Number(body.maxVideos ?? 0);
+  const unlimited = requestedMax === 0;
+  const maxVideos = unlimited ? 1000 : Math.max(1, Math.min(requestedMax, 1000));
   if (!/^https?:\/\//i.test(channelUrl) || !/(youtube\.com|youtu\.be)/i.test(channelUrl)) {
     return { ok: false, error: 'Please enter a valid YouTube channel/video/playlist URL.' };
   }
 
-  let html = '';
-  let initialData = null;
   let scrapeError = '';
-
+  let indexed = { videos: [], pagesFetched: 0 };
   try {
-    html = await fetchText(channelUrl);
-    initialData = extractJsonObject(html, 'ytInitialData');
+    indexed = await listChannelVideosPaginated(channelUrl, maxVideos);
   } catch (error) {
     scrapeError = cleanError(error);
   }
 
-  const videos = [];
-  if (initialData) collectVideos(initialData, videos);
-
-  if (!videos.length && html) {
-    try {
-      const rssVideos = await listVideosFromRss(html, initialData, maxVideos);
-      videos.push(...rssVideos);
-    } catch (error) {
-      scrapeError = scrapeError || cleanError(error);
-    }
+  if (!indexed.videos.length) {
+    return {
+      ok: false,
+      error: scrapeError
+        || 'Found 0 videos. Open youtube.com in this Chrome profile, confirm you are signed in, then retry.',
+    };
   }
 
-  const seen = new Set();
-  const unique = videos
-    .filter(video => {
-      if (!video.id || seen.has(video.id)) return false;
-      seen.add(video.id);
-      return true;
-    })
-    .slice(0, maxVideos)
-    .map(video => ({
+  const unique = indexed.videos
+    .map((video, index) => ({
       id: video.id,
       title: video.title || video.id,
       url: `https://www.youtube.com/watch?v=${video.id}`,
       upload_date: video.upload_date || '',
       duration: video.duration || '',
       channel: video.channel || '',
+      channelIndex: index + 1,
       status: 'pending',
       language: '',
       transcriptText: '',
@@ -925,15 +916,95 @@ async function listVideos(body) {
   await saveChannelSettings({ channelUrl, knownVideoIds: nextKnown, processedVideoIds: nextProcessed });
   await updateActionBadge({ ...settings, knownVideoIds: nextKnown, processedVideoIds: nextProcessed });
 
-  if (!enriched.length) {
-    return {
-      ok: false,
-      error: scrapeError
-        || 'Found 0 videos. Open youtube.com in this Chrome profile, confirm you are signed in, then retry. YouTube may have changed its page layout.',
-    };
+  return {
+    ok: true,
+    count: enriched.length,
+    totalIndexed: enriched.length,
+    pagesFetched: indexed.pagesFetched || 1,
+    videos: enriched,
+  };
+}
+
+async function listChannelVideosPaginated(channelUrl, maxVideos) {
+  let html = '';
+  let initialData = null;
+  try {
+    html = await fetchText(channelUrl);
+    initialData = extractJsonObject(html, 'ytInitialData');
+  } catch (error) {
+    throw new Error(cleanError(error));
   }
 
-  return { ok: true, count: enriched.length, videos: enriched };
+  const seen = new Set();
+  const collected = [];
+  let pagesFetched = 0;
+
+  const addFromNode = (node) => {
+    const batch = [];
+    collectVideos(node, batch, maxVideos);
+    for (const video of batch) {
+      if (!video.id || seen.has(video.id)) continue;
+      seen.add(video.id);
+      collected.push(video);
+      if (collected.length >= maxVideos) return true;
+    }
+    return collected.length >= maxVideos;
+  };
+
+  if (addFromNode(initialData)) {
+    return { videos: collected, pagesFetched: 1 };
+  }
+  pagesFetched = 1;
+
+  let continuation = findBrowseContinuationToken(initialData);
+  const tabId = await ensureYouTubeTab();
+  await injectTranscriptHelpers(tabId);
+
+  while (continuation && collected.length < maxVideos && pagesFetched < 60) {
+    const result = await runInYouTubeTab('fetchBrowseContinuationInPage', [continuation], tabId, { skipInject: true });
+    if (!result?.ok || !result.data) break;
+
+    pagesFetched += 1;
+    if (addFromNode(result.data)) break;
+    continuation = findBrowseContinuationToken(result.data);
+  }
+
+  if (!collected.length && html) {
+    try {
+      const rssVideos = await listVideosFromRss(html, initialData, maxVideos);
+      for (const video of rssVideos) {
+        if (!video.id || seen.has(video.id)) continue;
+        seen.add(video.id);
+        collected.push(video);
+        if (collected.length >= maxVideos) break;
+      }
+      pagesFetched = Math.max(pagesFetched, 1);
+    } catch {
+      // RSS is a last resort for the first slice only.
+    }
+  }
+
+  return { videos: collected, pagesFetched };
+}
+
+function findBrowseContinuationToken(node, seen = new Set()) {
+  if (!node || typeof node !== 'object' || seen.has(node)) return '';
+  seen.add(node);
+
+  const direct = node.continuationCommand?.token
+    || node.continuationEndpoint?.continuationCommand?.token
+    || node.nextContinuationData?.continuation;
+  if (typeof direct === 'string' && direct.length > 16) return direct;
+
+  if (node.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token) {
+    return node.continuationItemRenderer.continuationEndpoint.continuationCommand.token;
+  }
+
+  for (const value of Object.values(node)) {
+    const found = findBrowseContinuationToken(value, seen);
+    if (found) return found;
+  }
+  return '';
 }
 
 function broadcastCaptureProgress(videoId, stage, detail = '') {
@@ -1625,10 +1696,10 @@ function extractPublishedFromLockup(meta) {
   return '';
 }
 
-function collectVideos(node, out) {
-  if (!node || out.length >= 150) return;
+function collectVideos(node, out, max = 2000) {
+  if (!node || out.length >= max) return;
   if (Array.isArray(node)) {
-    for (const item of node) collectVideos(item, out);
+    for (const item of node) collectVideos(item, out, max);
     return;
   }
   if (typeof node !== 'object') return;
@@ -1656,9 +1727,9 @@ function collectVideos(node, out) {
     });
   }
 
-  if (node.richItemRenderer?.content) collectVideos(node.richItemRenderer.content, out);
+  if (node.richItemRenderer?.content) collectVideos(node.richItemRenderer.content, out, max);
 
-  for (const value of Object.values(node)) collectVideos(value, out);
+  for (const value of Object.values(node)) collectVideos(value, out, max);
 }
 
 function textFromRuns(value) {
