@@ -14,9 +14,24 @@ const state = {
   batchRunning: false,
   batchLogCursor: 0,
   batchJob: null,
+  aiBatchRunning: false,
+  aiBatchJob: null,
+  aiBatchLogCursor: 0,
 };
 
 const $ = (id) => document.getElementById(id);
+
+function getOpenAiKey() {
+  const fromInput = ($('openaiKey')?.value || '').trim();
+  if (fromInput) return fromInput;
+  return (localStorage.getItem('fruitTranscriptMinerOpenAIKey') || '').trim();
+}
+
+function applyOpenAiKeyToInput() {
+  if (!$('openaiKey')) return;
+  const saved = (localStorage.getItem('fruitTranscriptMinerOpenAIKey') || '').trim();
+  if (saved) $('openaiKey').value = saved;
+}
 
 function setDisabled(id, disabled) {
   const el = $(id);
@@ -41,6 +56,38 @@ function syncBatchLogFromJob(job) {
   state.batchLogCursor = job.log.length;
 }
 
+function updateAnalysisStatusUI(job) {
+  const el = $('analysisStatusText');
+  if (!el) return;
+  if (!job?.running) {
+    if (job?.finishedAt) {
+      const failed = job.failed || 0;
+      el.textContent = failed
+        ? `Analysis finished with ${failed} failed video(s). Retry from this step.`
+        : 'Analysis finished.';
+    } else if (job?.stoppedAt) {
+      el.textContent = `Analysis stopped${job.stopReason ? `: ${job.stopReason}` : '.'}`;
+    } else {
+      el.textContent = '';
+    }
+    return;
+  }
+  const done = job.done || 0;
+  const total = job.total || 0;
+  const remaining = Array.isArray(job.queue) ? job.queue.length : 0;
+  const current = job.currentTitle || job.currentId || 'next video';
+  const err = job.lastError ? ` Last error: ${job.lastError}` : '';
+  el.textContent = `Analyzing ${done}/${total} done · ${remaining} left · now: ${current}.${err}`;
+}
+
+function syncAiBatchLogFromJob(job) {
+  if (!Array.isArray(job?.log)) return;
+  const cursor = state.aiBatchLogCursor || 0;
+  for (const entry of job.log.slice(cursor)) {
+    log(entry.message, { level: entry.level || 'info' });
+  }
+  state.aiBatchLogCursor = job.log.length;
+}
 function updateBatchStatusUI(job) {
   const el = $('batchStatusText');
   if (!el) return;
@@ -108,11 +155,14 @@ function displayStatus(video) {
   return 'pending';
 }
 
-function normalizeVideos({ keepRunning = false } = {}) {
+function normalizeVideos({ keepRunning = false, keepAiRunning = false } = {}) {
   for (const video of state.videos) {
     if (!keepRunning && video.status === 'running') video.status = 'pending';
+    if (!keepAiRunning && video.priceStatus === 'running') video.priceStatus = 'pending';
     if (video.status === 'ok' && !hasTranscriptData(video)) video.status = 'pending';
     if (hasTranscriptData(video)) video.status = 'ok';
+    if (hasTranscriptData(video) && !video.priceStatus) video.priceStatus = 'pending';
+    if (!hasTranscriptData(video) && video.priceStatus === 'pending') video.priceStatus = '';
   }
 }
 
@@ -139,6 +189,39 @@ function transcriptQueueStats() {
 
 function transcriptReady() {
   return state.videos.filter(v => hasTranscriptData(v));
+}
+
+function displayPriceStatus(video) {
+  if (!hasTranscriptData(video)) return 'no-transcript';
+  if (video.priceStatus === 'running') return 'running';
+  if (video.priceStatus === 'ok') return 'ok';
+  if (video.priceStatus === 'failed') return 'failed';
+  if (video.priceStatus === 'skipped') return 'skipped';
+  return 'pending';
+}
+
+function analysisListVideos() {
+  return state.videos
+    .filter((video) => isProcessable(video) && hasTranscriptData(video))
+    .sort((a, b) => (a.channelIndex || 999999) - (b.channelIndex || 999999));
+}
+
+function analysisQueueStats() {
+  const stats = { ready: 0, waiting: 0, running: 0, failed: 0, missing: 0, total: 0 };
+  for (const video of analysisListVideos()) {
+    stats.total++;
+    const priceStatus = displayPriceStatus(video);
+    if (priceStatus === 'ok') stats.ready++;
+    else if (priceStatus === 'running') stats.running++;
+    else if (priceStatus === 'failed') stats.failed++;
+    else stats.waiting++;
+  }
+  stats.missing = stats.waiting + stats.running + stats.failed;
+  return stats;
+}
+
+function pendingAnalysis() {
+  return analysisListVideos().filter((video) => displayPriceStatus(video) !== 'ok');
 }
 
 function parseVideoDate(video) {
@@ -433,6 +516,56 @@ function secondsToClock(seconds) {
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
 
+function renderAnalysisCard(video) {
+  const priceStatus = displayPriceStatus(video);
+  const rowCount = Number(video.priceRowCount || 0);
+  const videoRows = state.priceRows.filter((row) => row.video_id === video.id).length;
+  const shownRows = rowCount || videoRows;
+  const statusLabel = priceStatus === 'ok'
+    ? 'analyzed'
+    : priceStatus === 'running'
+      ? 'analyzing'
+      : priceStatus === 'failed'
+        ? 'failed'
+        : priceStatus === 'no-transcript'
+          ? 'no transcript'
+          : 'pending';
+
+  return `
+    <article class="video-card ${priceStatus === 'running' ? 'is-running' : ''} ${priceStatus === 'ok' ? 'has-transcript' : ''}">
+      <h3>
+        ${video.channelIndex ? `<span class="channel-index-label">#${video.channelIndex}</span> ` : ''}
+        <a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a>
+      </h3>
+      <div class="card-tags">
+        ${tag(statusLabel, priceStatus === 'ok' ? 'ok' : priceStatus)}
+        ${tag(`${segmentCount(video)} lines`, 'relevance-relevant')}
+        ${shownRows ? tag(`${shownRows} price${shownRows === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
+      </div>
+      ${video.priceError ? `<div class="mini">${escapeHtml(video.priceError)}</div>` : ''}
+    </article>
+  `;
+}
+
+function renderAnalysisList() {
+  const container = $('analysisList');
+  if (!container) return;
+
+  const q = ($('analysisSearch')?.value || '').toLowerCase().trim();
+  const videos = analysisListVideos().filter((video) => {
+    if (!q) return true;
+    const hay = [video.title, video.priceStatus, video.channelIndex, video.priceError].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+
+  if (!videos.length) {
+    container.innerHTML = '<div class="empty-state">No transcripts ready. Complete step 2 first.</div>';
+    return;
+  }
+
+  container.innerHTML = videos.map((video) => renderAnalysisCard(video)).join('');
+}
+
 function renderPrices() {
   const list = $('priceList');
   if (!list) return;
@@ -466,8 +599,16 @@ function renderPrices() {
       : '<div class="empty-state">Run AI analysis first.</div>';
   }
 
+  if ($('priceRowCountLabel')) $('priceRowCountLabel').textContent = String(state.priceRows.length);
+
   updateUI();
   saveLocal();
+}
+
+function renderAll() {
+  renderAnalysisList();
+  renderVideos();
+  renderPrices();
 }
 
 function renderVideos() {
@@ -481,6 +622,7 @@ function renderVideos() {
     'transcriptList',
     'No relevant videos. Fetch videos in step 1 first.',
   );
+  renderAnalysisList();
   updateUI();
   saveLocal();
 }
@@ -509,10 +651,32 @@ function deriveStepStatus() {
           : `${transcriptStats.waiting} transcript(s) to fetch.`
     : done ? 'All relevant transcripts fetched.' : 'Fetch all transcripts in the background worker tab.';
 
+  const analysisStats = analysisQueueStats();
+  const analysisMeta = analysisStats.missing
+    ? [
+      analysisStats.waiting ? `${analysisStats.waiting} pending` : '',
+      analysisStats.running ? `${analysisStats.running} running` : '',
+      analysisStats.failed ? `${analysisStats.failed} failed` : '',
+    ].filter(Boolean).join(' · ')
+    : analysisStats.ready ? `${analysisStats.ready} analyzed` : 'Waiting';
+  const analysisDesc = analysisStats.missing
+    ? analysisStats.failed && analysisStats.waiting
+      ? `${analysisStats.waiting} waiting and ${analysisStats.failed} failed — runs in channel index order.`
+      : analysisStats.failed
+        ? `${analysisStats.failed} video(s) failed analysis. Retry from this step.`
+        : analysisStats.running
+          ? `${analysisStats.running} video(s) currently being analyzed.`
+          : `${analysisStats.waiting} transcript(s) to analyze in sequence.`
+    : prices ? `${prices} price rows from ${analysisStats.ready} video(s).` : 'Analyze each transcript in order.';
+
   return {
     1: { done: total > 0, meta: total ? `${total} indexed` : 'Start here', desc: total ? `${total} videos indexed (${relevant} relevant). #1 = newest upload.` : 'Paginate the full channel uploads list.' },
     2: { done: relevant > 0 && pending === 0, meta: transcriptMeta, desc: transcriptDesc },
-    3: { done: prices > 0, meta: prices ? `${prices} rows` : 'Waiting', desc: prices ? `${prices} price rows extracted.` : 'Run AI on transcripts to extract mandi prices.' },
+    3: {
+      done: analysisStats.total > 0 && analysisStats.missing === 0,
+      meta: analysisMeta,
+      desc: analysisDesc,
+    },
     4: { done: Boolean(state.lastSync), meta: state.lastSync ? 'Synced' : 'Waiting', desc: state.lastSync ? `Last pushed ${new Date(state.lastSync).toLocaleString()}` : 'Push results to your website dataset.' },
   };
 }
@@ -520,7 +684,7 @@ function deriveStepStatus() {
 function suggestedStep() {
   if (!state.videos.length) return 1;
   if (pendingTranscripts().length) return 2;
-  if (!state.priceRows.length) return 3;
+  if (pendingAnalysis().length) return 3;
   return 4;
 }
 
@@ -538,6 +702,7 @@ function goToStep(step) {
 function updateUI() {
   const status = deriveStepStatus();
   const transcriptStats = transcriptQueueStats();
+  const analysisStats = analysisQueueStats();
   for (let i = 1; i <= 4; i++) {
     const meta = $(`stepMeta${i}`);
     if (meta) meta.textContent = status[i].meta;
@@ -549,9 +714,11 @@ function updateUI() {
   if ($('statDone')) $('statDone').textContent = transcriptReady().length;
   if ($('statPrices')) $('statPrices').textContent = state.priceRows.length;
 
-  const busy = Boolean(state.runningTask);
-  for (let i = 1; i <= 4; i++) setDisabled(`stepBtn${i}`, busy);
-  setDisabled('stopTranscriptBatchBtn', !busy);
+  const workflowBusy = state.batchRunning || state.aiBatchRunning || Boolean(state.runningTask);
+  for (let i = 1; i <= 4; i++) setDisabled(`stepBtn${i}`, workflowBusy);
+  setDisabled('stopTranscriptBatchBtn', !state.batchRunning);
+  setDisabled('stopAiAnalysisBatchBtn', !state.aiBatchRunning);
+
   if ($('stepBtn2')) {
     $('stepBtn2').textContent = transcriptStats.failed && transcriptStats.waiting
       ? `Start ${transcriptStats.waiting} + retry ${transcriptStats.failed}`
@@ -560,6 +727,16 @@ function updateUI() {
         : transcriptStats.waiting
           ? `Fetch ${transcriptStats.waiting} transcript${transcriptStats.waiting === 1 ? '' : 's'}`
           : 'Fetch all transcripts';
+  }
+
+  if ($('stepBtn3')) {
+    $('stepBtn3').textContent = analysisStats.failed && analysisStats.waiting
+      ? `Analyze ${analysisStats.waiting} + retry ${analysisStats.failed}`
+      : analysisStats.failed
+        ? `Retry analysis for ${analysisStats.failed} failed`
+        : analysisStats.waiting
+          ? `Analyze ${analysisStats.waiting} transcript${analysisStats.waiting === 1 ? '' : 's'}`
+          : 'Analyze all transcripts';
   }
 
   document.querySelectorAll('.step').forEach(el => {
@@ -578,7 +755,7 @@ function setBusy(busy) {
 }
 
 async function saveLocal() {
-  normalizeVideos();
+  normalizeVideos({ keepRunning: state.batchRunning, keepAiRunning: state.aiBatchRunning });
   const payload = {
     videos: state.videos,
     priceRows: state.priceRows,
@@ -620,8 +797,7 @@ async function loadLocal() {
 
   normalizeVideos();
 
-  const savedKey = localStorage.getItem('fruitTranscriptMinerOpenAIKey') || '';
-  if (savedKey && $('openaiKey')) $('openaiKey').value = savedKey;
+  applyOpenAiKeyToInput();
   renderVideos();
   renderPrices();
   goToStep(state.currentStep || suggestedStep());
@@ -633,7 +809,7 @@ async function markVideosProcessed(videoIds) {
 }
 
 async function classifyCurrentVideos() {
-  const apiKey = ($('openaiKey')?.value || '').trim();
+  const apiKey = getOpenAiKey();
   const model = ($('openaiModel')?.value || 'gpt-4o-mini').trim();
   const data = await api('/api/classify-videos', { videos: state.videos, apiKey, model });
   const byId = new Map(data.videos.map(video => [video.id, video]));
@@ -709,6 +885,8 @@ async function fetchTranscriptsStep() {
   }
 
   setBusy(true);
+  state.batchRunning = true;
+  updateUI();
   goToStep(2);
 }
 
@@ -716,20 +894,21 @@ async function stopTranscriptsStep() {
   const data = await api('/api/stop-transcripts-batch', { reason: 'Stopped by user.' });
   if (data.stopped) {
     setBusy(false);
+    state.batchRunning = false;
     normalizeVideos();
     renderVideos();
     log('Transcript batch stopped.');
+    updateUI();
   }
 }
 
-function applySavedProject(saved, { keepRunning } = {}) {
+function applySavedProject(saved, { keepRunning = false, keepAiRunning = false } = {}) {
   if (!saved) return;
   if (Array.isArray(saved.videos)) state.videos = saved.videos;
   if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
   if (saved.lastSync) state.lastSync = saved.lastSync;
   if (saved.currentStep) state.currentStep = saved.currentStep;
-  const preserveRunning = keepRunning ?? (saved.videos || []).some(video => video.status === 'running');
-  normalizeVideos({ keepRunning: preserveRunning });
+  normalizeVideos({ keepRunning, keepAiRunning });
   renderVideos();
   renderPrices();
   updateUI();
@@ -737,6 +916,8 @@ function applySavedProject(saved, { keepRunning } = {}) {
 
 function syncFromStorageChanges(changes) {
   const batchRunning = Boolean(changes.transcriptBatchJob?.newValue?.running);
+  const aiBatchRunning = Boolean(changes.aiAnalysisBatchJob?.newValue?.running);
+
   if (changes.transcriptBatchJob?.newValue) {
     state.batchRunning = batchRunning;
     state.batchJob = changes.transcriptBatchJob.newValue;
@@ -744,50 +925,85 @@ function syncFromStorageChanges(changes) {
     updateBatchStatusUI(state.batchJob);
   }
 
+  if (changes.aiAnalysisBatchJob?.newValue) {
+    state.aiBatchRunning = aiBatchRunning;
+    state.aiBatchJob = changes.aiAnalysisBatchJob.newValue;
+    syncAiBatchLogFromJob(state.aiBatchJob);
+    updateAnalysisStatusUI(state.aiBatchJob);
+  }
+
   if (changes.fruitTranscriptMinerStateV2?.newValue) {
     applySavedProject(changes.fruitTranscriptMinerStateV2.newValue, {
       keepRunning: state.batchRunning || batchRunning,
+      keepAiRunning: state.aiBatchRunning || aiBatchRunning,
     });
     if (state.currentStep) goToStep(state.currentStep);
   }
 
   if (changes.transcriptBatchJob?.newValue) {
     const job = changes.transcriptBatchJob.newValue;
-    setBusy(Boolean(job?.running));
-    if (!job?.running && job?.stoppedAt) {
-      return;
-    }
-    if (!job?.running && job?.finishedAt) {
-      goToStep(3);
-    }
+    if (!job?.running && job?.finishedAt) goToStep(3);
   }
+
+  if (changes.aiAnalysisBatchJob?.newValue) {
+    const job = changes.aiAnalysisBatchJob.newValue;
+    if (!job?.running && job?.finishedAt) goToStep(4);
+  }
+
+  updateUI();
 }
 
 async function aiAnalysisStep() {
-  const items = transcriptReady();
-  if (!items.length) throw new Error('No transcripts ready. Complete step 2 first.');
-
-  const apiKey = ($('openaiKey')?.value || '').trim();
-  if (apiKey) localStorage.setItem('fruitTranscriptMinerOpenAIKey', apiKey);
-
-  if (apiKey) {
-    const data = await api('/api/extract-prices-ai', {
-      items,
-      apiKey,
-      model: ($('openaiModel')?.value || 'gpt-4o-mini').trim(),
-      maxVideos: Number($('aiMaxVideos')?.value || items.length),
-      maxCharsPerCall: Number($('aiMaxChars')?.value || 10000),
-    });
-    state.priceRows = data.rows;
-    log(`AI extracted ${data.count} price rows.`);
-  } else {
-    const data = await api('/api/extract-prices', { items });
-    state.priceRows = data.rows;
-    log(`Regex extracted ${data.count} rows. Add OpenAI key in Settings for better results.`);
+  const pending = pendingAnalysis();
+  if (!analysisListVideos().length) {
+    throw new Error('No transcripts ready. Complete step 2 first.');
+  }
+  if (!pending.length) {
+    log('All transcripts already analyzed.');
+    goToStep(4);
+    return;
   }
 
-  renderPrices();
-  goToStep(4);
+  const apiKey = getOpenAiKey();
+  if (apiKey) localStorage.setItem('fruitTranscriptMinerOpenAIKey', apiKey);
+
+  await saveLocal();
+  state.aiBatchLogCursor = 0;
+  log(`Analyzing ${pending.length} transcript(s) in channel index order...`);
+
+  const data = await api('/api/fetch-ai-analysis-batch', {
+    delayMs: 400,
+    apiKey,
+    model: ($('openaiModel')?.value || 'gpt-4o-mini').trim(),
+    maxCharsPerCall: Number($('aiMaxChars')?.value || 10000),
+  });
+
+  if (data.alreadyRunning) {
+    log('AI analysis already running.');
+    state.aiBatchRunning = true;
+    updateUI();
+    return;
+  }
+
+  if (!data.started) {
+    goToStep(4);
+    return;
+  }
+
+  state.aiBatchRunning = true;
+  updateUI();
+  goToStep(3);
+}
+
+async function stopAiAnalysisStep() {
+  const data = await api('/api/stop-ai-analysis-batch', { reason: 'Stopped by user.' });
+  if (data.stopped) {
+    state.aiBatchRunning = false;
+    normalizeVideos({ keepAiRunning: false });
+    renderAll();
+    log('AI analysis stopped.');
+    updateUI();
+  }
 }
 
 async function updateDatasetStep() {
@@ -825,6 +1041,7 @@ async function updateDatasetStep() {
 }
 
 async function loadWatchSettings() {
+  applyOpenAiKeyToInput();
   const data = await chrome.runtime.sendMessage({ type: 'api', path: '/api/channel-settings', body: { method: 'get' } });
   if (!data?.ok) return;
   const settings = data.settings || {};
@@ -858,9 +1075,13 @@ $('stopTranscriptBatchBtn')?.addEventListener('click', async () => {
 });
 
 $('stepBtn3')?.addEventListener('click', async () => {
-  try { setBusy(true); await aiAnalysisStep(); }
+  try { await aiAnalysisStep(); }
   catch (e) { log(`Step 3 failed: ${e.message}`); }
-  finally { setBusy(false); }
+});
+
+$('stopAiAnalysisBatchBtn')?.addEventListener('click', async () => {
+  try { await stopAiAnalysisStep(); }
+  catch (e) { log(`Stop analysis failed: ${e.message}`); }
 });
 
 $('stepBtn4')?.addEventListener('click', async () => {
@@ -920,6 +1141,7 @@ $('clearBtn')?.addEventListener('click', () => {
 });
 
 $('videoSearch')?.addEventListener('input', renderVideos);
+$('analysisSearch')?.addEventListener('input', renderAnalysisList);
 $('priceSearch')?.addEventListener('input', renderPrices);
 
 document.addEventListener('click', (event) => {
@@ -979,64 +1201,107 @@ chrome.runtime.onMessage.addListener((message) => {
     }
     return;
   }
-  if (message?.type !== 'transcript-batch-event') return;
-  if (message.event === 'log') {
-    log(message.message, { level: message.level || 'info' });
-    return;
-  }
-  if (message.event === 'complete') {
-    setBusy(false);
-    state.batchJob = { ...state.batchJob, running: false, finishedAt: new Date().toISOString(), failed: message.failed || 0 };
-    updateBatchStatusUI(state.batchJob);
-    goToStep(3);
-    return;
-  }
-  if (message.event === 'next') {
-    setBusy(true);
-    return;
-  }
-  if (message.event === 'progress') {
-    if (message.status === 'running') {
-      updateBatchStatusUI({
-        ...(state.batchJob || {}),
-        running: true,
-        currentId: message.videoId,
-        currentTitle: message.title || message.videoId,
-      });
+
+  if (message?.type === 'transcript-batch-event') {
+    if (message.event === 'log') {
+      log(message.message, { level: message.level || 'info' });
       return;
     }
-    if (message.status === 'failed') {
-      updateBatchStatusUI({
-        ...(state.batchJob || {}),
-        running: true,
-        lastError: message.error || 'unknown error',
-      });
+    if (message.event === 'complete') {
+      state.batchRunning = false;
+      state.batchJob = { ...state.batchJob, running: false, finishedAt: new Date().toISOString(), failed: message.failed || 0 };
+      updateBatchStatusUI(state.batchJob);
+      updateUI();
+      goToStep(3);
+      return;
+    }
+    if (message.event === 'progress') {
+      if (message.status === 'running') {
+        updateBatchStatusUI({
+          ...(state.batchJob || {}),
+          running: true,
+          currentId: message.videoId,
+          currentTitle: message.title || message.videoId,
+        });
+      } else if (message.status === 'failed') {
+        updateBatchStatusUI({
+          ...(state.batchJob || {}),
+          running: true,
+          lastError: message.error || 'unknown error',
+        });
+      }
+    }
+    return;
+  }
+
+  if (message?.type === 'ai-analysis-batch-event') {
+    if (message.event === 'log') {
+      log(message.message, { level: message.level || 'info' });
+      return;
+    }
+    if (message.event === 'complete') {
+      state.aiBatchRunning = false;
+      state.aiBatchJob = { ...state.aiBatchJob, running: false, finishedAt: new Date().toISOString(), failed: message.failed || 0 };
+      updateAnalysisStatusUI(state.aiBatchJob);
+      updateUI();
+      goToStep(4);
+      return;
+    }
+    if (message.event === 'stopped') {
+      state.aiBatchRunning = false;
+      updateUI();
+      return;
+    }
+    if (message.event === 'progress') {
+      if (message.status === 'running') {
+        updateAnalysisStatusUI({
+          ...(state.aiBatchJob || {}),
+          running: true,
+          currentId: message.videoId,
+          currentTitle: message.title || message.videoId,
+        });
+      } else if (message.status === 'failed') {
+        updateAnalysisStatusUI({
+          ...(state.aiBatchJob || {}),
+          running: true,
+          lastError: message.error || 'unknown error',
+        });
+      }
     }
   }
 });
 
-api('/api/transcript-batch-status').then((data) => {
-  state.batchRunning = Boolean(data?.job?.running);
-  state.batchJob = data?.job || null;
-  if (data?.job) {
-    syncBatchLogFromJob(data.job);
-    updateBatchStatusUI(data.job);
+Promise.all([
+  api('/api/transcript-batch-status'),
+  api('/api/ai-analysis-batch-status'),
+]).then(([transcriptData, aiData]) => {
+  state.batchRunning = Boolean(transcriptData?.job?.running);
+  state.batchJob = transcriptData?.job || null;
+  if (transcriptData?.job) {
+    syncBatchLogFromJob(transcriptData.job);
+    updateBatchStatusUI(transcriptData.job);
   }
-  if (data?.job?.running) {
-    setBusy(true);
-    normalizeVideos({ keepRunning: true });
-    renderVideos();
-  } else {
-    normalizeVideos();
-    renderVideos();
+
+  state.aiBatchRunning = Boolean(aiData?.job?.running);
+  state.aiBatchJob = aiData?.job || null;
+  if (aiData?.job) {
+    syncAiBatchLogFromJob(aiData.job);
+    updateAnalysisStatusUI(aiData.job);
   }
+
+  normalizeVideos({
+    keepRunning: state.batchRunning,
+    keepAiRunning: state.aiBatchRunning,
+  });
+  renderAll();
+  updateUI();
 }).catch(() => {});
 loadWatchSettings();
 
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.28 — full channel index + #order';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.29 — sequential AI analysis list';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

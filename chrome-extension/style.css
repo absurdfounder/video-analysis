@@ -300,6 +300,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .badge.ok, .badge.relevance-relevant { background: var(--soft-green); color: var(--green-dark); }
 .badge.channel-index { background: #eef2ff; color: #3730a3; font-variant-numeric: tabular-nums; }
+.channel-index-label { color: #3730a3; font-weight: 700; margin-right: 0.35rem; }
+.video-card.is-running { outline: 1px solid #f59e0b; }
 .badge.failed { background: #ffe8e8; color: var(--danger); }
 .badge.running { background: #fff4d6; color: var(--warn); }
 .badge.skipped, .badge.relevance-irrelevant { background: #f1f1f1; color: #666; }

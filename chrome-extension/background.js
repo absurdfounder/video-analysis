@@ -13,6 +13,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   const settings = await loadChannelSettings();
   await schedulePoll(settings.pollIntervalMinutes);
   await resumeTranscriptBatchIfNeeded();
+  await resumeAiAnalysisBatchIfNeeded();
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -42,6 +43,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
   if (alarm.name === 'transcriptBatchWatchdog') {
     await kickTranscriptBatchIfStalled();
+    return;
+  }
+  if (alarm.name === 'processNextAiAnalysis') {
+    await processNextAiAnalysisInBatch();
     return;
   }
   if (alarm.name !== 'pollChannel') return;
@@ -79,6 +84,10 @@ async function handleApi(path, body) {
   if (path === '/api/stop-transcripts-batch') return stopTranscriptBatch(body);
   if (path === '/api/complete-transcript-batch-item') return completeTranscriptBatchItem(body);
   if (path === '/api/transcript-batch-status') return transcriptBatchStatus();
+  if (path === '/api/extract-prices-ai-video') return extractPricesAiForVideo(body);
+  if (path === '/api/fetch-ai-analysis-batch') return fetchAiAnalysisBatch(body);
+  if (path === '/api/stop-ai-analysis-batch') return stopAiAnalysisBatch(body);
+  if (path === '/api/ai-analysis-batch-status') return aiAnalysisBatchStatus();
   return { ok: false, error: `Unknown extension API route: ${path}` };
 }
 
@@ -858,7 +867,365 @@ async function processNextTranscriptInBatch() {
 
 chrome.runtime.onStartup.addListener(() => {
   resumeTranscriptBatchIfNeeded().catch(() => {});
+  resumeAiAnalysisBatchIfNeeded().catch(() => {});
 });
+
+const AI_ANALYSIS_BATCH_KEY = 'aiAnalysisBatchJob';
+let aiBatchProcessing = false;
+
+function isAiAnalysisProcessable(video) {
+  return video?.relevance !== 'irrelevant'
+    && video?.status !== 'skipped'
+    && hasTranscriptSegments(video)
+    && video?.priceStatus !== 'ok';
+}
+
+function broadcastAiAnalysisBatchEvent(payload) {
+  chrome.runtime.sendMessage({ type: 'ai-analysis-batch-event', ...payload }).catch(() => {});
+}
+
+async function getAiAnalysisBatchJob() {
+  const stored = await chrome.storage.local.get(AI_ANALYSIS_BATCH_KEY);
+  return stored[AI_ANALYSIS_BATCH_KEY] || null;
+}
+
+async function appendAiBatchJobLog(message, level = 'info', meta = {}) {
+  const job = await getAiAnalysisBatchJob();
+  if (!job) return null;
+  const entry = {
+    at: new Date().toISOString(),
+    level,
+    message: safeText(message),
+    videoId: safeText(meta.videoId || ''),
+    title: safeText(meta.title || ''),
+  };
+  const log = [...(job.log || []), entry].slice(-80);
+  const nextJob = {
+    ...job,
+    log,
+    lastLogAt: entry.at,
+    lastError: level === 'error' ? entry.message : job.lastError || '',
+  };
+  await chrome.storage.local.set({ [AI_ANALYSIS_BATCH_KEY]: nextJob });
+  broadcastAiAnalysisBatchEvent({ event: 'log', ...entry });
+  return nextJob;
+}
+
+async function aiAnalysisBatchStatus() {
+  const job = await getAiAnalysisBatchJob();
+  return { ok: true, job };
+}
+
+async function fetchAiAnalysisBatch(body) {
+  const delayMs = Math.max(100, Number(body.delayMs ?? 400));
+  const apiKey = safeText(body.apiKey);
+  const model = safeText(body.model || 'gpt-4o-mini');
+  const maxCharsPerCall = Math.max(2500, Math.min(Number(body.maxCharsPerCall || 10000), 20000));
+  const project = await loadProjectState();
+  const pending = (project.videos || [])
+    .filter(isAiAnalysisProcessable)
+    .sort((a, b) => (a.channelIndex || 999999) - (b.channelIndex || 999999));
+
+  if (!pending.length) {
+    return { ok: true, started: false, total: 0, message: 'No transcripts waiting for AI analysis.' };
+  }
+
+  const existing = await getAiAnalysisBatchJob();
+  if (existing?.running) {
+    return { ok: true, started: false, alreadyRunning: true, total: existing.total || 0 };
+  }
+
+  await chrome.storage.local.set({
+    [AI_ANALYSIS_BATCH_KEY]: {
+      running: true,
+      queue: pending.map(video => video.id),
+      delayMs,
+      apiKey,
+      model,
+      maxCharsPerCall,
+      total: pending.length,
+      done: 0,
+      failed: 0,
+      currentId: null,
+      currentTitle: null,
+      startedAt: new Date().toISOString(),
+      log: [{
+        at: new Date().toISOString(),
+        level: 'info',
+        message: `Started AI analysis for ${pending.length} video(s).`,
+      }],
+      lastError: '',
+    },
+  });
+
+  processNextAiAnalysisInBatch().catch((error) => {
+    console.warn('AI analysis batch failed:', error);
+    appendAiBatchJobLog(`Batch start failed: ${cleanError(error)}`, 'error').catch(() => {});
+  });
+
+  return { ok: true, started: true, total: pending.length };
+}
+
+async function resumeAiAnalysisBatchIfNeeded() {
+  const job = await getAiAnalysisBatchJob();
+  if (job?.running && job.queue?.length) {
+    processNextAiAnalysisInBatch().catch((error) => console.warn('AI analysis batch resume failed:', error));
+  }
+}
+
+async function scheduleNextAiAnalysisInBatch(delayMs = 400) {
+  const waitMs = Math.max(100, Number(delayMs) || 400);
+  await chrome.alarms.clear('processNextAiAnalysis');
+  await chrome.alarms.create('processNextAiAnalysis', { when: Date.now() + waitMs });
+}
+
+async function advanceAiAnalysisBatchQueue() {
+  const job = await getAiAnalysisBatchJob();
+  if (!job?.running || !job.queue?.length) return false;
+
+  const nextQueue = job.queue.slice(1);
+  const nextJob = {
+    ...job,
+    queue: nextQueue,
+    done: (job.done || 0) + 1,
+    currentId: null,
+    currentTitle: null,
+    lastFinishedAt: new Date().toISOString(),
+    running: nextQueue.length > 0,
+  };
+  await chrome.storage.local.set({ [AI_ANALYSIS_BATCH_KEY]: nextJob });
+
+  if (!nextQueue.length) {
+    await finishAiAnalysisBatch(nextJob, nextJob.done);
+    return true;
+  }
+
+  await scheduleNextAiAnalysisInBatch(job.delayMs || 400);
+  return true;
+}
+
+async function finishAiAnalysisBatch(job, doneCount) {
+  const failed = job.failed || 0;
+  await appendAiBatchJobLog(
+    `AI analysis finished: ${doneCount}/${job.total || doneCount} video(s)${failed ? `, ${failed} failed` : ''}.`,
+    failed ? 'warn' : 'info',
+  );
+  await chrome.storage.local.set({
+    [AI_ANALYSIS_BATCH_KEY]: {
+      ...job,
+      running: false,
+      queue: [],
+      currentId: null,
+      currentTitle: null,
+      finishedAt: new Date().toISOString(),
+    },
+  });
+  await saveProjectState({ currentStep: 4 });
+  aiBatchProcessing = false;
+  broadcastAiAnalysisBatchEvent({
+    event: 'complete',
+    done: doneCount,
+    total: job.total || doneCount,
+    failed,
+    lastError: job.lastError || '',
+  });
+}
+
+async function stopAiAnalysisBatch(body = {}) {
+  await chrome.alarms.clear('processNextAiAnalysis');
+  const job = (await getAiAnalysisBatchJob()) || {};
+  const project = await loadProjectState();
+  const videos = (project.videos || []).map((video) => (
+    video.priceStatus === 'running'
+      ? { ...video, priceStatus: 'pending', priceError: '' }
+      : video
+  ));
+  await saveProjectState({ videos, currentStep: 3 });
+  await appendAiBatchJobLog(safeText(body.reason || 'Stopped by user.'), 'warn');
+  await chrome.storage.local.set({
+    [AI_ANALYSIS_BATCH_KEY]: {
+      ...job,
+      running: false,
+      queue: [],
+      currentId: null,
+      currentTitle: null,
+      stoppedAt: new Date().toISOString(),
+      stopReason: safeText(body.reason || 'Stopped by user.'),
+    },
+  });
+  aiBatchProcessing = false;
+  broadcastAiAnalysisBatchEvent({ event: 'stopped', reason: safeText(body.reason || 'Stopped by user.') });
+  return { ok: true, stopped: true };
+}
+
+function videoToAnalysisItem(video) {
+  return {
+    id: video.id,
+    title: video.title || video.id,
+    url: video.url || `https://www.youtube.com/watch?v=${video.id}`,
+    upload_date: video.upload_date || '',
+    segments: video.segments || [],
+  };
+}
+
+async function mergeProjectPriceRowsForVideo(videoId, newRows, videoPatch = {}) {
+  const project = await loadProjectState();
+  const priceRows = [
+    ...(project.priceRows || []).filter((row) => row.video_id !== videoId),
+    ...newRows,
+  ];
+  const videos = [...(project.videos || [])];
+  const index = videos.findIndex((video) => video.id === videoId);
+  if (index >= 0) {
+    videos[index] = { ...videos[index], ...videoPatch };
+  }
+  await saveProjectState({ videos, priceRows, currentStep: 3 });
+  return { priceRows, videos };
+}
+
+async function processNextAiAnalysisInBatch() {
+  if (aiBatchProcessing) return;
+
+  const job = await getAiAnalysisBatchJob();
+  if (!job?.running || !job.queue?.length) {
+    if (job?.running) await finishAiAnalysisBatch(job, job.done || 0);
+    return;
+  }
+
+  aiBatchProcessing = true;
+  const videoId = job.queue[0];
+  let shouldAdvance = false;
+  let stopped = false;
+
+  try {
+    const project = await loadProjectState();
+    const videos = [...(project.videos || [])];
+    const videoIndex = videos.findIndex((item) => item.id === videoId);
+    if (videoIndex === -1) {
+      await appendAiBatchJobLog(`Removed missing video from AI queue: ${videoId}`, 'warn', { videoId });
+      shouldAdvance = true;
+      return;
+    }
+
+    const video = { ...videos[videoIndex] };
+    if (!hasTranscriptSegments(video)) {
+      await mergeProjectPriceRowsForVideo(videoId, [], {
+        priceStatus: 'skipped',
+        priceRowCount: 0,
+        priceError: 'No transcript segments.',
+      });
+      shouldAdvance = true;
+      return;
+    }
+
+    if (video.priceStatus === 'ok') {
+      shouldAdvance = true;
+      return;
+    }
+
+    video.priceStatus = 'running';
+    video.priceError = '';
+    videos[videoIndex] = video;
+    await chrome.storage.local.set({
+      [AI_ANALYSIS_BATCH_KEY]: {
+        ...job,
+        currentId: videoId,
+        currentTitle: video.title || videoId,
+        lastAttemptAt: new Date().toISOString(),
+      },
+    });
+    await saveProjectState({ videos, currentStep: 3 });
+    broadcastAiAnalysisBatchEvent({
+      event: 'progress',
+      videoId,
+      status: 'running',
+      title: video.title || videoId,
+    });
+    await appendAiBatchJobLog(`Analyzing ${video.title || videoId}...`, 'info', {
+      videoId,
+      title: video.title || videoId,
+    });
+
+    const latestBefore = await getAiAnalysisBatchJob();
+    if (!latestBefore?.running) {
+      stopped = true;
+      return;
+    }
+
+    let rows = [];
+    if (job.apiKey) {
+      const result = await extractPricesAiForVideo({
+        item: videoToAnalysisItem(video),
+        apiKey: job.apiKey,
+        model: job.model,
+        maxCharsPerCall: job.maxCharsPerCall,
+      });
+      if (!result?.ok) throw new Error(result?.error || 'AI price extraction failed.');
+      rows = result.rows || [];
+    } else {
+      rows = extractPricesFromSegments(videoToAnalysisItem(video));
+    }
+
+    const latestAfter = await getAiAnalysisBatchJob();
+    if (!latestAfter?.running) {
+      stopped = true;
+      return;
+    }
+
+    await mergeProjectPriceRowsForVideo(videoId, rows, {
+      priceStatus: 'ok',
+      priceRowCount: rows.length,
+      priceError: '',
+    });
+    broadcastAiAnalysisBatchEvent({
+      event: 'progress',
+      videoId,
+      status: 'ok',
+      title: video.title || videoId,
+      priceRowCount: rows.length,
+    });
+    await appendAiBatchJobLog(
+      `OK ${video.title || videoId} (${rows.length} price row${rows.length === 1 ? '' : 's'})`,
+      'info',
+      { videoId, title: video.title || videoId },
+    );
+    shouldAdvance = true;
+  } catch (error) {
+    const latest = await getAiAnalysisBatchJob();
+    if (!latest?.running) {
+      stopped = true;
+      return;
+    }
+    const message = cleanError(error);
+    await mergeProjectPriceRowsForVideo(videoId, [], {
+      priceStatus: 'failed',
+      priceRowCount: 0,
+      priceError: message.slice(0, 240),
+    });
+    await chrome.storage.local.set({
+      [AI_ANALYSIS_BATCH_KEY]: {
+        ...latest,
+        failed: (latest.failed || 0) + 1,
+        lastError: message,
+      },
+    });
+    broadcastAiAnalysisBatchEvent({
+      event: 'progress',
+      videoId,
+      status: 'failed',
+      title: videoId,
+      error: message,
+    });
+    await appendAiBatchJobLog(`Failed ${videoId}: ${message}`, 'error', { videoId });
+    shouldAdvance = true;
+  } finally {
+    if (shouldAdvance && !stopped) {
+      const latest = await getAiAnalysisBatchJob();
+      if (latest?.running) await advanceAiAnalysisBatchQueue();
+    }
+    aiBatchProcessing = false;
+  }
+}
 
 async function listVideos(body) {
   const channelUrl = normalizeChannelUrl(body.channelUrl);
@@ -1125,6 +1492,61 @@ function extractPrices(body) {
   return { ok: true, count: rows.length, rows };
 }
 
+async function extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall) {
+  const rows = [];
+  const chunks = chunkSegments(item.segments || [], maxCharsPerCall);
+  for (let i = 0; i < chunks.length; i++) {
+    const segmentText = chunks[i].map(seg => `[${Math.floor(Number(seg.start) || 0)}s | ${secondsToClock(seg.start)}] ${safeText(seg.text)}`).join('\n');
+    const prompt = [
+      `Video title: ${item.title || ''}`,
+      `Video URL: ${item.url || ''}`,
+      `Upload date if known: ${item.upload_date || ''}`,
+      `Chunk ${i + 1} of ${chunks.length}`,
+      '',
+      'Transcript segments:',
+      segmentText,
+    ].join('\n');
+    const json = await callOpenAI({ apiKey, model, prompt });
+    for (const raw of Array.isArray(json.rows) ? json.rows : []) {
+      const min = normalizeNumeric(raw.min_price_inr);
+      const max = normalizeNumeric(raw.max_price_inr);
+      const timestamp = normalizeNumeric(raw.timestamp_seconds);
+      if (min === '' || max === '' || timestamp === '') continue;
+      rows.push(withLinks({
+        fruit: safeText(raw.fruit),
+        fruit_hindi: safeText(raw.fruit_hindi),
+        variety: safeText(raw.variety),
+        unit: safeText(raw.unit) || 'unknown',
+        min_price_inr: Math.min(min, max),
+        max_price_inr: Math.max(min, max),
+        market_name: safeText(raw.market_name),
+        confidence: ['high', 'medium', 'low'].includes(String(raw.confidence).toLowerCase()) ? String(raw.confidence).toLowerCase() : 'low',
+        original_line: safeText(raw.original_line),
+        clean_hindi_line: safeText(raw.clean_hindi_line),
+        context: safeText(raw.context),
+        notes: safeText(raw.notes),
+        source: 'ai',
+      }, item, timestamp));
+    }
+  }
+  return dedupeRows(rows);
+}
+
+async function extractPricesAiForVideo(body) {
+  const item = body.item;
+  const apiKey = safeText(body.apiKey);
+  const model = safeText(body.model || 'gpt-4o-mini');
+  const maxCharsPerCall = Math.max(2500, Math.min(Number(body.maxCharsPerCall || 10000), 20000));
+  if (!item?.id) return { ok: false, error: 'Missing video item.' };
+  if (!apiKey) return { ok: false, error: 'OpenAI API key required in extension mode.' };
+  if (!Array.isArray(item.segments) || !item.segments.length) {
+    return { ok: false, error: 'Video has no transcript segments.' };
+  }
+
+  const rows = await extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall);
+  return { ok: true, count: rows.length, rows, videoId: item.id };
+}
+
 async function extractPricesAi(body) {
   const items = Array.isArray(body.items) ? body.items : [];
   const apiKey = safeText(body.apiKey);
@@ -1135,41 +1557,7 @@ async function extractPricesAi(body) {
 
   const rows = [];
   for (const item of items.slice(0, maxVideos)) {
-    const chunks = chunkSegments(item.segments || [], maxCharsPerCall);
-    for (let i = 0; i < chunks.length; i++) {
-      const segmentText = chunks[i].map(seg => `[${Math.floor(Number(seg.start) || 0)}s | ${secondsToClock(seg.start)}] ${safeText(seg.text)}`).join('\n');
-      const prompt = [
-        `Video title: ${item.title || ''}`,
-        `Video URL: ${item.url || ''}`,
-        `Upload date if known: ${item.upload_date || ''}`,
-        `Chunk ${i + 1} of ${chunks.length}`,
-        '',
-        'Transcript segments:',
-        segmentText,
-      ].join('\n');
-      const json = await callOpenAI({ apiKey, model, prompt });
-      for (const raw of Array.isArray(json.rows) ? json.rows : []) {
-        const min = normalizeNumeric(raw.min_price_inr);
-        const max = normalizeNumeric(raw.max_price_inr);
-        const timestamp = normalizeNumeric(raw.timestamp_seconds);
-        if (min === '' || max === '' || timestamp === '') continue;
-        rows.push(withLinks({
-          fruit: safeText(raw.fruit),
-          fruit_hindi: safeText(raw.fruit_hindi),
-          variety: safeText(raw.variety),
-          unit: safeText(raw.unit) || 'unknown',
-          min_price_inr: Math.min(min, max),
-          max_price_inr: Math.max(min, max),
-          market_name: safeText(raw.market_name),
-          confidence: ['high', 'medium', 'low'].includes(String(raw.confidence).toLowerCase()) ? String(raw.confidence).toLowerCase() : 'low',
-          original_line: safeText(raw.original_line),
-          clean_hindi_line: safeText(raw.clean_hindi_line),
-          context: safeText(raw.context),
-          notes: safeText(raw.notes),
-          source: 'ai',
-        }, item, timestamp));
-      }
-    }
+    rows.push(...await extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall));
   }
   return { ok: true, count: rows.length, rows: dedupeRows(rows) };
 }

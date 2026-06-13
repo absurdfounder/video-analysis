@@ -68,12 +68,23 @@
     </section>
 
     <section class="step-panel" id="panel-3">
-      <p class="step-desc" id="stepDesc3">Use AI to extract fruit/vegetable mandi prices from captions. Add your OpenAI key in Settings if needed.</p>
-      <button id="stepBtn3" class="btn-primary btn-large" type="button">Run AI analysis</button>
-      <div class="panel-tools">
-        <input id="priceSearch" placeholder="Search prices..." />
+      <p class="step-desc" id="stepDesc3">Extract mandi prices from each transcript in order — same flow as steps 1–2. Add OpenAI key in Settings.</p>
+      <div class="batch-controls">
+        <button id="stepBtn3" class="btn-primary btn-large" type="button">Analyze all transcripts</button>
+        <button id="stopAiAnalysisBatchBtn" class="btn-ghost btn-large" type="button" disabled>Stop</button>
       </div>
-      <div id="priceList" class="card-list"></div>
+      <p id="analysisStatusText" class="hint"></p>
+      <div class="panel-tools">
+        <input id="analysisSearch" placeholder="Search videos in analysis queue..." />
+      </div>
+      <div id="analysisList" class="date-groups"></div>
+      <details class="fold-panel" open>
+        <summary>Extracted price rows (<span id="priceRowCountLabel">0</span>)</summary>
+        <div class="panel-tools">
+          <input id="priceSearch" placeholder="Search prices..." />
+        </div>
+        <div id="priceList" class="card-list"></div>
+      </details>
     </section>
 
     <section class="step-panel" id="panel-4">
