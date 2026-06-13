@@ -411,7 +411,7 @@ async function processNextTranscriptInBatch() {
   try {
     const result = await transcript({ id: video.id, videoUrl: video.url, languages: job.languages });
     if (!result.segments?.length) {
-      throw new Error('Transcript returned zero caption lines.');
+      throw new Error(result.error || 'Transcript returned zero caption lines.');
     }
     Object.assign(video, {
       status: 'ok',

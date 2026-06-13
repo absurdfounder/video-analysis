@@ -201,6 +201,47 @@ function fetchTranscriptInPage(languages) {
     return segments;
   }
 
+  function decodeHtmlEntities(text) {
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = String(text || '');
+    return textarea.value;
+  }
+
+  function extractSegmentsFromTranscriptHtml(html) {
+    const source = String(html || '');
+    const blocks = source.match(/<transcript-segment-view-model\b[\s\S]*?<\/transcript-segment-view-model>/g) || [];
+    const segments = [];
+    for (const block of blocks) {
+      const timestamp = stripHtml(decodeHtmlEntities(
+        block.match(/<div[^>]*class="[^"]*TranscriptSegmentViewModelTimestamp[^"]*"[^>]*>([\s\S]*?)<\/div>/i)?.[1]
+        || block.match(/\b((?:\d{1,2}:)?\d{1,2}:\d{2})\b/)?.[1]
+        || ''
+      ));
+      const text = stripHtml(decodeHtmlEntities(
+        block.match(/<span[^>]*class="[^"]*ytAttributedStringHost[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1]
+        || block.replace(/<div[^>]*class="[^"]*TranscriptSegmentViewModelTimestamp[^"]*"[^>]*>[\s\S]*?<\/div>/ig, '')
+      ));
+      const start = parseClockLabel(timestamp);
+      if (!timestamp || !text) continue;
+      segments.push({
+        start: Number(start.toFixed(3)),
+        end: Number(start.toFixed(3)),
+        duration: 0,
+        timestamp_label: secondsToClock(start),
+        text,
+      });
+    }
+
+    for (let i = 0; i < segments.length; i++) {
+      const nextStart = segments[i + 1]?.start;
+      if (Number.isFinite(nextStart) && nextStart > segments[i].start) {
+        segments[i].end = Number(nextStart.toFixed(3));
+        segments[i].duration = Number((segments[i].end - segments[i].start).toFixed(3));
+      }
+    }
+    return segments;
+  }
+
   function chooseCaptionTrack(tracks, wantedLanguages) {
     const wanted = String(wantedLanguages || 'hi.*,hi,en.*').split(',').map(value => value.trim().replace('.*', '').toLowerCase()).filter(Boolean);
     return [...tracks].sort((a, b) => {
@@ -284,6 +325,17 @@ function fetchTranscriptInPage(languages) {
         };
       }
       await sleep(400);
+    }
+
+    const htmlSegments = extractSegmentsFromTranscriptHtml(document.documentElement.innerHTML);
+    if (htmlSegments.length) {
+      return {
+        ok: true,
+        segments: htmlSegments,
+        language: 'unknown',
+        fileName: 'youtube-transcript-panel-html',
+        method: 'panel-html',
+      };
     }
 
     const visibleRows = document.querySelectorAll('transcript-segment-view-model, ytd-transcript-segment-renderer, macro-markers-panel-item-view-model').length;
