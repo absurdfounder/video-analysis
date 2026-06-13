@@ -60,7 +60,7 @@ function wakeYouTubePageInPage() {
     }
     scrollToDescription();
 
-    for (let attempt = 0; attempt < 14; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       const hasTranscriptUi = document.querySelector(
         'ytd-video-description-transcript-section-renderer, button[aria-label="Show transcript"], ytd-engagement-panel-section-list-renderer[target-id*="transcript"]',
       );
@@ -474,10 +474,11 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
 
   return (async () => {
     const errors = [];
-    const { player } = await waitForPageReady();
+    await waitForPageReady();
     await wakeYouTubePageInPage();
     mutePlayer();
 
+    const player = getLivePlayerResponse();
     const visibleSegments = extractSegmentsFromPanel();
     if (visibleSegments.length) {
       return {
@@ -504,15 +505,15 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
       tryInnerTube(player),
       tryCaptionTracks(player),
     ]);
-    if (innerTubeResult?.segments?.length) return innerTubeResult;
+    if (innerTubeResult?.segments?.length) return { ...innerTubeResult, ok: true };
     if (innerTubeResult?.error) errors.push(innerTubeResult.error);
-    if (captionResult?.segments?.length) return captionResult;
+    if (captionResult?.segments?.length) return { ...captionResult, ok: true };
     if (captionResult === null && player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length) {
       errors.push('Caption track download returned empty.');
     }
 
     const panelResult = await tryPanelDom();
-    if (panelResult?.segments?.length) return panelResult;
+    if (panelResult?.segments?.length) return { ...panelResult, ok: true };
     if (panelResult?.error) errors.push(panelResult.error);
 
     return {

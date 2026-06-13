@@ -955,7 +955,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.22 — muted play wakes lazy load';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.23 — fixed inject + full fetch';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
