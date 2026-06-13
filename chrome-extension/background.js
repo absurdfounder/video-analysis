@@ -1084,7 +1084,6 @@ async function mergeProjectPriceRowsForVideo(videoId, newRows, videoPatch = {}) 
 }
 
 async function processNextAiAnalysisInBatch() {
-  if (aiBatchProcessing) return;
 
   const job = await getAiAnalysisBatchJob();
   if (!job?.running || !job.queue?.length) {
@@ -1153,6 +1152,7 @@ async function processNextAiAnalysisInBatch() {
     }
 
     let rows = [];
+    let summary = null;
     if (job.apiKey) {
       const result = await extractPricesAiForVideo({
         item: videoToAnalysisItem(video),
@@ -1162,6 +1162,7 @@ async function processNextAiAnalysisInBatch() {
       });
       if (!result?.ok) throw new Error(result?.error || 'AI price extraction failed.');
       rows = result.rows || [];
+      summary = result.summary || null;
     } else {
       rows = extractPricesFromSegments(videoToAnalysisItem(video));
     }
@@ -1176,6 +1177,7 @@ async function processNextAiAnalysisInBatch() {
       priceStatus: 'ok',
       priceRowCount: rows.length,
       priceError: '',
+      analysisSummary: summary,
     });
     broadcastAiAnalysisBatchEvent({
       event: 'progress',
@@ -1492,8 +1494,134 @@ function extractPrices(body) {
   return { ok: true, count: rows.length, rows };
 }
 
+function parseMarketDate(title, uploadDate = '') {
+  const text = String(title || '');
+  const upload = String(uploadDate || '').trim();
+  const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+  const monthShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const makeKey = (year, monthIndex, day) => ({
+    sortKey: `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    label: `${day} ${monthShort[monthIndex] || monthIndex + 1} ${year}`,
+  });
+
+  const dmy = text.match(/\b(\d{1,2})\s*(st|nd|rd|th)?\s*(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b/i);
+  if (dmy) {
+    const month = monthNames.indexOf(dmy[3].toLowerCase());
+    if (month >= 0) return makeKey(Number(dmy[4]), month, Number(dmy[1]));
+  }
+
+  const mdy = text.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})\b/i);
+  if (mdy) {
+    const month = monthNames.indexOf(mdy[1].toLowerCase());
+    if (month >= 0) return makeKey(Number(mdy[3]), month, Number(mdy[2]));
+  }
+
+  if (/^\d{8}$/.test(upload)) {
+    const year = Number(upload.slice(0, 4));
+    const month = Number(upload.slice(4, 6)) - 1;
+    const day = Number(upload.slice(6, 8));
+    return makeKey(year, month, day);
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(upload)) {
+    const [year, month, day] = upload.slice(0, 10).split('-').map(Number);
+    return makeKey(year, month - 1, day);
+  }
+  return { sortKey: '0000-00-00', label: text.slice(0, 48) || 'Unknown date' };
+}
+
+const PRICE_EXTRACTION_SYSTEM = [
+  'You extract structured Delhi fruit/vegetable wholesale mandi intelligence from noisy Hindi YouTube market-report captions.',
+  'Return JSON only:',
+  '{"rows":[{"fruit":"","fruit_hindi":"","variety":"","quality_grade":"","quality_label":"","party_name":"","mandi_name":"","area_name":"","origin":"","unit":"","min_price_inr":null,"max_price_inr":null,"price_notes":"","market_name":"","timestamp_seconds":0,"confidence":"high|medium|low","original_line":"","clean_hindi_line":"","context":"","notes":""}],',
+  '"chunk_summary":{"fruits":[],"parties":[],"areas":[],"qualities":[]}}',
+  '',
+  'Rules:',
+  '- One row per distinct fruit + quality/grade + party + price (or quality discussion) mention.',
+  '- quality_grade: A grade, B grade, C grade, super, medium, ordinary, premium, second, third, or exact Hindi phrase.',
+  '- party_name: trader/party/seller names (पार्टी, व्यापारी names) when spoken.',
+  '- area_name / mandi_name: Azadpur, yards, blocks, localities, godowns.',
+  '- min_price_inr/max_price_inr: use null if no price stated but fruit+quality+party still useful.',
+  '- timestamp_seconds MUST match the [seconds] bracket on the source segment line.',
+  '- Extract all fruits covered in the chunk; separate rows when grades or parties differ.',
+].join('\n');
+
+function mergeAnalysisSummaries(existing, chunkSummary) {
+  const next = {
+    fruits: [...(existing?.fruits || [])],
+    parties: [...(existing?.parties || [])],
+    areas: [...(existing?.areas || [])],
+    qualities: [...(existing?.qualities || [])],
+    notes: safeText(existing?.notes || ''),
+  };
+  const addUnique = (target, values) => {
+    const seen = new Set(target.map(v => v.toLowerCase()));
+    for (const value of values || []) {
+      const text = safeText(value);
+      if (!text) continue;
+      const key = text.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      target.push(text);
+    }
+  };
+  addUnique(next.fruits, chunkSummary?.fruits);
+  addUnique(next.parties, chunkSummary?.parties);
+  addUnique(next.areas, chunkSummary?.areas);
+  addUnique(next.qualities, chunkSummary?.qualities);
+  return next;
+}
+
+function normalizeAiPriceRow(raw, item, fallbackTimestamp) {
+  const min = normalizeNumeric(raw.min_price_inr);
+  const max = normalizeNumeric(raw.max_price_inr);
+  const timestamp = normalizeNumeric(raw.timestamp_seconds ?? fallbackTimestamp);
+  const fruit = safeText(raw.fruit);
+  const fruitHindi = safeText(raw.fruit_hindi);
+  if (!fruit && !fruitHindi) return null;
+  if (timestamp === '') return null;
+
+  const hasPrice = min !== '' && max !== '';
+  const hasDetail = safeText(raw.quality_grade)
+    || safeText(raw.quality_label)
+    || safeText(raw.party_name)
+    || safeText(raw.area_name)
+    || safeText(raw.mandi_name)
+    || safeText(raw.market_name);
+  if (!hasPrice && !hasDetail) return null;
+
+  const marketDate = parseMarketDate(item.title, item.upload_date);
+  return withLinks({
+    fruit: fruit || fruitHindi,
+    fruit_hindi: fruitHindi,
+    variety: safeText(raw.variety),
+    quality_grade: safeText(raw.quality_grade),
+    quality_label: safeText(raw.quality_label),
+    party_name: safeText(raw.party_name),
+    mandi_name: safeText(raw.mandi_name || raw.market_name),
+    area_name: safeText(raw.area_name),
+    origin: safeText(raw.origin),
+    unit: safeText(raw.unit) || 'unknown',
+    min_price_inr: hasPrice ? Math.min(min, max) : '',
+    max_price_inr: hasPrice ? Math.max(min, max) : '',
+    price_notes: safeText(raw.price_notes),
+    market_name: safeText(raw.market_name || raw.mandi_name),
+    market_date: marketDate.label,
+    market_date_sort: marketDate.sortKey,
+    confidence: ['high', 'medium', 'low'].includes(String(raw.confidence).toLowerCase())
+      ? String(raw.confidence).toLowerCase()
+      : 'low',
+    original_line: safeText(raw.original_line),
+    clean_hindi_line: safeText(raw.clean_hindi_line),
+    context: safeText(raw.context),
+    notes: safeText(raw.notes),
+    source: 'ai',
+  }, item, timestamp);
+}
+
 async function extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall) {
   const rows = [];
+  let summary = { fruits: [], parties: [], areas: [], qualities: [], notes: '' };
   const chunks = chunkSegments(item.segments || [], maxCharsPerCall);
   for (let i = 0; i < chunks.length; i++) {
     const segmentText = chunks[i].map(seg => `[${Math.floor(Number(seg.start) || 0)}s | ${secondsToClock(seg.start)}] ${safeText(seg.text)}`).join('\n');
@@ -1501,35 +1629,20 @@ async function extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall) {
       `Video title: ${item.title || ''}`,
       `Video URL: ${item.url || ''}`,
       `Upload date if known: ${item.upload_date || ''}`,
+      `Market day label: ${parseMarketDate(item.title, item.upload_date).label}`,
       `Chunk ${i + 1} of ${chunks.length}`,
       '',
-      'Transcript segments:',
+      'Transcript segments (use bracket seconds for timestamp_seconds):',
       segmentText,
     ].join('\n');
-    const json = await callOpenAI({ apiKey, model, prompt });
+    const json = await callOpenAI({ apiKey, model, prompt, system: PRICE_EXTRACTION_SYSTEM });
+    summary = mergeAnalysisSummaries(summary, json.chunk_summary);
     for (const raw of Array.isArray(json.rows) ? json.rows : []) {
-      const min = normalizeNumeric(raw.min_price_inr);
-      const max = normalizeNumeric(raw.max_price_inr);
-      const timestamp = normalizeNumeric(raw.timestamp_seconds);
-      if (min === '' || max === '' || timestamp === '') continue;
-      rows.push(withLinks({
-        fruit: safeText(raw.fruit),
-        fruit_hindi: safeText(raw.fruit_hindi),
-        variety: safeText(raw.variety),
-        unit: safeText(raw.unit) || 'unknown',
-        min_price_inr: Math.min(min, max),
-        max_price_inr: Math.max(min, max),
-        market_name: safeText(raw.market_name),
-        confidence: ['high', 'medium', 'low'].includes(String(raw.confidence).toLowerCase()) ? String(raw.confidence).toLowerCase() : 'low',
-        original_line: safeText(raw.original_line),
-        clean_hindi_line: safeText(raw.clean_hindi_line),
-        context: safeText(raw.context),
-        notes: safeText(raw.notes),
-        source: 'ai',
-      }, item, timestamp));
+      const row = normalizeAiPriceRow(raw, item, raw.timestamp_seconds);
+      if (row) rows.push(row);
     }
   }
-  return dedupeRows(rows);
+  return { rows: dedupeRows(rows), summary };
 }
 
 async function extractPricesAiForVideo(body) {
@@ -1543,8 +1656,8 @@ async function extractPricesAiForVideo(body) {
     return { ok: false, error: 'Video has no transcript segments.' };
   }
 
-  const rows = await extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall);
-  return { ok: true, count: rows.length, rows, videoId: item.id };
+  const result = await extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall);
+  return { ok: true, count: result.rows.length, rows: result.rows, summary: result.summary, videoId: item.id };
 }
 
 async function extractPricesAi(body) {
@@ -1557,7 +1670,8 @@ async function extractPricesAi(body) {
 
   const rows = [];
   for (const item of items.slice(0, maxVideos)) {
-    rows.push(...await extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall));
+    const result = await extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall);
+    rows.push(...result.rows);
   }
   return { ok: true, count: rows.length, rows: dedupeRows(rows) };
 }
@@ -2250,6 +2364,7 @@ const FRUITS = [
 
 function extractPricesFromSegments(item) {
   const rows = [];
+  const marketDate = parseMarketDate(item.title, item.upload_date);
   const segments = Array.isArray(item.segments) ? item.segments : [];
   for (const seg of segments) {
     const text = safeText(seg.text);
@@ -2266,10 +2381,19 @@ function extractPricesFromSegments(item) {
           fruit,
           fruit_hindi: '',
           variety: '',
+          quality_grade: '',
+          quality_label: '',
+          party_name: '',
+          mandi_name: '',
+          area_name: '',
+          origin: '',
           unit: detectUnit(text),
           min_price_inr: Math.min(min, max),
           max_price_inr: Math.max(min, max),
+          price_notes: '',
           market_name: '',
+          market_date: marketDate.label,
+          market_date_sort: marketDate.sortKey,
           confidence: 'medium',
           original_line: text,
           clean_hindi_line: text,
@@ -2321,7 +2445,17 @@ function withLinks(row, item, timestamp) {
 function dedupeRows(rows) {
   const seen = new Set();
   return rows.filter(row => {
-    const key = [row.video_id, row.fruit, row.unit, row.min_price_inr, row.max_price_inr, row.timestamp_seconds, row.original_line].join('|').toLowerCase();
+    const key = [
+      row.video_id,
+      row.fruit,
+      row.quality_grade,
+      row.party_name,
+      row.unit,
+      row.min_price_inr,
+      row.max_price_inr,
+      row.timestamp_seconds,
+      row.original_line,
+    ].join('|').toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -2346,7 +2480,7 @@ function chunkSegments(segments, maxChars) {
   return chunks;
 }
 
-async function callOpenAI({ apiKey, model, prompt }) {
+async function callOpenAI({ apiKey, model, prompt, system }) {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
@@ -2357,7 +2491,7 @@ async function callOpenAI({ apiKey, model, prompt }) {
       messages: [
         {
           role: 'system',
-          content: 'Extract fruit mandi/wholesale price rows from noisy Hindi captions. Return JSON only: {"rows":[{"fruit":"","fruit_hindi":"","variety":"","unit":"","min_price_inr":0,"max_price_inr":0,"market_name":"","timestamp_seconds":0,"confidence":"high|medium|low","original_line":"","clean_hindi_line":"","context":"","notes":""}]}',
+          content: system || PRICE_EXTRACTION_SYSTEM,
         },
         { role: 'user', content: prompt },
       ],

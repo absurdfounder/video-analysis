@@ -521,6 +521,11 @@ function renderAnalysisCard(video) {
   const rowCount = Number(video.priceRowCount || 0);
   const videoRows = state.priceRows.filter((row) => row.video_id === video.id).length;
   const shownRows = rowCount || videoRows;
+  const marketDay = parseVideoDate(video).label;
+  const summary = video.analysisSummary || {};
+  const fruitList = Array.isArray(summary.fruits) ? summary.fruits : [];
+  const partyCount = Array.isArray(summary.parties) ? summary.parties.length : 0;
+  const areaCount = Array.isArray(summary.areas) ? summary.areas.length : 0;
   const statusLabel = priceStatus === 'ok'
     ? 'analyzed'
     : priceStatus === 'running'
@@ -537,14 +542,157 @@ function renderAnalysisCard(video) {
         ${video.channelIndex ? `<span class="channel-index-label">#${video.channelIndex}</span> ` : ''}
         <a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a>
       </h3>
+      <div class="card-meta">${escapeHtml(marketDay)}</div>
       <div class="card-tags">
         ${tag(statusLabel, priceStatus === 'ok' ? 'ok' : priceStatus)}
         ${tag(`${segmentCount(video)} lines`, 'relevance-relevant')}
-        ${shownRows ? tag(`${shownRows} price${shownRows === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
+        ${shownRows ? tag(`${shownRows} mention${shownRows === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
+        ${fruitList.length ? tag(`${fruitList.length} fruit${fruitList.length === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
+        ${partyCount ? tag(`${partyCount} part${partyCount === 1 ? 'y' : 'ies'}`, 'relevance-relevant') : ''}
+        ${areaCount ? tag(`${areaCount} area${areaCount === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
       </div>
+      ${fruitList.length ? `<div class="analysis-summary-line">${fruitList.slice(0, 8).map((fruit) => tag(fruit, 'relevance-relevant')).join('')}</div>` : ''}
       ${video.priceError ? `<div class="mini">${escapeHtml(video.priceError)}</div>` : ''}
     </article>
   `;
+}
+
+function formatPriceRange(min, max) {
+  const hasMin = min !== '' && min !== null && min !== undefined;
+  const hasMax = max !== '' && max !== null && max !== undefined;
+  if (!hasMin && !hasMax) return 'Rate not stated';
+  const low = hasMin ? Number(min) : Number(max);
+  const high = hasMax ? Number(max) : Number(min);
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return 'Rate not stated';
+  if (low === high) return `₹${low}`;
+  return `₹${low} – ₹${high}`;
+}
+
+function parsePriceRowDate(row) {
+  if (row.market_date_sort && row.market_date) {
+    return { sortKey: row.market_date_sort, label: row.market_date };
+  }
+  const video = state.videos.find((item) => item.id === row.video_id);
+  if (video) return parseVideoDate(video);
+  return { sortKey: '0000-00-00', label: row.market_date || 'Unknown date' };
+}
+
+function groupPriceRows(rows) {
+  const byDate = new Map();
+  for (const row of rows) {
+    const { sortKey, label } = parsePriceRowDate(row);
+    if (!byDate.has(sortKey)) {
+      byDate.set(sortKey, { sortKey, label, fruits: new Map(), rows: [] });
+    }
+    const group = byDate.get(sortKey);
+    group.rows.push(row);
+    const fruitKey = [row.fruit, row.fruit_hindi].filter(Boolean).join(' / ').toLowerCase() || 'unknown';
+    if (!group.fruits.has(fruitKey)) {
+      group.fruits.set(fruitKey, {
+        key: fruitKey,
+        fruit: row.fruit || row.fruit_hindi || 'unknown',
+        fruitHindi: row.fruit_hindi || '',
+        rows: [],
+      });
+    }
+    group.fruits.get(fruitKey).rows.push(row);
+  }
+  return [...byDate.values()].sort((a, b) => b.sortKey.localeCompare(a.sortKey));
+}
+
+function uniqueValues(rows, field) {
+  return [...new Set(rows.map((row) => String(row[field] || '').trim()).filter(Boolean))];
+}
+
+function renderRichPriceRow(row) {
+  const timeLabel = row.timestamp_label || secondsToClock(row.timestamp_seconds);
+  const timeUrl = row.timestamp_url || timestampUrl(row.video_url, row.timestamp_seconds);
+  const detailBadges = [
+    row.quality_grade ? tag(`Grade ${row.quality_grade}`, 'relevance-relevant') : '',
+    row.quality_label ? tag(row.quality_label, 'relevance-relevant') : '',
+    row.party_name ? tag(row.party_name, 'relevance-relevant') : '',
+    row.area_name ? tag(row.area_name, 'relevance-relevant') : '',
+    row.mandi_name ? tag(row.mandi_name, 'relevance-relevant') : '',
+    row.variety ? tag(row.variety, 'relevance-relevant') : '',
+    row.origin ? tag(row.origin, 'relevance-relevant') : '',
+  ].filter(Boolean).join('');
+
+  return `
+    <article class="price-card price-rich">
+      <div class="price-head">
+        <a class="timestamp-link" href="${escapeHtml(timeUrl)}" target="_blank" rel="noreferrer">▶ ${escapeHtml(timeLabel)}</a>
+        <div class="card-tags">${detailBadges}</div>
+      </div>
+      <div class="price-amount">${escapeHtml(formatPriceRange(row.min_price_inr, row.max_price_inr))}${row.unit && row.unit !== 'unknown' ? ` <span class="price-unit">/ ${escapeHtml(row.unit)}</span>` : ''}</div>
+      ${row.price_notes ? `<div class="price-note">${escapeHtml(row.price_notes)}</div>` : ''}
+      ${row.clean_hindi_line || row.original_line ? `<div class="price-hindi">${escapeHtml(row.clean_hindi_line || row.original_line)}</div>` : ''}
+      ${row.context ? `<div class="price-context">${escapeHtml(row.context)}</div>` : ''}
+      <div class="price-meta">
+        <a href="${escapeHtml(row.video_url || '#')}" target="_blank" rel="noreferrer">${escapeHtml(row.video_title || row.video_id || 'Video')}</a>
+        ${row.confidence ? ` · ${escapeHtml(row.confidence)} confidence` : ''}
+      </div>
+    </article>
+  `;
+}
+
+function renderGroupedPrices(rows) {
+  const groups = groupPriceRows(rows);
+  return groups.map((group) => {
+    const fruitCount = group.fruits.size;
+    const partyCount = uniqueValues(group.rows, 'party_name').length;
+    const areaCount = uniqueValues(group.rows, 'area_name').length + uniqueValues(group.rows, 'mandi_name').length;
+    const fruitSections = [...group.fruits.values()]
+      .sort((a, b) => a.fruit.localeCompare(b.fruit))
+      .map((fruitGroup) => `
+        <section class="fruit-group">
+          <h4 class="fruit-group-head">
+            ${escapeHtml(fruitGroup.fruit)}${fruitGroup.fruitHindi ? ` · ${escapeHtml(fruitGroup.fruitHindi)}` : ''}
+            <span>${fruitGroup.rows.length} mention${fruitGroup.rows.length === 1 ? '' : 's'}</span>
+          </h4>
+          <div class="card-list">${fruitGroup.rows
+            .slice()
+            .sort((a, b) => (Number(a.timestamp_seconds) || 0) - (Number(b.timestamp_seconds) || 0))
+            .map(renderRichPriceRow)
+            .join('')}</div>
+        </section>
+      `).join('');
+
+    return `
+      <section class="date-group">
+        <header class="date-group-head">
+          <h3>${escapeHtml(group.label)}</h3>
+          <span>${fruitCount} fruit${fruitCount === 1 ? '' : 's'} · ${group.rows.length} mention${group.rows.length === 1 ? '' : 's'}${partyCount ? ` · ${partyCount} part${partyCount === 1 ? 'y' : 'ies'}` : ''}${areaCount ? ` · ${areaCount} area${areaCount === 1 ? '' : 's'}` : ''}</span>
+        </header>
+        <div class="fruit-sections">${fruitSections}</div>
+      </section>
+    `;
+  }).join('');
+}
+
+function renderPrices() {
+  const list = $('priceList');
+  if (!list) return;
+
+  const q = ($('priceSearch')?.value || '').toLowerCase().trim();
+  const rows = state.priceRows.filter(row => !q || Object.values(row).join(' ').toLowerCase().includes(q));
+
+  if (!rows.length) {
+    list.innerHTML = '<div class="empty-state">No prices yet. Complete step 3.</div>';
+  } else {
+    list.innerHTML = renderGroupedPrices(rows);
+  }
+
+  const preview = $('pricePreview');
+  if (preview) {
+    preview.innerHTML = rows.length
+      ? renderGroupedPrices(rows.slice(0, 24))
+      : '<div class="empty-state">Run AI analysis first.</div>';
+  }
+
+  if ($('priceRowCountLabel')) $('priceRowCountLabel').textContent = String(state.priceRows.length);
+
+  updateUI();
+  saveLocal();
 }
 
 function renderAnalysisList() {
@@ -564,45 +712,6 @@ function renderAnalysisList() {
   }
 
   container.innerHTML = videos.map((video) => renderAnalysisCard(video)).join('');
-}
-
-function renderPrices() {
-  const list = $('priceList');
-  if (!list) return;
-
-  const q = ($('priceSearch')?.value || '').toLowerCase().trim();
-  const rows = state.priceRows.filter(row => !q || Object.values(row).join(' ').toLowerCase().includes(q));
-
-  const renderCard = (row) => `
-    <article class="price-card">
-      <h3>${escapeHtml(row.fruit || 'unknown')}${row.fruit_hindi ? ` · ${escapeHtml(row.fruit_hindi)}` : ''}</h3>
-      <div class="card-meta">${escapeHtml(row.video_title || row.video_id)}</div>
-      <div class="price-grid">
-        <div><span>Min</span><strong>₹${escapeHtml(row.min_price_inr)}</strong></div>
-        <div><span>Max</span><strong>₹${escapeHtml(row.max_price_inr)}</strong></div>
-        <div><span>Unit</span><strong>${escapeHtml(row.unit || '-')}</strong></div>
-        <div><span>Time</span><strong>${escapeHtml(row.timestamp_label || secondsToClock(row.timestamp_seconds))}</strong></div>
-      </div>
-    </article>
-  `;
-
-  if (!rows.length) {
-    list.innerHTML = '<div class="empty-state">No prices yet. Complete step 3.</div>';
-  } else {
-    list.innerHTML = rows.map(renderCard).join('');
-  }
-
-  const preview = $('pricePreview');
-  if (preview) {
-    preview.innerHTML = rows.length
-      ? rows.slice(0, 6).map(renderCard).join('')
-      : '<div class="empty-state">Run AI analysis first.</div>';
-  }
-
-  if ($('priceRowCountLabel')) $('priceRowCountLabel').textContent = String(state.priceRows.length);
-
-  updateUI();
-  saveLocal();
 }
 
 function renderAll() {
@@ -910,6 +1019,7 @@ function applySavedProject(saved, { keepRunning = false, keepAiRunning = false }
   if (saved.currentStep) state.currentStep = saved.currentStep;
   normalizeVideos({ keepRunning, keepAiRunning });
   renderVideos();
+  renderAnalysisList();
   renderPrices();
   updateUI();
 }
