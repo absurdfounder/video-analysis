@@ -4,3 +4,9 @@ app/data/project.json
 # Cloudflare Worker
 cloudflare/node_modules/
 cloudflare/.wrangler/
+
+# Local Netlify folder
+.netlify
+
+# Generated YouTube/debug dumps can contain page API keys and cookies.
+tmp_*.html
