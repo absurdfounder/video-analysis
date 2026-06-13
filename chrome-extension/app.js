@@ -229,8 +229,8 @@ function timestampUrl(videoUrl, seconds) {
 let modalVideoId = '';
 
 async function fetchTranscriptForVideo(video) {
-  video.status = 'running';
-  renderVideos();
+  const previousStatus = video.status;
+  const previousError = video.error;
   try {
     const data = await api('/api/capture-visible-transcript', { id: video.id, videoUrl: video.url });
     if (!data.segments?.length) throw new Error('Transcript returned zero caption lines.');
@@ -246,11 +246,11 @@ async function fetchTranscriptForVideo(video) {
     if (hasTranscriptData(video)) await markVideosProcessed([video.id]);
     log(`Transcript captured: ${video.title} (${segmentCount(video)} lines${data.method ? ` · ${data.method}` : ''})`);
   } catch (error) {
-    video.status = 'failed';
     const message = /Unknown extension API route/i.test(error.message)
       ? 'Extension background is stale. Reload the unpacked extension at chrome://extensions, then retry.'
       : error.message;
-    video.error = message.slice(0, 200);
+    video.status = previousStatus || 'pending';
+    video.error = previousError || '';
     log(`Visible transcript capture failed: ${video.title}: ${message}`);
     throw new Error(message);
   } finally {
@@ -860,7 +860,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.13 — exact-tab capture only';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.14 — no flicker on capture';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

@@ -908,7 +908,7 @@ async function fetchTranscriptFromMatchingOpenWatchTab(videoId, excludeTabId = n
   if (!matchingTabs.length) {
     return {
       ok: false,
-      error: `No open YouTube tab matches video ${videoId}. Open that exact video, click Show transcript, then capture again.`,
+      error: `Open this exact video on YouTube, click Show transcript, then capture again. Video ID: ${videoId}.`,
       diagnostics: tabs.map(tab => ({ url: tab.url || '', exact: false, error: 'Different YouTube video tab.' })),
     };
   }
