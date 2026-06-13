@@ -399,6 +399,11 @@ function fetchTranscriptInPage(languages) {
     const errors = [];
     const { player } = await waitForPageReady();
     mutePlayer();
+
+    const visiblePanelResult = await tryPanelDom();
+    if (visiblePanelResult?.segments?.length) return visiblePanelResult;
+    if (visiblePanelResult?.error) errors.push(visiblePanelResult.error);
+
     scrollToDescription();
     await sleep(800);
 
@@ -411,10 +416,6 @@ function fetchTranscriptInPage(languages) {
     if (captionResult === null && player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length) {
       errors.push('Caption track download returned empty.');
     }
-
-    const panelResult = await tryPanelDom();
-    if (panelResult?.segments?.length) return panelResult;
-    if (panelResult?.error) errors.push(panelResult.error);
 
     return {
       ok: false,

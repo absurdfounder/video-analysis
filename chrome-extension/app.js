@@ -11,6 +11,7 @@ const state = {
   runningTask: '',
   currentStep: 1,
   lastSync: null,
+  batchRunning: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -669,9 +670,14 @@ function applySavedProject(saved, { keepRunning } = {}) {
 }
 
 function syncFromStorageChanges(changes) {
+  const batchRunning = Boolean(changes.transcriptBatchJob?.newValue?.running);
+  if (changes.transcriptBatchJob?.newValue) {
+    state.batchRunning = batchRunning;
+  }
+
   if (changes.fruitTranscriptMinerStateV2?.newValue) {
     applySavedProject(changes.fruitTranscriptMinerStateV2.newValue, {
-      keepRunning: Boolean(changes.transcriptBatchJob?.newValue?.running),
+      keepRunning: state.batchRunning || batchRunning,
     });
     if (state.currentStep) goToStep(state.currentStep);
   }
@@ -917,6 +923,7 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 api('/api/transcript-batch-status').then((data) => {
+  state.batchRunning = Boolean(data?.job?.running);
   if (data?.job?.running) {
     setBusy(true);
     normalizeVideos({ keepRunning: true });
@@ -931,7 +938,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.18 — auto background batch';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.19 — auto batch with stall recovery';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
