@@ -513,7 +513,7 @@ async function fetchTextViaYouTubeTab(url) {
 
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
-  await chrome.tabs.update(tabId, { url: videoUrl, active: false });
+  await chrome.tabs.update(tabId, { url: videoUrl, active: true });
   await waitForTabComplete(tabId, 30000, videoId);
 
   const result = await runInYouTubeTab(fetchTranscriptInPageContext, [videoId, languages]);
@@ -705,6 +705,153 @@ function fetchTranscriptInPageContext(expectedVideoId, languages) {
     throw new Error(`Caption download failed (HTTP ${vttResponse.status || xmlResponse.status || 'unknown'}).`);
   }
 
+  function parseClockLabel(label) {
+    const parts = String(label || '').trim().split(':').map(Number);
+    if (parts.some(part => !Number.isFinite(part))) return 0;
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return parts[0] || 0;
+  }
+
+  function findClickableByText(patterns) {
+    const nodes = document.querySelectorAll('button, yt-button-shape button, tp-yt-paper-button, a, span, yt-formatted-string');
+    for (const node of nodes) {
+      const text = (node.textContent || node.getAttribute('aria-label') || '').trim();
+      if (!text) continue;
+      if (patterns.some(pattern => pattern.test(text))) return node;
+    }
+    return null;
+  }
+
+  function findTranscriptButton() {
+    const selectors = [
+      'ytd-video-description-transcript-section-renderer button',
+      'ytd-video-description-transcript-section-renderer yt-button-shape button',
+      'button[aria-label="Show transcript"]',
+      'button[aria-label*="transcript" i]',
+      'button[aria-label*="Transcript" i]',
+      'button[aria-label*="प्रतिलिपि" i]',
+      'button[aria-label*="ट्रांसक्रिप्ट" i]',
+    ];
+    for (const selector of selectors) {
+      const button = document.querySelector(selector);
+      if (button) return button;
+    }
+    return findClickableByText([/show transcript/i, /transcript/i, /प्रतिलिपि/i, /ट्रांसक्रिप्ट/i]);
+  }
+
+  function forceTranscriptPanelOpen() {
+    const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
+    for (const panel of panels) {
+      const targetId = panel.getAttribute('target-id') || '';
+      if (targetId.includes('transcript')) {
+        panel.setAttribute('visibility', 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED');
+      }
+    }
+  }
+
+  async function openTranscriptPanel() {
+    const moreButton = document.querySelector('#expand, ytd-text-inline-expander #expand, tp-yt-paper-button#expand')
+      || findClickableByText([/^\.\.\.more$/i, /^…more$/i, /^show more$/i, /^और दिखाएं$/i]);
+    if (moreButton) {
+      moreButton.click();
+      await sleep(900);
+    }
+
+    const transcriptButton = findTranscriptButton();
+    if (transcriptButton) {
+      transcriptButton.click();
+      await sleep(1200);
+    }
+
+    forceTranscriptPanelOpen();
+    await sleep(800);
+  }
+
+  function extractSegmentsFromDom() {
+    const segmentSelectors = [
+      'ytd-transcript-segment-renderer',
+      'transcript-segment-view-model',
+      'ytd-transcript-segment-list-renderer .segment',
+    ];
+
+    let nodes = [];
+    for (const selector of segmentSelectors) {
+      const found = document.querySelectorAll(selector);
+      if (found.length) {
+        nodes = [...found];
+        break;
+      }
+    }
+
+    if (!nodes.length) {
+      const panel = document.querySelector('ytd-engagement-panel-section-list-renderer[target-id*="transcript"]');
+      if (panel) {
+        const textNodes = panel.querySelectorAll('.segment-text, yt-formatted-string.segment-text');
+        const timestampNodes = panel.querySelectorAll('.segment-timestamp, .segment-start-offset');
+        if (textNodes.length) {
+          const segments = [];
+          const count = Math.max(textNodes.length, timestampNodes.length);
+          for (let i = 0; i < count; i++) {
+            const text = stripHtml(textNodes[i]?.textContent || '');
+            const start = parseClockLabel(timestampNodes[i]?.textContent || `${i}`);
+            if (!text) continue;
+            segments.push({
+              start: Number(start.toFixed(3)),
+              end: Number(start.toFixed(3)),
+              duration: 0,
+              timestamp_label: secondsToClock(start),
+              text,
+            });
+          }
+          return segments;
+        }
+      }
+      return [];
+    }
+
+    const segments = [];
+    for (const node of nodes) {
+      const timestampEl = node.querySelector('.segment-timestamp, .segment-start-offset, [class*="timestamp"]');
+      const textEl = node.querySelector('.segment-text, yt-formatted-string.segment-text, yt-formatted-string');
+      const text = stripHtml(textEl?.textContent || '');
+      const start = parseClockLabel(timestampEl?.textContent || '');
+      if (!text || (timestampEl && text === stripHtml(timestampEl.textContent || ''))) continue;
+      segments.push({
+        start: Number(start.toFixed(3)),
+        end: Number(start.toFixed(3)),
+        duration: 0,
+        timestamp_label: secondsToClock(start),
+        text,
+      });
+    }
+
+    for (let i = 0; i < segments.length; i++) {
+      const nextStart = segments[i + 1]?.start;
+      if (Number.isFinite(nextStart) && nextStart > segments[i].start) {
+        segments[i].end = Number(nextStart.toFixed(3));
+        segments[i].duration = Number((segments[i].end - segments[i].start).toFixed(3));
+      }
+    }
+
+    return segments;
+  }
+
+  async function fetchTranscriptFromDom() {
+    await openTranscriptPanel();
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const segments = extractSegmentsFromDom();
+      if (segments.length) return { segments, format: 'dom' };
+      if (attempt % 4 === 3) {
+        const button = findTranscriptButton();
+        if (button) button.click();
+        forceTranscriptPanelOpen();
+      }
+      await sleep(500);
+    }
+    return null;
+  }
+
   async function fetchViaInnerTube(player) {
     const params = player?.captions?.playerCaptionsTracklistRenderer?.openTranscriptParams
       || player?.engagementPanels
@@ -784,6 +931,18 @@ function fetchTranscriptInPageContext(expectedVideoId, languages) {
     }
 
     const tracks = playerResult.player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+
+    const domResult = await fetchTranscriptFromDom();
+    if (domResult?.segments?.length) {
+      return {
+        ok: true,
+        language: chooseTrack(tracks, languages)?.languageCode || 'unknown',
+        fileName: 'youtube-transcript-panel',
+        segments: domResult.segments,
+        method: `panel-${domResult.format}`,
+      };
+    }
+
     if (!tracks.length) {
       const innerTube = await fetchViaInnerTube(playerResult.player);
       if (innerTube?.segments?.length) {
@@ -795,7 +954,7 @@ function fetchTranscriptInPageContext(expectedVideoId, languages) {
           method: `innertube-${innerTube.format}`,
         };
       }
-      return { ok: false, error: 'No captions on this video. Open it on YouTube and confirm CC is available.' };
+      return { ok: false, error: 'Could not load transcript panel. Open the video on YouTube, click Show transcript manually once, then retry.' };
     }
 
     const selected = chooseTrack(tracks, languages);
