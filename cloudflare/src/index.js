@@ -151,6 +151,60 @@ function marketDateSort(value) {
   return raw;
 }
 
+const PRODUCE_INFO = [
+  ['mango', 'Mango', 'Aam', '🥭'],
+  ['aam', 'Mango', 'Aam', '🥭'],
+  ['onion', 'Onion', 'Pyaz', '🧅'],
+  ['pyaz', 'Onion', 'Pyaz', '🧅'],
+  ['pyaaz', 'Onion', 'Pyaz', '🧅'],
+  ['potato', 'Potato', 'Aloo', '🥔'],
+  ['aloo', 'Potato', 'Aloo', '🥔'],
+  ['tomato', 'Tomato', 'Tamatar', '🍅'],
+  ['tamatar', 'Tomato', 'Tamatar', '🍅'],
+  ['garlic', 'Garlic', 'Lahsun', '🧄'],
+  ['lahsun', 'Garlic', 'Lahsun', '🧄'],
+  ['lychee', 'Lychee', 'Litchi', '🍒'],
+  ['litchi', 'Lychee', 'Litchi', '🍒'],
+  ['watermelon', 'Watermelon', 'Tarbooj', '🍉'],
+  ['tarbooj', 'Watermelon', 'Tarbooj', '🍉'],
+  ['pomegranate', 'Pomegranate', 'Anar', '🍎'],
+  ['anar', 'Pomegranate', 'Anar', '🍎'],
+  ['sweet lime', 'Sweet lime', 'Mausambi', '🍋'],
+  ['mausambi', 'Sweet lime', 'Mausambi', '🍋'],
+  ['coconut water', 'Coconut water', 'Nariyal Pani', '🥥'],
+  ['nariyal', 'Coconut water', 'Nariyal Pani', '🥥'],
+  ['grapes', 'Grapes', 'Angoor', '🍇'],
+  ['angoor', 'Grapes', 'Angoor', '🍇'],
+  ['banana', 'Banana', 'Kela', '🍌'],
+  ['kela', 'Banana', 'Kela', '🍌'],
+  ['papaya', 'Papaya', 'Papita', '🟠'],
+  ['papita', 'Papaya', 'Papita', '🟠'],
+  ['orange', 'Orange', 'Santra', '🍊'],
+  ['santra', 'Orange', 'Santra', '🍊'],
+  ['melon', 'Melon', 'Kharbooja', '🍈'],
+  ['kharbooja', 'Melon', 'Kharbooja', '🍈'],
+];
+
+function produceInfo(value) {
+  const raw = safeText(value).toLowerCase();
+  const found = PRODUCE_INFO.find(([needle]) => raw.includes(needle));
+  if (!found) return null;
+  return {
+    english: found[1],
+    hinglish: found[2],
+    label: `${found[1]} / ${found[2]}`,
+    emoji: found[3],
+  };
+}
+
+function removeRecorderName(value) {
+  return safeText(value)
+    .replace(/\bRana\s*Ji\b/ig, '')
+    .replace(/\bRana\b/ig, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function slimVideo(video, channelUrl = '') {
   const segments = Array.isArray(video?.segments) ? video.segments : [];
   const analysisMeta = video?.analysisMeta || null;
@@ -1088,13 +1142,20 @@ async function callOpenAIExtractor(env, { videoId, videoUrl, title, segments, mo
           role: 'system',
           content: [
             'You extract wholesale fruit/produce mandi rates from noisy Hindi/Hinglish transcripts.',
-            'Return English-first metadata. Fruit labels must be English / Hinglish, for example "Watermelon / Tarbooj".',
-            'Use a produce emoji when obvious, for example 🍉 Watermelon / Tarbooj, 🧅 Onion / Pyaz, 🥭 Mango / Aam.',
-            'Do not include Rana Ji as a party/person; he is the recorder/interviewer and must be removed.',
+            'Return English-first metadata even when the transcript is Hindi. Keep useful Hinglish names beside English names.',
+            'Fruit labels must always be English / Hinglish, for example "Watermelon / Tarbooj", "Onion / Pyaz", "Mango / Aam".',
+            'Use a produce emoji whenever obvious, for example 🍉 Watermelon / Tarbooj, 🧅 Onion / Pyaz, 🥭 Mango / Aam.',
+            'Do not include Rana Ji, Rana, reporter, host, or interviewer as a party/person; Rana Ji is the recorder and must be removed.',
             'Keep timestamps tied to the transcript line where the price is spoken.',
+            'Extract every distinct price mention, including different grades, sizes, quality types, lots, areas, origins, parties, and price ranges.',
+            'If one spoken line lists multiple grades or qualities with different prices, return multiple rows and mention objects.',
+            'Include non-price useful facts and guidance separately when the speaker gives advice, market guidance, supply notes, demand notes, quality guidance, buyer/seller instructions, or factual observations.',
             'Extract only real produce prices. Ignore dates, counts, vehicle counts, phone numbers, subscriber counts, and unrelated gold/silver rates.',
             'Return JSON only with: {"meta": {...}, "rows": [...]}.',
-            'meta fields: video_id, market_date, market_date_sort, mandi_names, areas, parties, produce, qualities, summary_english, mention_count, source.',
+            'meta fields: video_id, video_title, video_url, market_date, market_date_sort, mandi_names, areas, parties, produce, qualities, summary_english, key_takeaways, facts, guidance, transcript_highlights, chapters, price_mentions, grouped_produce, mention_count, source.',
+            'facts/guidance/transcript_highlights/chapters items should include timestamp_seconds, title, text_english, text_hinglish, importance when possible.',
+            'price_mentions items should preserve all mentions, even if price is unclear: fruit_label, fruit_emoji, variety, quality_grade, quality_label, size_label, party_name, mandi_name, area_name, unit, min_price_inr, max_price_inr, timestamp_seconds, text_english, text_hinglish, confidence.',
+            'grouped_produce should group by fruit_label and include fruit_emoji, varieties, qualities, areas, parties, mention_count, min_price_inr, max_price_inr, and representative timestamp_seconds values.',
             'row fields: fruit, fruit_hindi, fruit_label, fruit_emoji, variety, quality_grade, quality_label, size_label, party_name, mandi_name, area_name, origin, unit, min_price_inr, max_price_inr, price_notes, market_name, market_date, market_date_sort, confidence, original_line, clean_english_line, clean_hinglish_line, context, notes, timestamp_seconds.',
           ].join('\n'),
         },
@@ -1121,6 +1182,161 @@ async function callOpenAIExtractor(env, { videoId, videoUrl, title, segments, mo
   return extractJsonObject(data?.choices?.[0]?.message?.content || text);
 }
 
+function uniqueClean(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : [])
+    .map((value) => removeRecorderName(value))
+    .filter(Boolean)));
+}
+
+function normalizeMetaList(list) {
+  return (Array.isArray(list) ? list : []).map((item) => {
+    if (typeof item === 'string') {
+      return {
+        timestamp_seconds: 0,
+        timestamp_label: '0:00',
+        title: item.slice(0, 80),
+        text_english: item,
+        text_hinglish: item,
+        importance: 'medium',
+      };
+    }
+    const seconds = Math.max(0, Math.floor(normalizeNumber(item?.timestamp_seconds) || 0));
+    return {
+      ...item,
+      timestamp_seconds: seconds,
+      timestamp_label: safeText(item?.timestamp_label) || secondsToClock(seconds),
+      title: safeText(item?.title || item?.label || item?.text_english || item?.text_hinglish).slice(0, 120),
+      text_english: safeText(item?.text_english || item?.english || item?.text || item?.summary),
+      text_hinglish: safeText(item?.text_hinglish || item?.hinglish || item?.original || item?.text),
+      importance: safeText(item?.importance || item?.confidence || 'medium'),
+    };
+  }).filter((item) => item.text_english || item.text_hinglish || item.title);
+}
+
+function normalizePriceMention(item, fallback = {}) {
+  const info = produceInfo(item?.fruit_label || item?.fruit || item?.fruit_hindi || fallback.fruit_label || fallback.fruit);
+  const seconds = Math.max(0, Math.floor(normalizeNumber(item?.timestamp_seconds ?? fallback.timestamp_seconds) || 0));
+  const min = normalizeNumber(item?.min_price_inr ?? fallback.min_price_inr);
+  const max = normalizeNumber(item?.max_price_inr ?? fallback.max_price_inr);
+  return {
+    fruit: safeText(info?.english || item?.fruit || fallback.fruit),
+    fruit_hindi: safeText(info?.hinglish || item?.fruit_hindi || fallback.fruit_hindi),
+    fruit_label: safeText(item?.fruit_label || fallback.fruit_label || info?.label || item?.fruit || fallback.fruit),
+    fruit_emoji: safeText(item?.fruit_emoji || fallback.fruit_emoji || info?.emoji),
+    variety: safeText(item?.variety || fallback.variety),
+    quality_grade: safeText(item?.quality_grade || fallback.quality_grade),
+    quality_label: safeText(item?.quality_label || fallback.quality_label),
+    size_label: safeText(item?.size_label || fallback.size_label),
+    party_name: removeRecorderName(item?.party_name || fallback.party_name),
+    mandi_name: safeText(item?.mandi_name || fallback.mandi_name),
+    area_name: safeText(item?.area_name || fallback.area_name),
+    unit: safeText(item?.unit || fallback.unit),
+    min_price_inr: Number.isFinite(min) ? min : null,
+    max_price_inr: Number.isFinite(max) ? max : null,
+    timestamp_seconds: seconds,
+    timestamp_label: secondsToClock(seconds),
+    text_english: safeText(item?.text_english || item?.clean_english_line || fallback.clean_english_line || fallback.context || fallback.price_notes),
+    text_hinglish: safeText(item?.text_hinglish || item?.clean_hinglish_line || fallback.clean_hinglish_line || fallback.clean_hindi_line || fallback.original_line),
+    confidence: safeText(item?.confidence || fallback.confidence || 'medium'),
+  };
+}
+
+function normalizeAnalysisMeta({ videoId, videoUrl, title, uploadDate, meta, rows, segments }) {
+  const normalized = meta && typeof meta === 'object' ? { ...meta } : {};
+  normalized.video_id = videoId;
+  normalized.video_url = videoUrl;
+  normalized.video_title = title;
+  normalized.source = 'worker-openai';
+  normalized.market_date_sort = safeText(normalized.market_date_sort) || marketDateSort(normalized.market_date || uploadDate);
+  normalized.mandi_names = uniqueClean(normalized.mandi_names);
+  normalized.areas = uniqueClean(normalized.areas);
+  normalized.parties = uniqueClean(normalized.parties);
+  normalized.qualities = uniqueClean(normalized.qualities);
+  normalized.produce = uniqueClean(normalized.produce).map((item) => {
+    const info = produceInfo(item);
+    return info ? `${info.emoji} ${info.label}` : item;
+  });
+  normalized.facts = normalizeMetaList(normalized.facts);
+  normalized.guidance = normalizeMetaList(normalized.guidance);
+  normalized.key_takeaways = normalizeMetaList(normalized.key_takeaways);
+  normalized.transcript_highlights = normalizeMetaList(normalized.transcript_highlights);
+  normalized.chapters = normalizeMetaList(normalized.chapters);
+
+  const rowMentions = (Array.isArray(rows) ? rows : []).map((row) => normalizePriceMention(row, row));
+  const aiMentions = (Array.isArray(normalized.price_mentions) ? normalized.price_mentions : []).map((item) => normalizePriceMention(item));
+  const seen = new Set();
+  normalized.price_mentions = [...aiMentions, ...rowMentions].filter((mention) => {
+    const key = [
+      mention.fruit_label,
+      mention.quality_grade,
+      mention.quality_label,
+      mention.size_label,
+      mention.party_name,
+      mention.min_price_inr,
+      mention.max_price_inr,
+      mention.timestamp_seconds,
+      mention.text_hinglish,
+    ].join('|').toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return mention.fruit_label || mention.text_english || mention.text_hinglish;
+  });
+
+  const grouped = new Map();
+  normalized.price_mentions.forEach((mention) => {
+    const key = mention.fruit_label || mention.fruit || 'Unknown produce';
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        fruit_label: key,
+        fruit_emoji: mention.fruit_emoji,
+        varieties: [],
+        qualities: [],
+        areas: [],
+        parties: [],
+        timestamps: [],
+        mention_count: 0,
+        min_price_inr: null,
+        max_price_inr: null,
+      });
+    }
+    const group = grouped.get(key);
+    group.mention_count += 1;
+    if (mention.variety) group.varieties.push(mention.variety);
+    if (mention.quality_grade || mention.quality_label || mention.size_label) group.qualities.push([mention.quality_grade, mention.quality_label, mention.size_label].filter(Boolean).join(' · '));
+    if (mention.area_name || mention.mandi_name) group.areas.push(mention.area_name || mention.mandi_name);
+    if (mention.party_name) group.parties.push(mention.party_name);
+    group.timestamps.push(mention.timestamp_seconds);
+    if (Number.isFinite(mention.min_price_inr)) {
+      group.min_price_inr = group.min_price_inr == null ? mention.min_price_inr : Math.min(group.min_price_inr, mention.min_price_inr);
+    }
+    if (Number.isFinite(mention.max_price_inr)) {
+      group.max_price_inr = group.max_price_inr == null ? mention.max_price_inr : Math.max(group.max_price_inr, mention.max_price_inr);
+    }
+  });
+  normalized.grouped_produce = Array.from(grouped.values()).map((group) => ({
+    ...group,
+    varieties: uniqueClean(group.varieties).slice(0, 12),
+    qualities: uniqueClean(group.qualities).slice(0, 20),
+    areas: uniqueClean(group.areas).slice(0, 12),
+    parties: uniqueClean(group.parties).slice(0, 12),
+    timestamps: Array.from(new Set(group.timestamps)).sort((a, b) => a - b).slice(0, 20),
+  }));
+
+  if (!normalized.transcript_highlights.length) {
+    normalized.transcript_highlights = (Array.isArray(segments) ? segments : []).slice(0, 60).map((segment) => ({
+      timestamp_seconds: Number(segment.start_seconds) || 0,
+      timestamp_label: safeText(segment.timestamp_label) || secondsToClock(segment.start_seconds),
+      title: safeText(segment.text).slice(0, 90),
+      text_english: '',
+      text_hinglish: safeText(segment.text),
+      importance: 'transcript',
+    }));
+  }
+
+  normalized.mention_count = Number(normalized.mention_count) || normalized.price_mentions.length || (Array.isArray(rows) ? rows.length : 0);
+  return normalized;
+}
+
 function normalizeAnalysisRows({ videoId, videoUrl, title, uploadDate, meta, rows }) {
   const marketDate = safeText(meta?.market_date);
   const marketSort = safeText(meta?.market_date_sort) || marketDateSort(marketDate || uploadDate);
@@ -1134,15 +1350,18 @@ function normalizeAnalysisRows({ videoId, videoUrl, title, uploadDate, meta, row
     const timestampLabel = secondsToClock(seconds);
     const cleanEnglish = safeText(row.clean_english_line);
     const cleanHinglish = safeText(row.clean_hinglish_line);
+    const info = produceInfo(row.fruit_label || row.fruit || row.fruit_hindi);
+    const fruitLabel = safeText(row.fruit_label) || safeText(info?.label) || safeText(row.fruit) || safeText(row.fruit_hindi);
     return {
       video_id: videoId,
-      fruit: safeText(row.fruit_label || row.fruit) || safeText(row.fruit_hindi),
-      fruit_hindi: safeText(row.fruit_hindi),
-      fruit_emoji: safeText(row.fruit_emoji),
+      fruit: fruitLabel,
+      fruit_hindi: safeText(row.fruit_hindi || info?.hinglish),
+      fruit_emoji: safeText(row.fruit_emoji || info?.emoji),
       variety: safeText(row.variety),
       quality_grade: safeText(row.quality_grade),
       quality_label: safeText(row.quality_label || row.size_label),
-      party_name: safeText(row.party_name).replace(/\bRana\s*Ji\b/ig, '').trim(),
+      size_label: safeText(row.size_label),
+      party_name: removeRecorderName(row.party_name),
       mandi_name: safeText(row.mandi_name),
       area_name: safeText(row.area_name),
       origin: safeText(row.origin),
@@ -1165,7 +1384,7 @@ function normalizeAnalysisRows({ videoId, videoUrl, title, uploadDate, meta, row
       video_title: title,
       video_url: videoUrl,
       upload_date: uploadDate,
-      fruit_label: safeText(row.fruit_label),
+      fruit_label: fruitLabel,
       clean_english_line: cleanEnglish,
       clean_hinglish_line: cleanHinglish,
     };
@@ -1189,13 +1408,15 @@ async function analyzeStoredTranscript(db, env, body) {
     segments: stored.segments,
     model: body.model,
   });
-  const meta = extraction.meta && typeof extraction.meta === 'object' ? extraction.meta : {};
-  meta.video_id = videoId;
-  meta.source = 'worker-openai';
-  meta.mention_count = Number(meta.mention_count) || (Array.isArray(extraction.rows) ? extraction.rows.length : 0);
-  meta.market_date_sort = safeText(meta.market_date_sort) || marketDateSort(meta.market_date || uploadDate);
-  meta.produce = Array.isArray(meta.produce) ? meta.produce.filter((item) => !/rana\s*ji/i.test(safeText(item))) : [];
-  meta.parties = Array.isArray(meta.parties) ? meta.parties.filter((item) => !/rana\s*ji/i.test(safeText(item))) : [];
+  const meta = normalizeAnalysisMeta({
+    videoId,
+    videoUrl,
+    title,
+    uploadDate,
+    meta: extraction.meta,
+    rows: extraction.rows,
+    segments: stored.segments,
+  });
 
   const priceRows = normalizeAnalysisRows({
     videoId,
@@ -1205,6 +1426,8 @@ async function analyzeStoredTranscript(db, env, body) {
     meta,
     rows: extraction.rows,
   });
+  await db.prepare('DELETE FROM price_rows WHERE video_id = ?').bind(videoId).run();
+  await db.prepare('DELETE FROM video_analysis WHERE video_id = ?').bind(videoId).run();
   await syncProject(db, {
     videos: [{
       id: videoId,

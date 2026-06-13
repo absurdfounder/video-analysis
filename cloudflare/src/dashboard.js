@@ -547,6 +547,116 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       flex-wrap: wrap;
     }
 
+    .analysis-cards {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .analysis-card {
+      border: 1px solid #3c3c3c;
+      background: rgba(255, 255, 255, 0.035);
+      border-radius: 18px;
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .analysis-thumb {
+      width: 140px;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      border-radius: 12px;
+      background: #111;
+    }
+
+    .analysis-title-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .analysis-title {
+      color: #fff;
+      font-size: 14px;
+      font-weight: 850;
+      line-height: 1.3;
+    }
+
+    .analysis-summary {
+      color: #cfcfcf;
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 5px;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .small-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      max-width: 100%;
+      border: 1px solid #444;
+      background: #303030;
+      color: #ddd;
+      border-radius: 999px;
+      padding: 5px 8px;
+      font-size: 11px;
+      font-weight: 800;
+      text-decoration: none;
+    }
+
+    .small-chip.good { background: rgba(16, 163, 127, 0.16); border-color: rgba(16, 163, 127, 0.35); color: #bfffe9; }
+    .small-chip.warn { background: rgba(247, 183, 49, 0.13); border-color: rgba(247, 183, 49, 0.35); color: #ffe2a2; }
+
+    .analysis-section-title {
+      color: #999;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-top: 10px;
+    }
+
+    .mention-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+      margin-top: 7px;
+    }
+
+    .mention-card {
+      border: 1px solid #393939;
+      border-radius: 13px;
+      padding: 8px;
+      background: rgba(0, 0, 0, 0.12);
+      min-width: 0;
+    }
+
+    .mention-card strong {
+      display: block;
+      color: #fff;
+      font-size: 12px;
+      line-height: 1.25;
+    }
+
+    .mention-card span {
+      color: #bdbdbd;
+      font-size: 11px;
+      line-height: 1.35;
+      display: block;
+      margin-top: 4px;
+    }
+
     .tab-panel {
       display: none;
       margin-top: 14px;
@@ -816,6 +926,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5);
     }
 
+    .modal-panel.wide {
+      width: min(1180px, 100%);
+    }
+
     .modal-head {
       position: sticky;
       top: 0;
@@ -966,6 +1080,56 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       white-space: pre-wrap;
     }
 
+    .rich-video-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .video-frame {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border: none;
+      border-radius: 16px;
+      background: #111;
+    }
+
+    .rich-panel {
+      border: 1px solid #dedede;
+      border-radius: 15px;
+      background: #fff;
+      padding: 12px;
+    }
+
+    .rich-list {
+      display: grid;
+      gap: 7px;
+      max-height: 360px;
+      overflow: auto;
+      padding-right: 3px;
+    }
+
+    .rich-row {
+      width: 100%;
+      border: 1px solid #e2e2e2;
+      background: #fafafa;
+      color: #111;
+      text-align: left;
+      border-radius: 12px;
+      padding: 8px 10px;
+      display: grid;
+      grid-template-columns: 58px 1fr;
+      gap: 8px;
+      line-height: 1.35;
+    }
+
+    .rich-row time {
+      color: #105834;
+      font-weight: 900;
+      font-size: 12px;
+    }
+
     @media (max-width: 1120px) {
       .dashboard-head { flex-direction: column; }
       .dashboard-actions { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -980,6 +1144,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       .topbar { position: sticky; top: 0; }
       .chat { overflow: visible; padding: 18px 14px 28px; }
       .youtube-video-head, .youtube-data-row, .modal-grid { grid-template-columns: 1fr; }
+      .analysis-card, .rich-video-grid { grid-template-columns: 1fr; }
+      .analysis-thumb { width: 100%; }
       .youtube-rate-box { text-align: left; }
       .panel-toolbar { flex-direction: column; align-items: stretch; }
       .search-box { max-width: none; }
@@ -1054,7 +1220,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
               </div>
             </div>
 
-            <div class="chart-help">Each line is a grade + size + area series. Click a dot for source video, transcript context, and confidence.</div>
+            <div class="chart-help">Each line is a variety + grade + size + area series. Click a dot for source video, transcript context, and confidence.</div>
+
+            <div class="analysis-cards" id="analysisCards"></div>
 
             <div class="dashboard-tabs">
               <button class="tab-btn active" data-tab="rateList">Rate List</button>
@@ -1129,7 +1297,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <div class="modal-head">
         <div>
           <h2 id="modalTitle">Test transcript worker</h2>
-          <p style="margin-top:5px;color:#666;font-size:13px;">Paste a YouTube URL and run it. The server extracts the video audio, sends it to OpenAI Whisper, then stores timestamped Hindi/Hinglish transcript lines.</p>
+          <p style="margin-top:5px;color:#666;font-size:13px;">Paste a YouTube URL and run it. The server extracts the video audio, sends it to Cloudflare Workers AI, then stores timestamped Hindi/Hinglish transcript lines.</p>
         </div>
         <button class="modal-close" id="closeTesterBtn">×</button>
       </div>
@@ -1165,15 +1333,49 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     </div>
   </div>
 
+  <div class="modal" id="videoModal" aria-hidden="true">
+    <div class="modal-panel wide" role="dialog" aria-modal="true" aria-labelledby="videoModalTitle">
+      <div class="modal-head">
+        <div>
+          <h2 id="videoModalTitle">Rich video</h2>
+          <p id="videoModalSub" style="margin-top:5px;color:#666;font-size:13px;"></p>
+        </div>
+        <button class="modal-close" id="closeVideoModalBtn">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="rich-video-grid">
+          <div>
+            <iframe id="richVideoFrame" class="video-frame" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+            <div class="rich-panel" style="margin-top:12px;">
+              <div style="font-weight:850;margin-bottom:8px;">Metadata</div>
+              <div id="richMetaChips" class="chip-row"></div>
+              <div id="richSummary" class="analysis-summary"></div>
+            </div>
+          </div>
+          <div class="rich-panel">
+            <div style="font-weight:850;margin-bottom:8px;">Timestamped transcript</div>
+            <div id="richTranscript" class="rich-list"><div class="status">Loading transcript...</div></div>
+          </div>
+        </div>
+        <div class="rich-panel">
+          <div style="font-weight:850;margin-bottom:8px;">Facts & guidance</div>
+          <div id="richFacts" class="mention-grid"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     var state = {
       priceRows: [],
+      analysisItems: [],
       filteredRows: [],
       selectedFruit: '',
       selectedGrade: '',
       selectedSize: '',
       selectedArea: '',
       pointRows: [],
+      transcriptCache: {},
       colors: ['#10a37f', '#f7b731', '#4dabf7', '#eb4d4b', '#be2edd', '#badc58', '#ff9f43', '#00d2d3']
     };
 
@@ -1248,6 +1450,28 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       return id ? 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/hqdefault.jpg' : '';
     }
 
+    function videoThumbById(id) {
+      return id ? 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/hqdefault.jpg' : '';
+    }
+
+    function timestampVideoUrl(videoUrl, seconds) {
+      var url = videoUrl || '';
+      var start = Math.max(0, Math.floor(Number(seconds) || 0));
+      if (!url) return '#';
+      try {
+        var parsed = new URL(url);
+        parsed.searchParams.set('t', start + 's');
+        return parsed.toString();
+      } catch (error) {
+        return url + (url.indexOf('?') >= 0 ? '&' : '?') + 't=' + start + 's';
+      }
+    }
+
+    function embedUrl(videoId, seconds) {
+      var start = Math.max(0, Math.floor(Number(seconds) || 0));
+      return 'https://www.youtube.com/embed/' + encodeURIComponent(videoId) + '?start=' + start + '&autoplay=0';
+    }
+
     function timestampUrl(row) {
       if (row.timestamp_url) return row.timestamp_url;
       var url = row.video_url || '';
@@ -1292,6 +1516,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function produceLabel(row) {
       var raw = String(row.fruit || row.fruit_hindi || '').trim();
       var key = raw.toLowerCase();
+      if (row.fruit_emoji && raw && raw.indexOf(row.fruit_emoji) !== 0) return row.fruit_emoji + ' ' + raw;
       return produceNames[key] || raw || 'Unknown produce';
     }
 
@@ -1358,13 +1583,17 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     function seriesKey(row) {
-      return [gradeLabel(row), sizeLabel(row), areaLabel(row), row.unit || 'unit'].join(' · ');
+      return [row.variety || 'Any variety', gradeLabel(row), sizeLabel(row), areaLabel(row), row.unit || 'unit'].join(' · ');
     }
 
     function loadAllData() {
       el('refreshBtn').disabled = true;
-      return fetchJson('/api/prices?limit=5000').then(function (result) {
-        state.priceRows = Array.isArray(result.items) ? result.items : [];
+      return Promise.all([
+        fetchJson('/api/prices?limit=5000'),
+        fetchJson('/api/analysis?limit=100').catch(function () { return { items: [] }; })
+      ]).then(function (results) {
+        state.priceRows = Array.isArray(results[0].items) ? results[0].items : [];
+        state.analysisItems = Array.isArray(results[1].items) ? results[1].items : [];
         if (!state.selectedFruit) state.selectedFruit = uniqueValues(state.priceRows, produceLabel)[0] || '';
         renderEverything();
       }).catch(function (error) {
@@ -1646,6 +1875,63 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       drawChart();
       renderRateList();
       renderAllData();
+      renderAnalysisCards();
+    }
+
+    function metaList(items, limit) {
+      return (Array.isArray(items) ? items : []).filter(Boolean).slice(0, limit || 8);
+    }
+
+    function itemText(item) {
+      if (!item) return '';
+      if (typeof item === 'string') return item;
+      return item.text_english || item.text_hinglish || item.title || item.summary || '';
+    }
+
+    function renderAnalysisCards() {
+      var container = el('analysisCards');
+      if (!state.analysisItems.length) {
+        container.innerHTML = '';
+        return;
+      }
+      var rowsByVideo = {};
+      state.priceRows.forEach(function (row) {
+        var id = row.video_id || extractVideoId(row.video_url);
+        if (!id) return;
+        if (!rowsByVideo[id]) rowsByVideo[id] = [];
+        rowsByVideo[id].push(row);
+      });
+      container.innerHTML = state.analysisItems.slice(0, 8).map(function (item) {
+        var meta = item.meta || {};
+        var id = item.video_id || meta.video_id;
+        var rows = rowsByVideo[id] || [];
+        var title = meta.video_title || (rows[0] && rows[0].video_title) || id;
+        var url = meta.video_url || (rows[0] && rows[0].video_url) || ('https://www.youtube.com/watch?v=' + id);
+        var groups = metaList(meta.grouped_produce, 5);
+        var facts = metaList([].concat(meta.facts || [], meta.guidance || [], meta.key_takeaways || []), 4);
+        var mentions = metaList(meta.price_mentions, 6);
+        var produceHtml = groups.length ? groups.map(function (group) {
+          var range = group.min_price_inr || group.max_price_inr ? money(group.min_price_inr || group.max_price_inr) + (group.max_price_inr && group.max_price_inr !== group.min_price_inr ? ' - ' + money(group.max_price_inr) : '') : (group.mention_count || 0) + ' mention(s)';
+          return '<span class="small-chip good">' + escapeHtml((group.fruit_emoji ? group.fruit_emoji + ' ' : '') + (group.fruit_label || 'Produce') + ' · ' + range) + '</span>';
+        }).join('') : rows.slice(0, 5).map(function (row) {
+          return '<span class="small-chip good">' + escapeHtml(produceLabel(row) + ' · ' + rateRange(row)) + '</span>';
+        }).join('');
+        var factsHtml = facts.map(function (fact) {
+          var seconds = Number(fact.timestamp_seconds) || 0;
+          return '<a class="small-chip warn" href="' + escapeHtml(timestampVideoUrl(url, seconds)) + '" target="_blank" rel="noreferrer">▶ ' + escapeHtml(secondsToClock(seconds) + ' · ' + itemText(fact).slice(0, 86)) + '</a>';
+        }).join('');
+        var mentionHtml = mentions.length ? '<div class="mention-grid">' + mentions.slice(0, 4).map(function (mention) {
+          var seconds = Number(mention.timestamp_seconds) || 0;
+          var price = mention.min_price_inr || mention.max_price_inr ? money(mention.min_price_inr || mention.max_price_inr) + (mention.max_price_inr && mention.max_price_inr !== mention.min_price_inr ? ' - ' + money(mention.max_price_inr) : '') : 'Rate not stated';
+          return '<div class="mention-card"><strong>' + escapeHtml((mention.fruit_emoji ? mention.fruit_emoji + ' ' : '') + (mention.fruit_label || mention.fruit || 'Produce') + ' · ' + price) + '</strong><span>' + escapeHtml(secondsToClock(seconds) + ' · ' + (mention.quality_grade || mention.quality_label || mention.size_label || mention.area_name || 'market mention')) + '</span></div>';
+        }).join('') + '</div>' : '';
+        return '<article class="analysis-card"><img class="analysis-thumb" src="' + escapeHtml(videoThumbById(id)) + '" alt=""><div><div class="analysis-title-row"><div><div class="analysis-title">' + escapeHtml(title) + '</div><div class="analysis-summary">' + escapeHtml(meta.summary_english || ((rows.length || item.mention_count || 0) + ' saved price mention(s).')) + '</div></div><button class="secondary-btn rich-video-btn" data-video-id="' + escapeHtml(id) + '">Rich video</button></div><div class="chip-row"><span class="small-chip">' + escapeHtml(meta.market_date || item.market_date || 'Market date') + '</span><span class="small-chip">' + escapeHtml((meta.mention_count || item.mention_count || rows.length || 0) + ' mentions') + '</span><a class="small-chip" href="' + escapeHtml(url) + '" target="_blank" rel="noreferrer">Open YouTube</a></div><div class="analysis-section-title">Produce & prices</div><div class="chip-row">' + produceHtml + '</div>' + (factsHtml ? '<div class="analysis-section-title">Facts & guidance</div><div class="chip-row">' + factsHtml + '</div>' : '') + mentionHtml + '</div></article>';
+      }).join('');
+      container.querySelectorAll('.rich-video-btn').forEach(function (button) {
+        button.addEventListener('click', function () {
+          openRichVideo(button.getAttribute('data-video-id'));
+        });
+      });
     }
 
     function setTranscriptStatus(message, kind) {
@@ -1682,7 +1968,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('videoThumb').src = 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/hqdefault.jpg';
       el('videoIdLabel').textContent = 'Video ID: ' + id;
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
-      el('videoHint').textContent = 'The server will extract audio from this YouTube video and transcribe it with OpenAI Whisper.';
+      el('videoHint').textContent = 'The server will extract audio from this YouTube video and transcribe it with Cloudflare Workers AI.';
     }
 
     function runTranscript() {
@@ -1692,7 +1978,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var language = el('language').value;
       el('runTranscriptBtn').disabled = true;
       setTranscriptStatus(file || audioUrl ? 'Starting transcription...' : 'Extracting YouTube audio...', '');
-      log(file || audioUrl ? 'Starting transcript request.' : 'Extracting YouTube audio and sending it to OpenAI Whisper.');
+      log(file || audioUrl ? 'Starting transcript request.' : 'Extracting YouTube audio and sending it to Cloudflare Workers AI.');
       var request;
       if (file) {
         var form = new FormData();
@@ -1745,6 +2031,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function renderTranscript(data) {
       var segments = Array.isArray(data.segments) ? data.segments : [];
       var job = data.job || {};
+      if (job.video_id) state.transcriptCache[job.video_id] = data;
       el('transcriptMeta').textContent = job.id ? ('Job ' + job.id + ' · ' + (job.status || '') + ' · ' + segments.length + ' line(s)') : (segments.length + ' line(s)');
       if (!segments.length) {
         el('transcriptBox').innerHTML = '<div class="status">No transcript lines returned.</div>';
@@ -1755,11 +2042,82 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       }).join('');
     }
 
+    function closeRichVideo() {
+      el('videoModal').classList.remove('show');
+      el('videoModal').setAttribute('aria-hidden', 'true');
+      el('richVideoFrame').src = '';
+    }
+
+    function openRichVideo(videoId) {
+      var item = state.analysisItems.find(function (entry) { return entry.video_id === videoId || (entry.meta && entry.meta.video_id === videoId); }) || {};
+      var meta = item.meta || {};
+      var rows = state.priceRows.filter(function (row) { return (row.video_id || extractVideoId(row.video_url)) === videoId; });
+      var url = meta.video_url || (rows[0] && rows[0].video_url) || ('https://www.youtube.com/watch?v=' + videoId);
+      var title = meta.video_title || (rows[0] && rows[0].video_title) || videoId;
+      el('videoModalTitle').textContent = title;
+      el('videoModalSub').textContent = [meta.market_date, (meta.mention_count || rows.length || 0) + ' mention(s)', rows.length + ' saved rate row(s)'].filter(Boolean).join(' · ');
+      el('richVideoFrame').src = embedUrl(videoId, 0);
+      var chipValues = []
+        .concat(meta.produce || [])
+        .concat(meta.qualities || [])
+        .concat(meta.areas || [])
+        .concat(meta.parties || [])
+        .slice(0, 28);
+      el('richMetaChips').innerHTML = chipValues.map(function (value) {
+        return '<span class="small-chip">' + escapeHtml(value) + '</span>';
+      }).join('') || '<span class="small-chip">No metadata yet</span>';
+      el('richSummary').textContent = meta.summary_english || '';
+      var facts = metaList([].concat(meta.facts || [], meta.guidance || [], meta.key_takeaways || [], meta.chapters || []), 18);
+      el('richFacts').innerHTML = facts.length ? facts.map(function (fact) {
+        var seconds = Number(fact.timestamp_seconds) || 0;
+        return '<button class="mention-card rich-jump" data-seconds="' + seconds + '"><strong>▶ ' + escapeHtml(secondsToClock(seconds) + ' · ' + (fact.title || 'Fact')) + '</strong><span>' + escapeHtml(itemText(fact)) + '</span></button>';
+      }).join('') : '<div class="empty-list">No facts or guidance saved for this video yet. Re-run analysis to refresh metadata.</div>';
+      el('richTranscript').innerHTML = '<div class="status">Loading transcript...</div>';
+      el('videoModal').classList.add('show');
+      el('videoModal').setAttribute('aria-hidden', 'false');
+
+      function renderRichTranscript(data) {
+        var segments = Array.isArray(data.segments) ? data.segments : [];
+        if (!segments.length) {
+          el('richTranscript').innerHTML = '<div class="status">No transcript lines saved.</div>';
+          return;
+        }
+        el('richTranscript').innerHTML = segments.map(function (segment) {
+          var seconds = Number(segment.start_seconds) || 0;
+          return '<button class="rich-row rich-jump" data-seconds="' + seconds + '"><time>' + escapeHtml(segment.timestamp_label || secondsToClock(seconds)) + '</time><span>' + escapeHtml(segment.text) + '</span></button>';
+        }).join('');
+        el('richTranscript').querySelectorAll('.rich-jump').forEach(bindJump);
+      }
+
+      function bindJump(button) {
+        button.addEventListener('click', function () {
+          var seconds = Number(button.getAttribute('data-seconds')) || 0;
+          el('richVideoFrame').src = embedUrl(videoId, seconds);
+        });
+      }
+
+      el('richFacts').querySelectorAll('.rich-jump').forEach(bindJump);
+      if (state.transcriptCache[videoId]) {
+        renderRichTranscript(state.transcriptCache[videoId]);
+      } else {
+        fetchJson('/api/transcripts/' + encodeURIComponent(videoId)).then(function (data) {
+          state.transcriptCache[videoId] = data;
+          renderRichTranscript(data);
+        }).catch(function (error) {
+          el('richTranscript').innerHTML = '<div class="status bad">' + escapeHtml(error.message) + '</div>';
+        });
+      }
+    }
+
     function setupEvents() {
       el('openTesterTop').addEventListener('click', openTester);
       el('closeTesterBtn').addEventListener('click', closeTester);
+      el('closeVideoModalBtn').addEventListener('click', closeRichVideo);
       el('testModal').addEventListener('click', function (event) {
         if (event.target === el('testModal')) closeTester();
+      });
+      el('videoModal').addEventListener('click', function (event) {
+        if (event.target === el('videoModal')) closeRichVideo();
       });
       el('refreshBtn').addEventListener('click', loadAllData);
       el('popupClose').addEventListener('click', hidePopup);
@@ -1785,6 +2143,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       document.addEventListener('keydown', function (event) {
         if (event.key === 'Escape') {
           closeTester();
+          closeRichVideo();
           hidePopup();
         }
       });
