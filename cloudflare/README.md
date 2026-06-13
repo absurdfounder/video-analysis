@@ -125,25 +125,25 @@ Open `/` or `/dashboard` on the Worker to test transcription and price charts in
 
 What it can do:
 
-- Extract a timestamped YouTube transcript directly from a pasted YouTube URL when YouTube exposes a caption/transcript track
+- Send pasted YouTube URLs to an extractor service that downloads the video audio with `yt-dlp` and transcribes it with OpenAI Whisper
 - Transcribe an uploaded audio file, a direct `audioUrl`, `audioBase64`, or pre-split `chunks[]`
 - Store transcript jobs and timestamped segments in D1
 - Return normalized `[time] caption` lines for downstream price extraction
 
 Fallbacks/limits:
 
-- Run `yt-dlp`, Chrome, or ffmpeg
-- Reliably extract private YouTube audio streams from a normal `youtube.com/watch` URL when YouTube exposes no caption track
+- Cloudflare Workers cannot run `yt-dlp`, Chrome, or ffmpeg directly
+- YouTube audio extraction happens in the Node/Netlify extractor, not inside the Worker
 
-If Cloudflare is rate-limited by YouTube or a video has no public transcript track, configure one of these:
+For pasted YouTube URLs, configure:
 
-- `YOUTUBE_COOKIES_BASE64` or `YOUTUBE_COOKIES` — exported YouTube cookies for the Worker caption fetch
-- `YOUTUBE_EXTRACTOR_URL` — a POST endpoint that runs `yt-dlp` and returns `{ ok, id, language, segments }`, such as the Netlify `/api/transcript` function in this repo
+- `YOUTUBE_EXTRACTOR_URL` — a POST endpoint that extracts YouTube audio and returns `{ ok, id, language, segments }`, such as the Netlify `/api/transcript` function in this repo
 - `YOUTUBE_EXTRACTOR_TOKEN` — optional bearer token sent to that extractor
+- `OPENAI_API_KEY` — set on the extractor service so it can call OpenAI Whisper
 
-For videos without any YouTube transcript/caption track, use a downloader/splitter outside Workers to extract audio chunks, then call this route. Workers AI handles the transcription step.
+The included Netlify extractor downloads the best audio-only stream under 24 MB and calls OpenAI's audio transcription API.
 
-### Extract a YouTube transcript directly
+### Extract YouTube audio and transcribe with OpenAI
 
 ```bash
 curl -X POST "https://fruit-mandi-api.YOUR.workers.dev/api/transcripts/transcribe" \

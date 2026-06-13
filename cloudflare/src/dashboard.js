@@ -1129,7 +1129,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <div class="modal-head">
         <div>
           <h2 id="modalTitle">Test transcript worker</h2>
-          <p style="margin-top:5px;color:#666;font-size:13px;">Paste a YouTube URL and run it. The Worker extracts the available timestamped transcript automatically; audio URL/upload is only a fallback.</p>
+          <p style="margin-top:5px;color:#666;font-size:13px;">Paste a YouTube URL and run it. The server extracts the video audio, sends it to OpenAI Whisper, then stores timestamped Hindi/Hinglish transcript lines.</p>
         </div>
         <button class="modal-close" id="closeTesterBtn">×</button>
       </div>
@@ -1640,7 +1640,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('videoThumb').src = 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/hqdefault.jpg';
       el('videoIdLabel').textContent = 'Video ID: ' + id;
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
-      el('videoHint').textContent = 'The Worker will fetch the YouTube transcript from this video URL. Use audio URL/upload only when YouTube has no transcript track.';
+      el('videoHint').textContent = 'The server will extract audio from this YouTube video and transcribe it with OpenAI Whisper.';
     }
 
     function runTranscript() {
@@ -1649,8 +1649,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var file = el('audioFile').files[0];
       var language = el('language').value;
       el('runTranscriptBtn').disabled = true;
-      setTranscriptStatus(file || audioUrl ? 'Starting transcription...' : 'Extracting YouTube transcript...', '');
-      log(file || audioUrl ? 'Starting transcript request.' : 'Extracting transcript from YouTube URL.');
+      setTranscriptStatus(file || audioUrl ? 'Starting transcription...' : 'Extracting YouTube audio...', '');
+      log(file || audioUrl ? 'Starting transcript request.' : 'Extracting YouTube audio and sending it to OpenAI Whisper.');
       var request;
       if (file) {
         var form = new FormData();
