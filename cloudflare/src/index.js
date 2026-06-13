@@ -10,6 +10,7 @@ import { DASHBOARD_HTML } from './dashboard.js';
 const WHISPER_MODEL = '@cf/openai/whisper-large-v3-turbo';
 const AUDIO_LIMIT_BYTES = 24 * 1024 * 1024;
 const MAX_TRANSCRIPT_CHUNKS = 12;
+const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
 function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '*';
@@ -111,6 +112,43 @@ function rowHash(row) {
     row.timestamp_seconds,
     row.original_line,
   ].join('|').toLowerCase();
+}
+
+function extractJsonObject(text) {
+  const raw = safeText(text);
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch {}
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) {
+    try { return JSON.parse(fenced[1]); } catch {}
+  }
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try { return JSON.parse(raw.slice(start, end + 1)); } catch {}
+  }
+  return {};
+}
+
+function normalizeNumber(value) {
+  const raw = safeText(value).replace(/[,₹]/g, '');
+  if (!raw) return null;
+  const match = raw.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const num = Number(match[0]);
+  return Number.isFinite(num) ? num : null;
+}
+
+function marketDateSort(value) {
+  const raw = safeText(value);
+  if (!raw) return '';
+  const parsed = Date.parse(raw);
+  if (Number.isFinite(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+  const match = raw.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  if (match) {
+    return `${match[3]}-${String(match[2]).padStart(2, '0')}-${String(match[1]).padStart(2, '0')}`;
+  }
+  return raw;
 }
 
 function slimVideo(video, channelUrl = '') {
@@ -1027,6 +1065,174 @@ async function getTranscriptJob(db, jobId) {
   };
 }
 
+async function callOpenAIExtractor(env, { videoId, videoUrl, title, segments, model }) {
+  const apiKey = safeText(env.OPENAI_API_KEY);
+  if (!apiKey) throw httpError('OPENAI_API_KEY is not configured on the Worker.', 500);
+  const transcript = segments.map((segment) => {
+    const seconds = Math.max(0, Math.floor(Number(segment.start_seconds) || 0));
+    return `[${seconds}s | ${segment.timestamp_label || secondsToClock(seconds)}] ${safeText(segment.text)}`;
+  }).join('\n').slice(0, 45000);
+
+  const response = await fetch(OPENAI_CHAT_URL, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: safeText(model) || 'gpt-4o-mini',
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You extract wholesale fruit/produce mandi rates from noisy Hindi/Hinglish transcripts.',
+            'Return English-first metadata. Fruit labels must be English / Hinglish, for example "Watermelon / Tarbooj".',
+            'Use a produce emoji when obvious, for example 🍉 Watermelon / Tarbooj, 🧅 Onion / Pyaz, 🥭 Mango / Aam.',
+            'Do not include Rana Ji as a party/person; he is the recorder/interviewer and must be removed.',
+            'Keep timestamps tied to the transcript line where the price is spoken.',
+            'Extract only real produce prices. Ignore dates, counts, vehicle counts, phone numbers, subscriber counts, and unrelated gold/silver rates.',
+            'Return JSON only with: {"meta": {...}, "rows": [...]}.',
+            'meta fields: video_id, market_date, market_date_sort, mandi_names, areas, parties, produce, qualities, summary_english, mention_count, source.',
+            'row fields: fruit, fruit_hindi, fruit_label, fruit_emoji, variety, quality_grade, quality_label, size_label, party_name, mandi_name, area_name, origin, unit, min_price_inr, max_price_inr, price_notes, market_name, market_date, market_date_sort, confidence, original_line, clean_english_line, clean_hinglish_line, context, notes, timestamp_seconds.',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: [
+            `Video ID: ${videoId}`,
+            `Video URL: ${videoUrl}`,
+            `Title: ${title || ''}`,
+            '',
+            'Transcript:',
+            transcript,
+          ].join('\n'),
+        },
+      ],
+    }),
+  });
+  const text = await response.text();
+  const data = extractJsonObject(text);
+  if (!response.ok) {
+    const error = data?.error?.message || `OpenAI extraction failed: ${response.status} ${text.slice(0, 300)}`;
+    throw httpError(error, 502, { provider: 'openai' });
+  }
+  return extractJsonObject(data?.choices?.[0]?.message?.content || text);
+}
+
+function normalizeAnalysisRows({ videoId, videoUrl, title, uploadDate, meta, rows }) {
+  const marketDate = safeText(meta?.market_date);
+  const marketSort = safeText(meta?.market_date_sort) || marketDateSort(marketDate || uploadDate);
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    const min = normalizeNumber(row.min_price_inr);
+    const max = normalizeNumber(row.max_price_inr);
+    const seconds = Math.max(0, Math.floor(normalizeNumber(row.timestamp_seconds) || 0));
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max <= 0) return null;
+    const low = Math.min(min, max);
+    const high = Math.max(min, max);
+    const timestampLabel = secondsToClock(seconds);
+    const cleanEnglish = safeText(row.clean_english_line);
+    const cleanHinglish = safeText(row.clean_hinglish_line);
+    return {
+      video_id: videoId,
+      fruit: safeText(row.fruit_label || row.fruit) || safeText(row.fruit_hindi),
+      fruit_hindi: safeText(row.fruit_hindi),
+      fruit_emoji: safeText(row.fruit_emoji),
+      variety: safeText(row.variety),
+      quality_grade: safeText(row.quality_grade),
+      quality_label: safeText(row.quality_label || row.size_label),
+      party_name: safeText(row.party_name).replace(/\bRana\s*Ji\b/ig, '').trim(),
+      mandi_name: safeText(row.mandi_name),
+      area_name: safeText(row.area_name),
+      origin: safeText(row.origin),
+      unit: safeText(row.unit) || 'unknown',
+      min_price_inr: low,
+      max_price_inr: high,
+      price_notes: safeText(row.price_notes || row.notes),
+      market_name: safeText(row.market_name || row.mandi_name),
+      market_date: marketDate,
+      market_date_sort: marketSort,
+      confidence: ['high', 'medium', 'low'].includes(safeText(row.confidence).toLowerCase()) ? safeText(row.confidence).toLowerCase() : 'medium',
+      original_line: safeText(row.original_line),
+      clean_hindi_line: cleanHinglish || cleanEnglish,
+      context: safeText(row.context),
+      notes: safeText(row.notes),
+      source: 'worker-openai',
+      timestamp_seconds: seconds,
+      timestamp_label: timestampLabel,
+      timestamp_url: videoUrl ? `${videoUrl}${videoUrl.includes('?') ? '&' : '?'}t=${seconds}s` : '',
+      video_title: title,
+      video_url: videoUrl,
+      upload_date: uploadDate,
+      fruit_label: safeText(row.fruit_label),
+      clean_english_line: cleanEnglish,
+      clean_hinglish_line: cleanHinglish,
+    };
+  }).filter(Boolean);
+}
+
+async function analyzeStoredTranscript(db, env, body) {
+  const videoId = safeText(body.videoId || body.video_id) || extractYouTubeId(body.videoUrl || body.video_url);
+  if (!videoId) throw httpError('Send videoId or videoUrl.', 400);
+  const stored = await getTranscriptByVideo(db, videoId);
+  if (!stored || !stored.segments?.length) throw httpError('No stored transcript found for this video.', 404);
+
+  const existingVideo = await getVideo(db, videoId).catch(() => null);
+  const videoUrl = safeText(body.videoUrl || body.video_url || stored.job?.video_url || existingVideo?.url);
+  const title = safeText(body.title || existingVideo?.title || videoId);
+  const uploadDate = safeText(body.uploadDate || body.upload_date || existingVideo?.upload_date);
+  const extraction = await callOpenAIExtractor(env, {
+    videoId,
+    videoUrl,
+    title,
+    segments: stored.segments,
+    model: body.model,
+  });
+  const meta = extraction.meta && typeof extraction.meta === 'object' ? extraction.meta : {};
+  meta.video_id = videoId;
+  meta.source = 'worker-openai';
+  meta.mention_count = Number(meta.mention_count) || (Array.isArray(extraction.rows) ? extraction.rows.length : 0);
+  meta.market_date_sort = safeText(meta.market_date_sort) || marketDateSort(meta.market_date || uploadDate);
+  meta.produce = Array.isArray(meta.produce) ? meta.produce.filter((item) => !/rana\s*ji/i.test(safeText(item))) : [];
+  meta.parties = Array.isArray(meta.parties) ? meta.parties.filter((item) => !/rana\s*ji/i.test(safeText(item))) : [];
+
+  const priceRows = normalizeAnalysisRows({
+    videoId,
+    videoUrl,
+    title,
+    uploadDate,
+    meta,
+    rows: extraction.rows,
+  });
+  await syncProject(db, {
+    videos: [{
+      id: videoId,
+      title,
+      url: videoUrl,
+      upload_date: uploadDate,
+      market_date: safeText(meta.market_date),
+      market_date_sort: safeText(meta.market_date_sort),
+      status: 'analyzed',
+      priceStatus: priceRows.length ? 'ok' : 'empty',
+      priceRowCount: priceRows.length,
+      transcriptLineCount: stored.segments.length,
+      language: stored.job?.language || 'hi',
+      analysisMeta: meta,
+    }],
+    priceRows,
+    videoAnalysis: { [videoId]: meta },
+  });
+
+  return {
+    videoId,
+    meta,
+    priceRows,
+    priceRowCount: priceRows.length,
+    transcriptLineCount: stored.segments.length,
+  };
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') {
@@ -1100,6 +1306,15 @@ export default {
 
       if (path === '/api/analysis' && request.method === 'GET') {
         const result = await listAnalysis(env.DB, url);
+        return jsonResponse({ ok: true, ...result }, 200, request);
+      }
+
+      if (path === '/api/analysis/run' && request.method === 'POST') {
+        if (!authorize(request, env)) {
+          return jsonResponse({ ok: false, error: 'Unauthorized. Set Authorization: Bearer <SYNC_TOKEN>.' }, 401, request);
+        }
+        const body = await request.json();
+        const result = await analyzeStoredTranscript(env.DB, env, body);
         return jsonResponse({ ok: true, ...result }, 200, request);
       }
 

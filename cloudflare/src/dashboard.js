@@ -1375,6 +1375,22 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       });
     }
 
+    function runAnalysisForVideo(videoUrl, title) {
+      var id = extractVideoId(videoUrl);
+      if (!id) return Promise.resolve(null);
+      setTranscriptStatus('Transcript saved. Running AI price analysis...', '');
+      log('Running AI analysis for ' + id + '...');
+      return fetchJson('/api/analysis/run', {
+        method: 'POST',
+        headers: Object.assign({ 'content-type': 'application/json' }, authHeaders()),
+        body: JSON.stringify({ videoId: id, videoUrl: videoUrl, title: title || id })
+      }).then(function (data) {
+        log('AI analysis saved ' + data.priceRowCount + ' price row(s).');
+        setTranscriptStatus('Done: transcript + ' + data.priceRowCount + ' price row(s) saved.', data.priceRowCount ? 'ok' : '');
+        return loadAllData().then(function () { return data; });
+      });
+    }
+
     function renderFruitPicker() {
       var values = uniqueValues(state.priceRows, produceLabel);
       if (!values.length) {
@@ -1669,6 +1685,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         renderTranscript(data);
         setTranscriptStatus('Transcript run finished: ' + data.job.segment_count + ' segment(s).', data.job.segment_count ? 'ok' : '');
         log('Transcript job ' + data.job.id + ' finished with ' + data.job.segment_count + ' segment(s).');
+        if (data.job.segment_count) return runAnalysisForVideo(videoUrl, data.job.video_id);
+        return null;
       }).catch(function (error) {
         setTranscriptStatus(error.message, 'bad');
         log('ERROR: ' + error.message);
