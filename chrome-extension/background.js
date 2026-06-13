@@ -7,15 +7,39 @@ const STORAGE_DEFAULTS = {
   pollIntervalMinutes: 360,
   notificationsEnabled: true,
   lastPollAt: null,
-  transcriptFetchMode: 'background',
 };
 
 chrome.runtime.onInstalled.addListener(async () => {
   const settings = await loadChannelSettings();
   await schedulePoll(settings.pollIntervalMinutes);
+  await resumeTranscriptBatchIfNeeded();
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const storedId = await getStoredWorkerTabId();
+  if (tabId === cachedYouTubeTabId || tabId === storedId) {
+    cachedYouTubeTabId = null;
+    await setStoredWorkerTabId(null);
+  }
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  const workerId = cachedYouTubeTabId || await getStoredWorkerTabId();
+  if (!workerId || tabId !== workerId) return;
+  cachedYouTubeTabId = workerId;
+  if (changeInfo.audible || changeInfo.status === 'complete') {
+    muteWorkerTab(tabId).catch(() => {});
+  }
+  if (changeInfo.status === 'complete') {
+    installMuteHook(tabId).catch(() => {});
+  }
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'processNextTranscript') {
+    await processNextTranscriptInBatch();
+    return;
+  }
   if (alarm.name !== 'pollChannel') return;
   await checkForNewVideosBackground();
 });
@@ -46,6 +70,8 @@ async function handleApi(path, body) {
   if (path === '/api/check-new-videos') return checkNewVideos(body);
   if (path === '/api/channel-settings') return channelSettings(body);
   if (path === '/api/mark-processed') return markProcessed(body);
+  if (path === '/api/fetch-transcripts-batch') return fetchTranscriptsBatch(body);
+  if (path === '/api/transcript-batch-status') return transcriptBatchStatus();
   return { ok: false, error: `Unknown extension API route: ${path}` };
 }
 
@@ -224,7 +250,6 @@ async function channelSettings(body = {}) {
       channelUrl: body.channelUrl ? normalizeChannelUrl(body.channelUrl) : undefined,
       pollIntervalMinutes: body.pollIntervalMinutes,
       notificationsEnabled: body.notificationsEnabled,
-      transcriptFetchMode: body.transcriptFetchMode,
     });
     if (body.pollIntervalMinutes) await schedulePoll(next.pollIntervalMinutes);
     const badge = await updateActionBadge(next);
@@ -244,6 +269,199 @@ async function markProcessed(body) {
   const badge = await updateActionBadge(next);
   return { ok: true, processedVideoIds: next.processedVideoIds, pendingCount: badge };
 }
+
+const PROJECT_STATE_KEY = 'fruitTranscriptMinerStateV2';
+const TRANSCRIPT_BATCH_KEY = 'transcriptBatchJob';
+let batchProcessing = false;
+
+function hasTranscriptSegments(video) {
+  return Array.isArray(video?.segments) && video.segments.length > 0;
+}
+
+function isBatchProcessable(video) {
+  return video?.relevance !== 'irrelevant' && video?.status !== 'skipped' && !hasTranscriptSegments(video);
+}
+
+async function loadProjectState() {
+  const stored = await chrome.storage.local.get(PROJECT_STATE_KEY);
+  return stored[PROJECT_STATE_KEY] || { videos: [], priceRows: [], currentStep: 1 };
+}
+
+async function saveProjectState(patch) {
+  const current = await loadProjectState();
+  const next = {
+    ...current,
+    ...patch,
+    videos: patch.videos || current.videos || [],
+    priceRows: patch.priceRows || current.priceRows || [],
+  };
+  await chrome.storage.local.set({ [PROJECT_STATE_KEY]: next });
+  return next;
+}
+
+function broadcastTranscriptBatchEvent(payload) {
+  chrome.runtime.sendMessage({ type: 'transcript-batch-event', ...payload }).catch(() => {});
+}
+
+async function transcriptBatchStatus() {
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  return { ok: true, job: stored[TRANSCRIPT_BATCH_KEY] || null };
+}
+
+async function fetchTranscriptsBatch(body) {
+  const delayMs = Math.max(500, Number(body.delayMs || 1500));
+  const languages = safeText(body.languages || 'hi.*,hi,en.*');
+  const project = await loadProjectState();
+  const pending = (project.videos || []).filter(isBatchProcessable);
+
+  if (!pending.length) {
+    return { ok: true, started: false, total: 0, message: 'No pending transcripts.' };
+  }
+
+  const existing = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  if (existing[TRANSCRIPT_BATCH_KEY]?.running) {
+    return { ok: true, started: false, alreadyRunning: true, total: existing[TRANSCRIPT_BATCH_KEY].total || 0 };
+  }
+
+  await chrome.storage.local.set({
+    [TRANSCRIPT_BATCH_KEY]: {
+      running: true,
+      queue: pending.map(video => video.id),
+      delayMs,
+      languages,
+      total: pending.length,
+      done: 0,
+      currentId: null,
+      currentTitle: null,
+      startedAt: new Date().toISOString(),
+    },
+  });
+
+  processNextTranscriptInBatch().catch(error => console.warn('Transcript batch failed:', error));
+
+  return { ok: true, started: true, total: pending.length };
+}
+
+async function resumeTranscriptBatchIfNeeded() {
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (job?.running && job.queue?.length) {
+    processNextTranscriptInBatch().catch(error => console.warn('Transcript batch resume failed:', error));
+  }
+}
+
+async function finishTranscriptBatch(job, doneCount) {
+  await chrome.storage.local.set({
+    [TRANSCRIPT_BATCH_KEY]: {
+      ...job,
+      running: false,
+      queue: [],
+      currentId: null,
+      currentTitle: null,
+      finishedAt: new Date().toISOString(),
+    },
+  });
+  await saveProjectState({ currentStep: 3 });
+  broadcastTranscriptBatchEvent({ event: 'complete', done: doneCount, total: job.total || doneCount });
+}
+
+async function processNextTranscriptInBatch() {
+  if (batchProcessing) return;
+
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (!job?.running || !job.queue?.length) {
+    if (job?.running) await finishTranscriptBatch(job, job.done || 0);
+    return;
+  }
+
+  batchProcessing = true;
+  const videoId = job.queue[0];
+  const project = await loadProjectState();
+  const videos = [...(project.videos || [])];
+  const index = videos.findIndex(video => video.id === videoId);
+
+  if (index === -1) {
+    const nextJob = { ...job, queue: job.queue.slice(1), done: job.done + 1 };
+    if (!nextJob.queue.length) {
+      batchProcessing = false;
+      await finishTranscriptBatch(nextJob, nextJob.done);
+      return;
+    }
+    await chrome.storage.local.set({ [TRANSCRIPT_BATCH_KEY]: nextJob });
+    batchProcessing = false;
+    chrome.alarms.create('processNextTranscript', { when: Date.now() + job.delayMs });
+    return;
+  }
+
+  const video = { ...videos[index] };
+  video.status = 'running';
+  video.error = '';
+  videos[index] = video;
+
+  await chrome.storage.local.set({
+    [TRANSCRIPT_BATCH_KEY]: { ...job, currentId: videoId, currentTitle: video.title || videoId },
+  });
+  await saveProjectState({ videos, currentStep: 2 });
+  broadcastTranscriptBatchEvent({ event: 'progress', videoId, status: 'running', title: video.title || videoId });
+
+  try {
+    const result = await transcript({ id: video.id, videoUrl: video.url, languages: job.languages });
+    Object.assign(video, {
+      status: 'ok',
+      language: result.language,
+      transcriptText: result.transcriptText,
+      segments: result.segments || [],
+      error: '',
+      isNew: false,
+      needsWork: false,
+    });
+    await markProcessed({ videoIds: [video.id] });
+    broadcastTranscriptBatchEvent({
+      event: 'progress',
+      videoId,
+      status: 'ok',
+      title: video.title || videoId,
+      segmentCount: result.segmentCount || video.segments.length,
+      method: result.method || '',
+    });
+  } catch (error) {
+    video.status = 'failed';
+    video.error = safeText(error?.message || error).slice(0, 200);
+    broadcastTranscriptBatchEvent({
+      event: 'progress',
+      videoId,
+      status: 'failed',
+      title: video.title || videoId,
+      error: video.error,
+    });
+  }
+
+  videos[index] = video;
+  const nextQueue = job.queue.slice(1);
+  const nextJob = {
+    ...job,
+    queue: nextQueue,
+    done: job.done + 1,
+    currentId: null,
+    currentTitle: null,
+    running: nextQueue.length > 0,
+  };
+
+  await saveProjectState({ videos, currentStep: nextQueue.length ? 2 : 3 });
+  await chrome.storage.local.set({ [TRANSCRIPT_BATCH_KEY]: nextJob });
+  batchProcessing = false;
+
+  if (nextQueue.length) {
+    chrome.alarms.create('processNextTranscript', { when: Date.now() + job.delayMs });
+  } else {
+    await finishTranscriptBatch(nextJob, nextJob.done);
+  }
+}
+
+chrome.runtime.onStartup.addListener(() => {
+  resumeTranscriptBatchIfNeeded().catch(() => {});
+});
 
 async function listVideos(body) {
   const channelUrl = normalizeChannelUrl(body.channelUrl);
@@ -330,10 +548,8 @@ async function transcript(body) {
   if (!/^https?:\/\//i.test(videoUrl)) return { ok: false, error: 'Invalid video URL.' };
 
   let result = null;
-  const settings = await loadChannelSettings();
-  const fetchMode = safeText(body.fetchMode || settings.transcriptFetchMode || 'background');
   try {
-    result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages, { fetchMode });
+    result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages);
   } catch (tabError) {
     try {
       result = await fetchTranscriptFromHtml(videoUrl, id, languages);
@@ -443,6 +659,75 @@ async function extractPricesAi(body) {
 }
 
 let cachedYouTubeTabId = null;
+const WORKER_TAB_KEY = 'youtubeWorkerTabId';
+const WORKER_TAB_URL = 'https://www.youtube.com/?fruit_miner=worker';
+
+async function getStoredWorkerTabId() {
+  const data = await chrome.storage.local.get(WORKER_TAB_KEY);
+  return data[WORKER_TAB_KEY] || null;
+}
+
+async function setStoredWorkerTabId(tabId) {
+  if (tabId) await chrome.storage.local.set({ [WORKER_TAB_KEY]: tabId });
+  else await chrome.storage.local.remove(WORKER_TAB_KEY);
+}
+
+async function muteWorkerTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab?.mutedInfo?.muted) await chrome.tabs.update(tabId, { muted: true });
+  } catch {
+    // Tab may have been closed.
+  }
+}
+
+function installMuteHookInPage() {
+  if (window.__fruitMinerMuteHook) return true;
+  window.__fruitMinerMuteHook = true;
+
+  const enforce = () => {
+    const video = document.querySelector('video');
+    if (!video) return;
+    video.muted = true;
+    video.volume = 0;
+    video.defaultMuted = true;
+    try {
+      video.pause();
+    } catch {
+      // ignore
+    }
+  };
+
+  enforce();
+  new MutationObserver(enforce).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('play', (event) => {
+    const target = event.target;
+    if (target?.tagName === 'VIDEO') {
+      target.muted = true;
+      target.volume = 0;
+    }
+  }, true);
+  document.addEventListener('volumechange', (event) => {
+    const target = event.target;
+    if (target?.tagName === 'VIDEO' && !target.muted) {
+      target.muted = true;
+      target.volume = 0;
+    }
+  }, true);
+  return true;
+}
+
+async function installMuteHook(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: installMuteHookInPage,
+    });
+  } catch {
+    // Page may still be loading.
+  }
+}
 
 function isYouTubeUrl(url) {
   return /(youtube\.com|youtu\.be|googlevideo\.com)/i.test(String(url || ''));
@@ -464,32 +749,72 @@ async function waitForTabComplete(tabId, timeoutMs = 20000, expectedVideoId = ''
   throw new Error('YouTube tab took too long to load.');
 }
 
+async function prepareWorkerTab(tabId) {
+  try {
+    await chrome.tabs.update(tabId, { muted: true, autoDiscardable: false });
+  } catch {
+    // Tab may have been closed.
+  }
+  await muteWorkerTab(tabId);
+}
+
 async function ensureYouTubeTab() {
   if (cachedYouTubeTabId) {
     try {
       await chrome.tabs.get(cachedYouTubeTabId);
+      await prepareWorkerTab(cachedYouTubeTabId);
       return cachedYouTubeTabId;
     } catch {
       cachedYouTubeTabId = null;
+      await setStoredWorkerTabId(null);
     }
   }
 
-  const tabs = await chrome.tabs.query({ url: ['https://www.youtube.com/*', 'https://youtu.be/*'] });
-  if (tabs.length && tabs[0].id) {
-    cachedYouTubeTabId = tabs[0].id;
-    return cachedYouTubeTabId;
+  const storedId = await getStoredWorkerTabId();
+  if (storedId) {
+    try {
+      await chrome.tabs.get(storedId);
+      cachedYouTubeTabId = storedId;
+      await prepareWorkerTab(storedId);
+      return storedId;
+    } catch {
+      await setStoredWorkerTabId(null);
+    }
   }
 
-  const tab = await chrome.tabs.create({ url: 'https://www.youtube.com/', active: false });
+  const tab = await chrome.tabs.create({
+    url: WORKER_TAB_URL,
+    active: false,
+  });
   cachedYouTubeTabId = tab.id;
+  await setStoredWorkerTabId(tab.id);
   await waitForTabComplete(cachedYouTubeTabId, 25000);
+  await prepareWorkerTab(cachedYouTubeTabId);
+  try {
+    await chrome.tabs.move(cachedYouTubeTabId, { index: -1 });
+  } catch {
+    // ignore
+  }
+  await installMuteHook(cachedYouTubeTabId);
   return cachedYouTubeTabId;
 }
 
-async function runInYouTubeTab(func, args = []) {
-  const tabId = await ensureYouTubeTab();
+async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
+  await prepareWorkerTab(tabId);
+  const tab = await chrome.tabs.get(tabId);
+  const currentUrl = String(tab.url || '');
+  if (!currentUrl.includes(videoId)) {
+    await chrome.tabs.update(tabId, { url: videoUrl, active: false, autoDiscardable: false });
+    await waitForTabComplete(tabId, 45000, videoId);
+  }
+  await prepareWorkerTab(tabId);
+  await installMuteHook(tabId);
+}
+
+async function runInYouTubeTab(func, args = [], tabId = null) {
+  const targetTabId = tabId || await ensureYouTubeTab();
   const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId },
+    target: { tabId: targetTabId },
     world: 'MAIN',
     func,
     args,
@@ -515,114 +840,87 @@ async function fetchTextViaYouTubeTab(url) {
   return result.text;
 }
 
-async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options = {}) {
+async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
-  await chrome.tabs.update(tabId, { url: videoUrl, active: false });
-  await waitForTabComplete(tabId, 30000, videoId);
+  await prepareWorkerTab(tabId);
 
-  const fetchMode = safeText(options.fetchMode || 'background');
-  const result = await runInYouTubeTab(fetchTranscriptInPageContext, [videoId, languages, fetchMode]);
-  if (!result?.ok) {
-    throw new Error(result?.error || 'Failed to fetch transcript in YouTube tab.');
+  try {
+    const html = await fetchTextViaYouTubeTab(videoUrl);
+    const apiResult = await buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, 'fetch-html');
+    if (apiResult?.ok) return apiResult;
+  } catch {
+    // Fall through to navigated page context.
   }
-  return result;
+
+  await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
+
+  try {
+    const html = await fetchTextViaYouTubeTab(videoUrl);
+    const apiResult = await buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, 'navigated-html');
+    if (apiResult?.ok) return apiResult;
+  } catch {
+    // Fall through to innerTube in page.
+  }
+
+  const innerTubeResult = await runInYouTubeTab(fetchInnerTubeTranscriptInPage, [videoId, languages], tabId);
+  if (innerTubeResult?.ok) return innerTubeResult;
+
+  throw new Error(innerTubeResult?.error || 'Could not download captions. Stay signed in at youtube.com and retry.');
 }
 
-function fetchTranscriptInPageContext(expectedVideoId, languages, fetchMode) {
+async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, methodPrefix) {
+  const player = extractJsonObject(html, 'ytInitialPlayerResponse');
+  if (player?.videoDetails?.videoId !== videoId) {
+    throw new Error('Player HTML did not match requested video.');
+  }
+
+  const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+  if (tracks.length) {
+    const selected = chooseCaptionTrack(tracks, languages);
+    const captionUrl = withCaptionFormat(selected.baseUrl);
+    const captionText = await fetchTextViaYouTubeTab(captionUrl);
+    let segments = parseVtt(captionText);
+    if (!segments.length) segments = parseXmlCaptions(captionText);
+    if (segments.length) {
+      return {
+        ok: true,
+        language: selected.languageCode || 'unknown',
+        fileName: selected.name?.simpleText || selected.languageCode || 'caption',
+        segments,
+        method: `${methodPrefix}-caption`,
+      };
+    }
+  }
+
+  const innerTubeResult = await runInYouTubeTab(fetchInnerTubeTranscriptInPage, [videoId, languages, player], tabId);
+  if (innerTubeResult?.ok) return innerTubeResult;
+
+  throw new Error('No captions found in player HTML.');
+}
+
+function parseXmlCaptions(xmlText) {
+  const segments = [];
+  const blocks = [...String(xmlText || '').matchAll(/<text\b([^>]*)>([\s\S]*?)<\/text>/gi)];
+  for (const block of blocks) {
+    const attrs = block[1] || '';
+    const start = Number((attrs.match(/\bstart="([^"]+)"/) || [])[1] || 0);
+    const duration = Number((attrs.match(/\bdur="([^"]+)"/) || [])[1] || 0);
+    const text = stripHtml(block[2] || '');
+    if (!text) continue;
+    const end = start + duration;
+    segments.push({
+      start: Number(start.toFixed(3)),
+      end: Number(end.toFixed(3)),
+      duration: Number(Math.max(0, duration).toFixed(3)),
+      timestamp_label: secondsToClock(start),
+      text,
+    });
+  }
+  return segments;
+}
+
+function fetchInnerTubeTranscriptInPage(expectedVideoId, languages, playerFromHtml) {
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-  function readBalancedJson(text, start) {
-    let depth = 0;
-    let inString = false;
-    let quote = '';
-    let escaped = false;
-    for (let i = start; i < text.length; i++) {
-      const char = text[i];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === '\\') escaped = true;
-        else if (char === quote) inString = false;
-        continue;
-      }
-      if (char === '"' || char === "'") {
-        inString = true;
-        quote = char;
-      } else if (char === '{') depth++;
-      else if (char === '}') {
-        depth--;
-        if (depth === 0) return text.slice(start, i + 1);
-      }
-    }
-    return '';
-  }
-
-  function parsePlayerFromScripts() {
-    if (window.ytInitialPlayerResponse?.videoDetails?.videoId) {
-      return { player: window.ytInitialPlayerResponse, method: 'window' };
-    }
-
-    const scripts = document.querySelectorAll('script');
-    for (const script of scripts) {
-      const text = script.textContent || '';
-      const markerIndex = text.indexOf('ytInitialPlayerResponse');
-      if (markerIndex === -1) continue;
-      const brace = text.indexOf('{', markerIndex);
-      if (brace === -1) continue;
-      const json = readBalancedJson(text, brace);
-      if (!json) continue;
-      try {
-        const player = JSON.parse(json);
-        if (player?.videoDetails?.videoId) return { player, method: 'script-tag' };
-      } catch {
-        continue;
-      }
-    }
-
-    const html = document.documentElement?.outerHTML || '';
-    const markerIndex = html.indexOf('ytInitialPlayerResponse');
-    if (markerIndex !== -1) {
-      const brace = html.indexOf('{', markerIndex);
-      const json = brace === -1 ? '' : readBalancedJson(html, brace);
-      if (json) {
-        try {
-          const player = JSON.parse(json);
-          if (player?.videoDetails?.videoId) return { player, method: 'html' };
-        } catch {
-          // fall through
-        }
-      }
-    }
-
-    return null;
-  }
-
-  function chooseTrack(tracks, wantedLanguages) {
-    const wanted = String(wantedLanguages || '')
-      .split(',')
-      .map(value => value.trim().replace('.*', '').toLowerCase())
-      .filter(Boolean);
-    return [...tracks].sort((a, b) => {
-      const aScore = wanted.findIndex(lang => String(a.languageCode || '').toLowerCase().startsWith(lang));
-      const bScore = wanted.findIndex(lang => String(b.languageCode || '').toLowerCase().startsWith(lang));
-      return (aScore === -1 ? 99 : aScore) - (bScore === -1 ? 99 : bScore);
-    })[0];
-  }
-
-  function vttTimeToSeconds(ts) {
-    const parts = String(ts).replace(',', '.').split(':');
-    if (parts.length === 3) return Number(parts[0]) * 3600 + Number(parts[1]) * 60 + Number(parts[2]);
-    if (parts.length === 2) return Number(parts[0]) * 60 + Number(parts[1]);
-    return Number(ts) || 0;
-  }
-
-  function secondsToClock(seconds) {
-    const s = Math.max(0, Math.floor(Number(seconds) || 0));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-    return `${m}:${String(sec).padStart(2, '0')}`;
-  }
 
   function stripHtml(text) {
     return String(text || '')
@@ -636,268 +934,21 @@ function fetchTranscriptInPageContext(expectedVideoId, languages, fetchMode) {
       .trim();
   }
 
-  function parseVtt(vttText) {
-    const lines = String(vttText || '').replace(/\r/g, '').split('\n');
+  function secondsToClock(seconds) {
+    const s = Math.max(0, Math.floor(Number(seconds) || 0));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  }
+
+  function cuesToSegments(cues) {
     const segments = [];
-    let current = null;
-
-    function pushCurrent() {
-      if (!current || !current.textParts.length) return;
-      const text = stripHtml(current.textParts.join(' '));
-      if (!text) return;
-      segments.push({
-        start: Number(current.start.toFixed(3)),
-        end: Number(current.end.toFixed(3)),
-        duration: Number(Math.max(0, current.end - current.start).toFixed(3)),
-        timestamp_label: secondsToClock(current.start),
-        text,
-      });
-    }
-
-    for (const raw of lines) {
-      const line = raw.trim();
-      if (!line || line === 'WEBVTT' || line.startsWith('Kind:') || line.startsWith('Language:')) continue;
-      if (/^(NOTE|STYLE|REGION)\b/.test(line)) continue;
-      const match = line.match(/(\d{1,2}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s+-->\s+(\d{1,2}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/);
-      if (match) {
-        pushCurrent();
-        current = { start: vttTimeToSeconds(match[1]), end: vttTimeToSeconds(match[2]), textParts: [] };
-      } else if (current && !/^\d+$/.test(line)) {
-        current.textParts.push(line);
-      }
-    }
-    pushCurrent();
-    return segments.filter((seg, index) => seg.text && (!index || seg.text !== segments[index - 1].text));
-  }
-
-  function parseXmlCaptions(xmlText) {
-    const segments = [];
-    const blocks = [...String(xmlText || '').matchAll(/<text\b([^>]*)>([\s\S]*?)<\/text>/gi)];
-    for (const block of blocks) {
-      const attrs = block[1] || '';
-      const start = Number((attrs.match(/\bstart="([^"]+)"/) || [])[1] || 0);
-      const duration = Number((attrs.match(/\bdur="([^"]+)"/) || [])[1] || 0);
-      const text = stripHtml(block[2] || '');
-      if (!text) continue;
-      const end = start + duration;
-      segments.push({
-        start: Number(start.toFixed(3)),
-        end: Number(end.toFixed(3)),
-        duration: Number(Math.max(0, duration).toFixed(3)),
-        timestamp_label: secondsToClock(start),
-        text,
-      });
-    }
-    return segments;
-  }
-
-  async function fetchCaptionSegments(track) {
-    const baseUrl = track?.baseUrl;
-    if (!baseUrl) throw new Error('Caption track has no URL.');
-
-    const vttUrl = new URL(baseUrl);
-    vttUrl.searchParams.set('fmt', 'vtt');
-    const vttResponse = await fetch(vttUrl.toString(), { credentials: 'include' });
-    const vttText = await vttResponse.text();
-    let segments = parseVtt(vttText);
-    if (segments.length) return { segments, format: 'vtt' };
-
-    const xmlResponse = await fetch(baseUrl, { credentials: 'include' });
-    const xmlText = await xmlResponse.text();
-    segments = parseXmlCaptions(xmlText);
-    if (segments.length) return { segments, format: 'xml' };
-
-    throw new Error(`Caption download failed (HTTP ${vttResponse.status || xmlResponse.status || 'unknown'}).`);
-  }
-
-  function parseClockLabel(label) {
-    const parts = String(label || '').trim().split(':').map(Number);
-    if (parts.some(part => !Number.isFinite(part))) return 0;
-    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-    if (parts.length === 2) return parts[0] * 60 + parts[1];
-    return parts[0] || 0;
-  }
-
-  function findClickableByText(patterns) {
-    const nodes = document.querySelectorAll('button, yt-button-shape button, tp-yt-paper-button, a, span, yt-formatted-string');
-    for (const node of nodes) {
-      const text = (node.textContent || node.getAttribute('aria-label') || '').trim();
-      if (!text) continue;
-      if (patterns.some(pattern => pattern.test(text))) return node;
-    }
-    return null;
-  }
-
-  function findTranscriptButton() {
-    const selectors = [
-      'ytd-video-description-transcript-section-renderer button',
-      'ytd-video-description-transcript-section-renderer yt-button-shape button',
-      'button[aria-label="Show transcript"]',
-      'button[aria-label*="transcript" i]',
-      'button[aria-label*="Transcript" i]',
-      'button[aria-label*="प्रतिलिपि" i]',
-      'button[aria-label*="ट्रांसक्रिप्ट" i]',
-    ];
-    for (const selector of selectors) {
-      const button = document.querySelector(selector);
-      if (button) return button;
-    }
-    return findClickableByText([/show transcript/i, /transcript/i, /प्रतिलिपि/i, /ट्रांसक्रिप्ट/i]);
-  }
-
-  function forceTranscriptPanelOpen() {
-    const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
-    for (const panel of panels) {
-      const targetId = panel.getAttribute('target-id') || '';
-      if (targetId.includes('transcript')) {
-        panel.setAttribute('visibility', 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED');
-      }
-    }
-  }
-
-  async function openTranscriptPanel() {
-    const moreButton = document.querySelector('#expand, ytd-text-inline-expander #expand, tp-yt-paper-button#expand')
-      || findClickableByText([/^\.\.\.more$/i, /^…more$/i, /^show more$/i, /^और दिखाएं$/i]);
-    if (moreButton) {
-      moreButton.click();
-      await sleep(900);
-    }
-
-    const transcriptButton = findTranscriptButton();
-    if (transcriptButton) {
-      transcriptButton.click();
-      await sleep(1200);
-    }
-
-    forceTranscriptPanelOpen();
-    await sleep(800);
-  }
-
-  function extractSegmentsFromDom() {
-    const segmentSelectors = [
-      'ytd-transcript-segment-renderer',
-      'transcript-segment-view-model',
-      'ytd-transcript-segment-list-renderer .segment',
-    ];
-
-    let nodes = [];
-    for (const selector of segmentSelectors) {
-      const found = document.querySelectorAll(selector);
-      if (found.length) {
-        nodes = [...found];
-        break;
-      }
-    }
-
-    if (!nodes.length) {
-      const panel = document.querySelector('ytd-engagement-panel-section-list-renderer[target-id*="transcript"]');
-      if (panel) {
-        const textNodes = panel.querySelectorAll('.segment-text, yt-formatted-string.segment-text');
-        const timestampNodes = panel.querySelectorAll('.segment-timestamp, .segment-start-offset');
-        if (textNodes.length) {
-          const segments = [];
-          const count = Math.max(textNodes.length, timestampNodes.length);
-          for (let i = 0; i < count; i++) {
-            const text = stripHtml(textNodes[i]?.textContent || '');
-            const start = parseClockLabel(timestampNodes[i]?.textContent || `${i}`);
-            if (!text) continue;
-            segments.push({
-              start: Number(start.toFixed(3)),
-              end: Number(start.toFixed(3)),
-              duration: 0,
-              timestamp_label: secondsToClock(start),
-              text,
-            });
-          }
-          return segments;
-        }
-      }
-      return [];
-    }
-
-    const segments = [];
-    for (const node of nodes) {
-      const timestampEl = node.querySelector('.segment-timestamp, .segment-start-offset, [class*="timestamp"]');
-      const textEl = node.querySelector('.segment-text, yt-formatted-string.segment-text, yt-formatted-string');
-      const text = stripHtml(textEl?.textContent || '');
-      const start = parseClockLabel(timestampEl?.textContent || '');
-      if (!text || (timestampEl && text === stripHtml(timestampEl.textContent || ''))) continue;
-      segments.push({
-        start: Number(start.toFixed(3)),
-        end: Number(start.toFixed(3)),
-        duration: 0,
-        timestamp_label: secondsToClock(start),
-        text,
-      });
-    }
-
-    for (let i = 0; i < segments.length; i++) {
-      const nextStart = segments[i + 1]?.start;
-      if (Number.isFinite(nextStart) && nextStart > segments[i].start) {
-        segments[i].end = Number(nextStart.toFixed(3));
-        segments[i].duration = Number((segments[i].end - segments[i].start).toFixed(3));
-      }
-    }
-
-    return segments;
-  }
-
-  async function fetchTranscriptFromDom() {
-    await openTranscriptPanel();
-    for (let attempt = 0; attempt < 30; attempt++) {
-      const segments = extractSegmentsFromDom();
-      if (segments.length) return { segments, format: 'dom' };
-      if (attempt % 4 === 3) {
-        const button = findTranscriptButton();
-        if (button) button.click();
-        forceTranscriptPanelOpen();
-      }
-      await sleep(500);
-    }
-    return null;
-  }
-
-  async function fetchViaInnerTube(player) {
-    const params = player?.captions?.playerCaptionsTracklistRenderer?.openTranscriptParams
-      || player?.engagementPanels
-        ?.map(panel => panel?.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint?.params)
-        .find(Boolean);
-
-    if (!params) return null;
-
-    const apiKey = window.ytcfg?.data_?.INNERTUBE_API_KEY
-      || window.ytcfg?.get?.('INNERTUBE_API_KEY')
-      || '';
-    const clientVersion = window.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION
-      || window.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION')
-      || '2.20260101.00.00';
-
-    if (!apiKey) return null;
-
-    const response = await fetch(`https://www.youtube.com/youtubei/v1/get_transcript?key=${encodeURIComponent(apiKey)}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        context: {
-          client: {
-            clientName: 'WEB',
-            clientVersion,
-          },
-        },
-        params,
-      }),
-    });
-
-    const data = await response.json().catch(() => null);
-    const cues = data?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer?.body?.transcriptBodyRenderer?.cueGroups
-      || [];
-
-    const segments = [];
-    for (const group of cues) {
+    for (const group of cues || []) {
       for (const cue of group?.transcriptCueGroupRenderer?.cues || []) {
         const renderer = cue?.transcriptCueRenderer;
-        const text = stripHtml(renderer?.cue?.simpleText || '');
+        const text = stripHtml(renderer?.cue?.simpleText || renderer?.cue?.runs?.map(run => run.text).join('') || '');
         const startMs = Number(renderer?.startOffsetMs || renderer?.startMs || 0);
         if (!text) continue;
         const start = startMs / 1000;
@@ -912,75 +963,90 @@ function fetchTranscriptInPageContext(expectedVideoId, languages, fetchMode) {
         });
       }
     }
+    return segments;
+  }
 
-    return segments.length ? { segments, format: 'innertube' } : null;
+  function getTranscriptParams(player) {
+    const fromCaptions = player?.captions?.playerCaptionsTracklistRenderer?.openTranscriptParams;
+    if (fromCaptions) return fromCaptions;
+
+    const panelLists = [
+      player?.engagementPanels,
+      window.ytInitialData?.engagementPanels,
+      window.ytInitialData?.contents?.twoColumnWatchNextResults?.results?.results?.contents,
+    ];
+
+    for (const panels of panelLists) {
+      if (!Array.isArray(panels)) continue;
+      for (const panel of panels) {
+        const params = panel?.engagementPanelSectionListRenderer?.content?.continuationItemRenderer
+          ?.continuationEndpoint?.getTranscriptEndpoint?.params;
+        if (params) return params;
+      }
+    }
+    return '';
+  }
+
+  function parseInnerTubeResponse(data) {
+    const cuePaths = [
+      data?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer?.body?.transcriptBodyRenderer?.cueGroups,
+      data?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer?.content?.transcriptSearchPanelRenderer?.body?.transcriptBodyRenderer?.cueGroups,
+      data?.actions?.[0]?.appendContinuationItemsAction?.continuationItems?.[0]?.transcriptSectionHeaderRenderer?.transcript?.body?.transcriptBodyRenderer?.cueGroups,
+    ];
+    for (const cues of cuePaths) {
+      const segments = cuesToSegments(cues);
+      if (segments.length) return segments;
+    }
+    return [];
   }
 
   return (async () => {
-    let playerResult = null;
-    for (let attempt = 0; attempt < 30; attempt++) {
-      playerResult = parsePlayerFromScripts();
-      if (playerResult?.player?.videoDetails?.videoId === expectedVideoId) break;
+    const video = document.querySelector('video');
+    if (video) {
+      video.muted = true;
+      video.volume = 0;
+      try { video.pause(); } catch { /* ignore */ }
+    }
+
+    let player = playerFromHtml || window.ytInitialPlayerResponse || null;
+    for (let attempt = 0; attempt < 20 && (!player || player?.videoDetails?.videoId !== expectedVideoId); attempt++) {
+      if (window.ytInitialPlayerResponse?.videoDetails?.videoId === expectedVideoId) {
+        player = window.ytInitialPlayerResponse;
+        break;
+      }
       await sleep(500);
     }
 
-    if (!playerResult?.player) {
-      return { ok: false, error: 'YouTube player data not ready. Keep youtube.com open, sign in, and retry.' };
+    const params = getTranscriptParams(player);
+    if (!params) return { ok: false, error: 'No innerTube transcript params in player data.' };
+
+    const apiKey = window.ytcfg?.data_?.INNERTUBE_API_KEY || window.ytcfg?.get?.('INNERTUBE_API_KEY') || '';
+    const clientVersion = window.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION || window.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION') || '2.20260101.00.00';
+    if (!apiKey) return { ok: false, error: 'YouTube API key missing in page context.' };
+
+    const response = await fetch(`https://www.youtube.com/youtubei/v1/get_transcript?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        context: { client: { clientName: 'WEB', clientVersion } },
+        params,
+      }),
+    });
+
+    const data = await response.json().catch(() => null);
+    const segments = parseInnerTubeResponse(data);
+    if (!segments.length) {
+      return { ok: false, error: `innerTube transcript empty (HTTP ${response.status}).` };
     }
 
-    if (playerResult.player.videoDetails?.videoId !== expectedVideoId) {
-      return {
-        ok: false,
-        error: `Loaded wrong video in YouTube tab (${playerResult.player.videoDetails?.videoId || 'unknown'}). Retry transcript fetch.`,
-      };
-    }
-
-    const tracks = playerResult.player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-    const language = chooseTrack(tracks, languages)?.languageCode || 'unknown';
-
-    const innerTube = await fetchViaInnerTube(playerResult.player);
-    if (innerTube?.segments?.length) {
-      return {
-        ok: true,
-        language,
-        fileName: 'innertube-transcript',
-        segments: innerTube.segments,
-        method: `innertube-${innerTube.format}`,
-      };
-    }
-
-    if (tracks.length) {
-      const selected = chooseTrack(tracks, languages);
-      try {
-        const captionResult = await fetchCaptionSegments(selected);
-        return {
-          ok: true,
-          language: selected.languageCode || 'unknown',
-          fileName: selected.name?.simpleText || selected.languageCode || 'caption',
-          segments: captionResult.segments,
-          method: `${playerResult.method}-${captionResult.format}`,
-        };
-      } catch {
-        // fall through to transcript panel scrape
-      }
-    }
-
-    const domResult = await fetchTranscriptFromDom();
-    if (domResult?.segments?.length) {
-      return {
-        ok: true,
-        language,
-        fileName: 'youtube-transcript-panel',
-        segments: domResult.segments,
-        method: `panel-${domResult.format}`,
-      };
-    }
-
-    if (!tracks.length) {
-      return { ok: false, error: 'No captions on this video. Open it on YouTube and confirm CC is available.' };
-    }
-
-    return { ok: false, error: 'Could not load captions in background. Retry, or switch transcript mode in Settings.' };
+    return {
+      ok: true,
+      language: String(languages || '').split(',')[0] || 'unknown',
+      fileName: 'innertube-transcript',
+      segments,
+      method: 'innertube-api',
+    };
   })();
 }
 

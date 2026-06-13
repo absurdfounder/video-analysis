@@ -323,47 +323,6 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   border-color: rgba(26, 122, 76, 0.35);
 }
 
-.embed-worker {
-  margin: 14px 0 16px;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  overflow: hidden;
-  background: #0f1411;
-}
-
-.embed-worker.hidden {
-  display: none;
-}
-
-.embed-worker-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #f4f7f5;
-}
-
-.embed-worker-head strong {
-  display: block;
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.embed-worker-status {
-  margin: 4px 0 0;
-  font-size: 12px;
-  color: rgba(244, 247, 245, 0.72);
-}
-
-#embedWorkerFrame {
-  display: block;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border: 0;
-  background: #000;
-}
-
 .btn-view-transcript {
   margin-top: 10px;
   width: 100%;

@@ -70,8 +70,9 @@ function displayStatus(video) {
   return 'pending';
 }
 
-function normalizeVideos() {
+function normalizeVideos({ keepRunning = false } = {}) {
   for (const video of state.videos) {
+    if (!keepRunning && video.status === 'running') video.status = 'pending';
     if (video.status === 'ok' && !hasTranscriptData(video)) video.status = 'pending';
     if (hasTranscriptData(video)) video.status = 'ok';
   }
@@ -201,51 +202,12 @@ function timestampUrl(videoUrl, seconds) {
 
 let modalVideoId = '';
 
-function getTranscriptFetchMode() {
-  return ($('transcriptFetchMode')?.value || localStorage.getItem('fruitTranscriptMinerFetchMode') || 'background').trim();
-}
-
-function updateTranscriptModeUi() {
-  const mode = getTranscriptFetchMode();
-  if (mode !== 'embed-preview') $('embedWorker')?.classList.add('hidden');
-
-  if ($('stepDesc2') && state.currentStep === 2) {
-    $('stepDesc2').textContent = mode === 'embed-preview'
-      ? 'Preview each video here while captions load silently in a background YouTube tab.'
-      : 'Download Hindi captions for relevant videos only. Runs silently in a background YouTube tab.';
-  }
-
-  if ($('transcriptModeHint')) {
-    $('transcriptModeHint').textContent = mode === 'embed-preview'
-      ? 'Embed preview shows the current video on this page. Captions are still fetched from a hidden YouTube tab — you can keep working elsewhere.'
-      : 'Background mode keeps working while you use other tabs. Stay signed in at youtube.com.';
-  }
-}
-
-function showEmbedWorker(video, status = 'Fetching captions in background...') {
-  if (getTranscriptFetchMode() !== 'embed-preview' || !video) return;
-  const panel = $('embedWorker');
-  if (panel) panel.classList.remove('hidden');
-  if ($('embedWorkerTitle')) $('embedWorkerTitle').textContent = video.title || video.id;
-  if ($('embedWorkerStatus')) $('embedWorkerStatus').textContent = status;
-  if ($('embedWorkerFrame') && video.id) {
-    $('embedWorkerFrame').src = `https://www.youtube.com/embed/${video.id}?rel=0&modestbranding=1`;
-  }
-}
-
-function hideEmbedWorker() {
-  if ($('embedWorkerFrame')) $('embedWorkerFrame').src = 'about:blank';
-  if (getTranscriptFetchMode() !== 'embed-preview') $('embedWorker')?.classList.add('hidden');
-}
-
 async function fetchTranscriptForVideo(video) {
   const languages = ($('languages')?.value || 'hi.*,hi,en.*').trim();
-  const fetchMode = getTranscriptFetchMode();
   video.status = 'running';
-  showEmbedWorker(video, 'Fetching captions in background...');
   renderVideos();
   try {
-    const data = await api('/api/transcript', { id: video.id, videoUrl: video.url, languages, fetchMode });
+    const data = await api('/api/transcript', { id: video.id, videoUrl: video.url, languages });
     Object.assign(video, {
       status: 'ok',
       language: data.language,
@@ -256,12 +218,10 @@ async function fetchTranscriptForVideo(video) {
       needsWork: false,
     });
     if (hasTranscriptData(video)) await markVideosProcessed([video.id]);
-    showEmbedWorker(video, `Loaded ${segmentCount(video)} caption lines`);
     log(`Transcript loaded: ${video.title} (${segmentCount(video)} lines${data.method ? ` · ${data.method}` : ''})`);
   } catch (error) {
     video.status = 'failed';
     video.error = error.message.slice(0, 200);
-    showEmbedWorker(video, `Failed: ${error.message.slice(0, 80)}`);
     log(`Transcript failed: ${video.title}: ${error.message}`);
     throw error;
   } finally {
@@ -454,8 +414,6 @@ function updateUI() {
   if ($('syncSummary') && state.lastSync) {
     $('syncSummary').textContent = `Last dataset update: ${new Date(state.lastSync).toLocaleString()} · ${state.priceRows.length} price rows · ${state.videos.length} videos`;
   }
-
-  updateTranscriptModeUi();
 }
 
 function setBusy(busy) {
@@ -563,25 +521,62 @@ async function fetchTranscriptsStep() {
   const pending = pendingTranscripts();
   if (!pending.length) {
     log('No pending transcripts.');
-    hideEmbedWorker();
     goToStep(3);
     return;
   }
 
-  log(`Fetching ${pending.length} transcript(s) in ${getTranscriptFetchMode()} mode...`);
-  updateTranscriptModeUi();
+  await saveLocal();
+  log(`Fetching ${pending.length} transcript(s) in background — you can switch tabs freely.`);
 
-  for (const video of pending) {
-    try {
-      await fetchTranscriptForVideo(video);
-    } catch {
-      // error already logged
-    }
-    if (delayMs > 0) await sleep(delayMs);
+  const data = await api('/api/fetch-transcripts-batch', {
+    delayMs,
+    languages: ($('languages')?.value || 'hi.*,hi,en.*').trim(),
+  });
+
+  if (data.alreadyRunning) {
+    log('Transcript batch already running in background.');
+    setBusy(true);
+    return;
   }
 
-  hideEmbedWorker();
-  goToStep(3);
+  if (!data.started) {
+    goToStep(3);
+    return;
+  }
+
+  setBusy(true);
+  goToStep(2);
+}
+
+function applySavedProject(saved, { keepRunning } = {}) {
+  if (!saved) return;
+  if (Array.isArray(saved.videos)) state.videos = saved.videos;
+  if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
+  if (saved.lastSync) state.lastSync = saved.lastSync;
+  if (saved.currentStep) state.currentStep = saved.currentStep;
+  const preserveRunning = keepRunning ?? (saved.videos || []).some(video => video.status === 'running');
+  normalizeVideos({ keepRunning: preserveRunning });
+  renderVideos();
+  renderPrices();
+  updateUI();
+}
+
+function syncFromStorageChanges(changes) {
+  if (changes.fruitTranscriptMinerStateV2?.newValue) {
+    applySavedProject(changes.fruitTranscriptMinerStateV2.newValue, {
+      keepRunning: Boolean(changes.transcriptBatchJob?.newValue?.running),
+    });
+    if (state.currentStep) goToStep(state.currentStep);
+  }
+
+  if (changes.transcriptBatchJob?.newValue) {
+    const job = changes.transcriptBatchJob.newValue;
+    setBusy(Boolean(job?.running));
+    if (!job?.running && job?.finishedAt) {
+      log(`Background transcript batch finished (${job.done || 0}/${job.total || 0}).`);
+      goToStep(3);
+    }
+  }
 }
 
 async function aiAnalysisStep() {
@@ -651,17 +646,11 @@ async function loadWatchSettings() {
   const settings = data.settings || {};
   if ($('pollIntervalMinutes')) $('pollIntervalMinutes').value = settings.pollIntervalMinutes || 360;
   if ($('notificationsEnabled')) $('notificationsEnabled').checked = settings.notificationsEnabled !== false;
-  if ($('transcriptFetchMode')) {
-    $('transcriptFetchMode').value = settings.transcriptFetchMode
-      || localStorage.getItem('fruitTranscriptMinerFetchMode')
-      || 'background';
-  }
   if ($('lastPollText')) {
     $('lastPollText').textContent = settings.lastPollAt
       ? `Last check: ${new Date(settings.lastPollAt).toLocaleString()}`
       : 'Last check: never';
   }
-  updateTranscriptModeUi();
 }
 
 document.querySelectorAll('.step').forEach(btn => {
@@ -675,9 +664,8 @@ $('stepBtn1')?.addEventListener('click', async () => {
 });
 
 $('stepBtn2')?.addEventListener('click', async () => {
-  try { setBusy(true); await fetchTranscriptsStep(); }
-  catch (e) { log(`Step 2 failed: ${e.message}`); }
-  finally { setBusy(false); }
+  try { await fetchTranscriptsStep(); }
+  catch (e) { log(`Step 2 failed: ${e.message}`); setBusy(false); }
 });
 
 $('stepBtn3')?.addEventListener('click', async () => {
@@ -695,24 +683,16 @@ $('stepBtn4')?.addEventListener('click', async () => {
 $('saveWatchBtn')?.addEventListener('click', async () => {
   try {
     setBusy(true);
-    const transcriptFetchMode = getTranscriptFetchMode();
-    localStorage.setItem('fruitTranscriptMinerFetchMode', transcriptFetchMode);
     await api('/api/channel-settings', {
       method: 'set',
       channelUrl: ($('channelUrl')?.value || '').trim(),
       pollIntervalMinutes: Number($('pollIntervalMinutes')?.value || 360),
       notificationsEnabled: $('notificationsEnabled')?.checked !== false,
-      transcriptFetchMode,
     });
     log('Watch settings saved.');
     await loadWatchSettings();
   } catch (e) { log(e.message); }
   finally { setBusy(false); }
-});
-
-$('transcriptFetchMode')?.addEventListener('change', () => {
-  localStorage.setItem('fruitTranscriptMinerFetchMode', getTranscriptFetchMode());
-  updateTranscriptModeUi();
 });
 
 $('pullDataBtn')?.addEventListener('click', async () => {
@@ -780,12 +760,51 @@ if ($('syncSiteUrl')) $('syncSiteUrl').value = localStorage.getItem('fruitTransc
 if ($('syncToken')) $('syncToken').value = localStorage.getItem('fruitTranscriptMinerSyncToken') || '';
 
 loadLocal().catch((error) => log(`Load failed: ${error.message}`));
-loadWatchSettings().then(() => updateTranscriptModeUi());
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  syncFromStorageChanges(changes);
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type !== 'transcript-batch-event') return;
+  if (message.event === 'complete') {
+    setBusy(false);
+    goToStep(3);
+    log(`Transcript batch complete (${message.done || 0} videos).`);
+    return;
+  }
+  if (message.event === 'progress') {
+    if (message.status === 'running') {
+      log(`Fetching transcript: ${message.title || message.videoId}...`);
+      return;
+    }
+    if (message.status === 'ok') {
+      log(`Transcript loaded: ${message.title || message.videoId} (${message.segmentCount || 0} lines${message.method ? ` · ${message.method}` : ''})`);
+      return;
+    }
+    if (message.status === 'failed') {
+      log(`Transcript failed: ${message.title || message.videoId}: ${message.error || 'unknown error'}`);
+    }
+  }
+});
+
+api('/api/transcript-batch-status').then((data) => {
+  if (data?.job?.running) {
+    setBusy(true);
+    normalizeVideos({ keepRunning: true });
+    renderVideos();
+  } else {
+    normalizeVideos();
+    renderVideos();
+  }
+}).catch(() => {});
+loadWatchSettings();
 
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcripts fetch in a background YouTube tab — switch modes in Settings';
+    if ($('statusText')) $('statusText').textContent = 'API caption fetch in background — no transcript panel clicks needed';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
