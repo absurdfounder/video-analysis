@@ -82,6 +82,23 @@ function pendingTranscripts() {
   return state.videos.filter(v => isProcessable(v) && !hasTranscriptData(v));
 }
 
+function transcriptQueueStats() {
+  const stats = { ready: 0, waiting: 0, running: 0, failed: 0, missing: 0 };
+  for (const video of state.videos.filter(isProcessable)) {
+    if (hasTranscriptData(video)) {
+      stats.ready++;
+    } else if (video.status === 'running') {
+      stats.running++;
+    } else if (video.status === 'failed') {
+      stats.failed++;
+    } else {
+      stats.waiting++;
+    }
+  }
+  stats.missing = stats.waiting + stats.running + stats.failed;
+  return stats;
+}
+
 function transcriptReady() {
   return state.videos.filter(v => hasTranscriptData(v));
 }
@@ -144,7 +161,11 @@ function renderVideoCard(video) {
   const showBtn = isProcessable(video);
   const btnLabel = hasData
     ? `Read transcript (${segCount} lines)`
-    : 'Fetch & read transcript';
+    : status === 'failed'
+      ? 'Retry transcript'
+      : status === 'running'
+        ? 'Fetching transcript...'
+        : 'Fetch transcript';
 
   return `
     <article class="video-card ${video.isNew ? 'is-new' : ''} ${status === 'skipped' ? 'is-skipped' : ''} ${hasData ? 'has-transcript' : ''}">
@@ -361,13 +382,30 @@ function renderVideos() {
 function deriveStepStatus() {
   const total = state.videos.length;
   const relevant = state.videos.filter(isProcessable).length;
-  const done = transcriptReady().length;
-  const pending = pendingTranscripts().length;
+  const transcriptStats = transcriptQueueStats();
+  const done = transcriptStats.ready;
+  const pending = transcriptStats.missing;
   const prices = state.priceRows.length;
+  const transcriptMeta = pending
+    ? [
+      transcriptStats.waiting ? `${transcriptStats.waiting} pending` : '',
+      transcriptStats.running ? `${transcriptStats.running} running` : '',
+      transcriptStats.failed ? `${transcriptStats.failed} failed` : '',
+    ].filter(Boolean).join(' · ')
+    : done ? `${done} done` : 'Waiting';
+  const transcriptDesc = pending
+    ? transcriptStats.failed && transcriptStats.waiting
+      ? `${transcriptStats.waiting} new and ${transcriptStats.failed} failed transcript(s) need fetching.`
+      : transcriptStats.failed
+        ? `${transcriptStats.failed} transcript(s) failed. Retry them from this step.`
+        : transcriptStats.running
+          ? `${transcriptStats.running} transcript(s) currently fetching.`
+          : `${transcriptStats.waiting} transcript(s) to fetch.`
+    : done ? 'All relevant transcripts fetched.' : 'Fetch transcripts after step 1.';
 
   return {
     1: { done: total > 0, meta: total ? `${total} videos` : 'Start here', desc: total ? `${total} videos loaded (${relevant} relevant).` : 'Pull latest videos from the channel.' },
-    2: { done: relevant > 0 && pending === 0, meta: pending ? `${pending} pending` : done ? `${done} done` : 'Waiting', desc: pending ? `${pending} transcript(s) to fetch.` : done ? 'All relevant transcripts fetched.' : 'Fetch transcripts after step 1.' },
+    2: { done: relevant > 0 && pending === 0, meta: transcriptMeta, desc: transcriptDesc },
     3: { done: prices > 0, meta: prices ? `${prices} rows` : 'Waiting', desc: prices ? `${prices} price rows extracted.` : 'Run AI on transcripts to extract mandi prices.' },
     4: { done: Boolean(state.lastSync), meta: state.lastSync ? 'Synced' : 'Waiting', desc: state.lastSync ? `Last pushed ${new Date(state.lastSync).toLocaleString()}` : 'Push results to your website dataset.' },
   };
@@ -393,6 +431,7 @@ function goToStep(step) {
 
 function updateUI() {
   const status = deriveStepStatus();
+  const transcriptStats = transcriptQueueStats();
   for (let i = 1; i <= 4; i++) {
     const meta = $(`stepMeta${i}`);
     if (meta) meta.textContent = status[i].meta;
@@ -406,6 +445,15 @@ function updateUI() {
 
   const busy = Boolean(state.runningTask);
   for (let i = 1; i <= 4; i++) setDisabled(`stepBtn${i}`, busy);
+  if ($('stepBtn2')) {
+    $('stepBtn2').textContent = transcriptStats.failed && transcriptStats.waiting
+      ? `Fetch ${transcriptStats.waiting} + retry ${transcriptStats.failed}`
+      : transcriptStats.failed
+        ? `Retry ${transcriptStats.failed} failed transcript${transcriptStats.failed === 1 ? '' : 's'}`
+        : transcriptStats.waiting
+          ? `Fetch ${transcriptStats.waiting} transcript${transcriptStats.waiting === 1 ? '' : 's'}`
+          : 'Fetch transcripts';
+  }
 
   document.querySelectorAll('.step').forEach(el => {
     const n = Number(el.dataset.step);
@@ -805,7 +853,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.7 — Trusted Types-safe parser';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.8 — clearer retry states';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
