@@ -848,6 +848,19 @@ async function waitForYouTubePageReady(tabId, videoId) {
   if (!ready?.ok) throw new Error(ready?.error || 'YouTube watch page did not finish loading.');
 }
 
+async function findOpenWatchTab(videoId, excludeTabId = null) {
+  const tabs = await chrome.tabs.query({
+    url: [
+      'https://www.youtube.com/watch*',
+      'https://youtube.com/watch*',
+      'https://m.youtube.com/watch*',
+    ],
+  });
+  return tabs
+    .filter(tab => tab.id !== excludeTabId && String(tab.url || '').includes(videoId))
+    .sort((a, b) => Number(b.active) - Number(a.active))[0] || null;
+}
+
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
   await prepareWorkerTab(tabId);
@@ -869,6 +882,25 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   }
 
   let lastError = pageResult?.error || '';
+  const openTab = await findOpenWatchTab(videoId, tabId);
+  if (openTab?.id) {
+    try {
+      const visibleResult = await runInYouTubeTab('fetchTranscriptFromPanelInPage', [], openTab.id);
+      if (visibleResult?.ok && visibleResult.segments?.length) {
+        return {
+          ok: true,
+          language: visibleResult.language || 'unknown',
+          fileName: visibleResult.fileName || 'youtube-visible-panel',
+          segments: visibleResult.segments,
+          method: visibleResult.format || 'open-tab-panel',
+        };
+      }
+      lastError = visibleResult?.error || lastError;
+    } catch (error) {
+      lastError = cleanError(error) || lastError;
+    }
+  }
+
   try {
     const html = await fetchTextViaYouTubeTab(videoUrl);
     const apiResult = await buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, 'page-html');

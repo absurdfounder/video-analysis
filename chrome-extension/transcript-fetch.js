@@ -149,30 +149,20 @@ function fetchTranscriptInPage(languages) {
   function extractSegmentsFromPanel() {
     const panel = transcriptPanelRoot();
     const scope = panel || document;
-    const nodes = scope.querySelectorAll([
-      'ytd-transcript-segment-renderer',
-      'transcript-segment-view-model',
-      'macro-markers-panel-item-view-model',
-      '[class*="TranscriptSegment"]',
-      '[class*="transcriptSegment"]',
-      '[class*="transcript-segment"]',
-    ].join(','));
-    if (!nodes.length) return [];
+    const segments = [];
 
     const firstDescendantByClass = (node, needle) => {
       const wanted = String(needle).toLowerCase();
       return [...node.querySelectorAll('*')].find((child) => String(child.className || '').toLowerCase().includes(wanted)) || null;
     };
 
-    const segments = [];
-    for (const node of nodes) {
-      const segmentNode = node.matches?.('transcript-segment-view-model, ytd-transcript-segment-renderer')
-        ? node
-        : node.querySelector('transcript-segment-view-model, ytd-transcript-segment-renderer') || node;
-      const timestampEl = segmentNode.querySelector('.segment-timestamp, .segment-start-offset')
-        || firstDescendantByClass(segmentNode, 'timestamp');
-      const textEl = segmentNode.querySelector('.segment-text, yt-formatted-string.segment-text, yt-formatted-string, span.yt-core-attributed-string')
-        || firstDescendantByClass(segmentNode, 'segmenttext')
+    const pushSegment = (segmentNode) => {
+      const timestampEl = segmentNode.querySelector(
+        '.ytwTranscriptSegmentViewModelTimestamp, .segment-timestamp, .segment-start-offset, [class*="TranscriptSegmentViewModelTimestamp"]',
+      ) || firstDescendantByClass(segmentNode, 'timestamp');
+      const textEl = segmentNode.querySelector(
+        'span.ytAttributedStringHost, .segment-text, yt-formatted-string.segment-text, yt-formatted-string, span.yt-core-attributed-string',
+      ) || firstDescendantByClass(segmentNode, 'segmenttext')
         || [...segmentNode.querySelectorAll('span, yt-formatted-string, div')]
           .find((child) => child !== timestampEl && stripHtml(child.textContent || '') && !/^\s*(?:(\d{1,2}:)?\d{1,2}:\d{2})\s*$/.test(child.textContent || ''));
       const rawText = stripHtml(textEl?.textContent || segmentNode.textContent || '');
@@ -180,7 +170,7 @@ function fetchTranscriptInPage(languages) {
       const timestampText = stripHtml(timestampEl?.textContent || timeMatch?.[0] || '');
       const text = stripHtml(rawText.replace(timestampText, '').replace(timeMatch?.[0] || '', ''));
       const start = parseClockLabel(timestampText);
-      if (!text) continue;
+      if (!timestampText || !text) return;
       segments.push({
         start: Number(start.toFixed(3)),
         end: Number(start.toFixed(3)),
@@ -188,17 +178,41 @@ function fetchTranscriptInPage(languages) {
         timestamp_label: secondsToClock(start),
         text,
       });
-    }
+    };
 
-    for (let i = 0; i < segments.length; i++) {
-      const nextStart = segments[i + 1]?.start;
-      if (Number.isFinite(nextStart) && nextStart > segments[i].start) {
-        segments[i].end = Number(nextStart.toFixed(3));
-        segments[i].duration = Number((segments[i].end - segments[i].start).toFixed(3));
+    const directNodes = scope.querySelectorAll('transcript-segment-view-model, ytd-transcript-segment-renderer');
+    for (const node of directNodes) pushSegment(node);
+
+    if (!segments.length) {
+      const nodes = scope.querySelectorAll([
+        'macro-markers-panel-item-view-model',
+        '[class*="TranscriptSegment"]',
+        '[class*="transcriptSegment"]',
+        '[class*="transcript-segment"]',
+      ].join(','));
+      for (const node of nodes) {
+        const segmentNode = node.querySelector('transcript-segment-view-model, ytd-transcript-segment-renderer') || node;
+        pushSegment(segmentNode);
       }
     }
 
-    return segments;
+    const seen = new Set();
+    const uniqueSegments = segments.filter((segment) => {
+      const key = `${segment.start}|${segment.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    for (let i = 0; i < uniqueSegments.length; i++) {
+      const nextStart = uniqueSegments[i + 1]?.start;
+      if (Number.isFinite(nextStart) && nextStart > uniqueSegments[i].start) {
+        uniqueSegments[i].end = Number(nextStart.toFixed(3));
+        uniqueSegments[i].duration = Number((uniqueSegments[i].end - uniqueSegments[i].start).toFixed(3));
+      }
+    }
+
+    return uniqueSegments;
   }
 
   function decodeHtmlEntities(text) {
@@ -300,6 +314,28 @@ function fetchTranscriptInPage(languages) {
 
   async function tryPanelDom() {
     mutePlayer();
+    const existingSegments = extractSegmentsFromPanel();
+    if (existingSegments.length) {
+      return {
+        ok: true,
+        segments: existingSegments,
+        language: 'unknown',
+        fileName: 'youtube-transcript-panel',
+        method: 'visible-panel-dom',
+      };
+    }
+
+    const existingHtmlSegments = extractSegmentsFromTranscriptHtml((transcriptPanelRoot() || document.documentElement).innerHTML);
+    if (existingHtmlSegments.length) {
+      return {
+        ok: true,
+        segments: existingHtmlSegments,
+        language: 'unknown',
+        fileName: 'youtube-transcript-panel-html',
+        method: 'visible-panel-html',
+      };
+    }
+
     scrollToDescription();
     await sleep(600);
 
