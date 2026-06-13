@@ -374,7 +374,11 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
   }
 
   async function tryInnerTube(player, method = 'innertube') {
-    const params = extractTranscriptParams(player, document.documentElement.innerHTML, getLiveInitialData());
+    let params = extractTranscriptParams(player, document.documentElement.innerHTML, getLiveInitialData());
+    if (!params) {
+      const videoId = player?.videoDetails?.videoId || '';
+      if (videoId) params = await fetchTranscriptParamsViaPlayerApiInPage(videoId);
+    }
     if (!params) return { ok: false, error: 'No transcript params in page HTML.' };
     const result = await fetchInnerTubeTranscriptInPage(params);
     if (result?.segments?.length) {
@@ -539,34 +543,48 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
           method: 'visible-panel-html',
         };
       }
-    }
 
-    // Slow path: lazy-loaded pages may only expose transcript token/UI after interaction.
-    await wakeYouTubePageInPage();
-    player = getLivePlayerResponse();
-    const apiAfterWake = await tryApiPaths(player, 'innertube-after-wake');
-    if (apiAfterWake?.ok) return apiAfterWake;
-    if (apiAfterWake?.errors?.length) errors.push(...apiAfterWake.errors);
-
-    const openResult = await openTranscriptUi();
-    if (!openResult.ok) {
-      errors.push(openResult.error);
-    } else {
+      // Manual/interactive fallback only: wake lazy-loaded UI, click Show transcript, scrape panel.
+      await wakeYouTubePageInPage();
       player = getLivePlayerResponse();
-      const apiAfterPanel = await tryApiPaths(player, 'innertube-after-panel');
-      if (apiAfterPanel?.ok) return apiAfterPanel;
-      if (apiAfterPanel?.errors?.length) errors.push(...apiAfterPanel.errors);
-    }
+      const apiAfterWake = await tryApiPaths(player, 'innertube-after-wake');
+      if (apiAfterWake?.ok) return apiAfterWake;
+      if (apiAfterWake?.errors?.length) errors.push(...apiAfterWake.errors);
 
-    const panelResult = await scrapeTranscriptPanel();
-    if (panelResult?.segments?.length) return { ...panelResult, ok: true };
-    if (panelResult?.error) errors.push(panelResult.error);
+      const openResult = await openTranscriptUi();
+      if (!openResult.ok) {
+        errors.push(openResult.error);
+      } else {
+        player = getLivePlayerResponse();
+        const apiAfterPanel = await tryApiPaths(player, 'innertube-after-panel');
+        if (apiAfterPanel?.ok) return apiAfterPanel;
+        if (apiAfterPanel?.errors?.length) errors.push(...apiAfterPanel.errors);
+      }
+
+      const panelResult = await scrapeTranscriptPanel();
+      if (panelResult?.segments?.length) return { ...panelResult, ok: true };
+      if (panelResult?.error) errors.push(panelResult.error);
+    }
 
     return {
       ok: false,
       error: errors.filter(Boolean).join(' · ') || 'No transcript methods returned caption lines.',
     };
   })();
+}
+
+function fetchTranscriptApiOnlyInPage(languages) {
+  return fetchTranscriptInPage(languages, true);
+}
+
+function getLivePlayerResponseInPage() {
+  const response = window.ytInitialPlayerResponse
+    || window.ytplayer?.config?.args?.player_response
+    || null;
+  if (typeof response === 'string') {
+    try { return JSON.parse(response); } catch { return null; }
+  }
+  return response;
 }
 
 function fetchTranscriptFromPanelInPage() {
@@ -697,6 +715,45 @@ function extractTranscriptParams(player, html, initialData = null) {
     if (match?.[1]) return match[1].replace(/\\u0026/g, '&');
   }
   return '';
+}
+
+function fetchTranscriptParamsViaPlayerApiInPage(videoId) {
+  return (async () => {
+    const apiKey = window.ytcfg?.data_?.INNERTUBE_API_KEY || window.ytcfg?.get?.('INNERTUBE_API_KEY') || '';
+    const clientVersion = window.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION || window.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION') || '2.20260101.00.00';
+    const hl = window.ytcfg?.data_?.HL || window.ytcfg?.get?.('HL') || 'en';
+    const gl = window.ytcfg?.data_?.GL || window.ytcfg?.get?.('GL') || 'US';
+    if (!apiKey || !videoId) return '';
+
+    try {
+      const response = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'content-type': 'application/json',
+          'X-Youtube-Client-Name': '1',
+          'X-Youtube-Client-Version': clientVersion,
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: 'WEB',
+              clientVersion,
+              hl,
+              gl,
+              userAgent: navigator.userAgent,
+            },
+          },
+          videoId,
+        }),
+      });
+      const data = await response.json();
+      const player = data?.playerResponse || data;
+      return extractTranscriptParams(player, '', player) || '';
+    } catch {
+      return '';
+    }
+  })();
 }
 
 function fetchCaptionTrackInPage(baseUrl) {

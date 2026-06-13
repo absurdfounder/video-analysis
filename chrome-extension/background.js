@@ -841,20 +841,16 @@ async function captureVisibleTranscript(body) {
   const languages = safeText(body.languages || 'hi.*,hi,en.*');
   if (!id) return { ok: false, error: 'Missing YouTube video ID.' };
 
-  broadcastCaptureProgress(id, 'quick', 'Checking active YouTube tab...');
-  let result = await fetchTranscriptFromActiveWatchTabIfMatch(id);
-
-  if (!result?.ok || !result.segments?.length) {
-    broadcastCaptureProgress(id, 'worker', 'Working in background worker tab...');
-    try {
-      result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages, { preferWorker: true });
-    } catch (error) {
-      return {
-        ok: false,
-        id,
-        error: cleanError(error) || result?.error || 'Could not capture transcript from YouTube.',
-      };
-    }
+  broadcastCaptureProgress(id, 'worker', 'Fetching transcript via API...');
+  let result = null;
+  try {
+    result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages, { preferWorker: true });
+  } catch (error) {
+    return {
+      ok: false,
+      id,
+      error: cleanError(error) || 'Could not capture transcript from YouTube.',
+    };
   }
 
   if (!result?.segments?.length) {
@@ -1272,7 +1268,7 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options
 
   let pageResult = null;
   try {
-    pageResult = await runInYouTubeTab('fetchTranscriptInPage', [languages, true], tabId);
+    pageResult = await runInYouTubeTab('fetchTranscriptApiOnlyInPage', [languages], tabId);
     if (pageResult?.segments?.length) {
       return {
         ok: true,
@@ -1292,8 +1288,17 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options
 
 async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, methodPrefix) {
   try {
-    const player = extractJsonObject(html, 'ytInitialPlayerResponse');
+    let player = extractJsonObject(html, 'ytInitialPlayerResponse');
     if (player?.videoDetails?.videoId !== videoId) {
+      player = null;
+    }
+
+    if (!player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length) {
+      const livePlayer = await runInYouTubeTab('getLivePlayerResponseInPage', [], tabId);
+      if (livePlayer?.videoDetails?.videoId === videoId) player = livePlayer;
+    }
+
+    if (!player) {
       return { ok: false, error: 'Player HTML did not match requested video.' };
     }
 
@@ -1313,7 +1318,8 @@ async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, me
       return { ok: false, error: 'Caption track download returned empty.' };
     }
 
-    const params = extractTranscriptParams(player, html);
+    const params = extractTranscriptParams(player, html)
+      || await runInYouTubeTab('fetchTranscriptParamsViaPlayerApiInPage', [videoId], tabId);
     if (params) {
       const innerTubeResult = await runInYouTubeTab('fetchInnerTubeTranscriptInPage', [params], tabId);
       if (innerTubeResult?.segments?.length) {
