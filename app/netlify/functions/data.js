@@ -24,6 +24,7 @@ exports.handler = async (event) => {
         counts: {
           videos: saved.videos.length,
           priceRows: saved.priceRows.length,
+          videoAnalysis: Object.keys(saved.videoAnalysis || {}).length,
           knownVideoIds: saved.knownVideoIds.length,
         },
         updatedAt: saved.updatedAt,

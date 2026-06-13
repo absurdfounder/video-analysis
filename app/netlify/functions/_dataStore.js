@@ -6,11 +6,12 @@ const LOCAL_PATH = path.join(__dirname, '..', '..', 'data', 'project.json');
 
 function emptyProject() {
   return {
-    version: 1,
+    version: 2,
     updatedAt: null,
     channelUrl: '',
     videos: [],
     priceRows: [],
+    videoAnalysis: {},
     knownVideoIds: [],
   };
 }
@@ -94,6 +95,20 @@ function mergeProjectData(existing, patch) {
     ...(Array.isArray(patch.priceRows) ? patch.priceRows : []),
   ];
   next.priceRows = dedupePriceRows(mergedRows);
+
+  const videoAnalysis = { ...(existing.videoAnalysis || {}) };
+  if (patch.videoAnalysis && typeof patch.videoAnalysis === 'object') {
+    for (const [videoId, meta] of Object.entries(patch.videoAnalysis)) {
+      if (meta && typeof meta === 'object') videoAnalysis[videoId] = meta;
+    }
+  }
+  for (const video of next.videos) {
+    if (video?.analysisMeta?.video_id) {
+      videoAnalysis[video.id] = video.analysisMeta;
+    }
+  }
+  next.videoAnalysis = videoAnalysis;
+
   return next;
 }
 

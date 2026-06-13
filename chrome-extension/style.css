@@ -422,6 +422,73 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   margin-top: 6px;
 }
 
+.video-card.has-analysis {
+  border-color: rgba(26, 122, 76, 0.45);
+}
+
+.video-analysis-body {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  display: grid;
+  gap: 10px;
+}
+
+.video-analysis-body.is-compact {
+  gap: 8px;
+}
+
+.analysis-meta-row {
+  display: grid;
+  gap: 6px;
+}
+
+.analysis-meta-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.video-fruit-list {
+  display: grid;
+  gap: 8px;
+}
+
+.video-fruit-block {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fafbf9;
+}
+
+.video-fruit-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.video-fruit-head strong {
+  font-size: 13px;
+}
+
+.video-fruit-head span {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--green-dark);
+  white-space: nowrap;
+}
+
+.video-mention-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 .video-card.has-transcript {
   border-color: rgba(26, 122, 76, 0.35);
 }

@@ -8,6 +8,7 @@ const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 const state = {
   videos: [],
   priceRows: [],
+  videoAnalysis: {},
   runningTask: '',
   currentStep: 1,
   lastSync: null,
@@ -76,8 +77,9 @@ function updateAnalysisStatusUI(job) {
   const total = job.total || 0;
   const remaining = Array.isArray(job.queue) ? job.queue.length : 0;
   const current = job.currentTitle || job.currentId || 'next video';
+  const progress = job.lastProgress ? ` · ${job.lastProgress}` : '';
   const err = job.lastError ? ` Last error: ${job.lastError}` : '';
-  el.textContent = `Analyzing ${done}/${total} done · ${remaining} left · now: ${current}.${err}`;
+  el.textContent = `Analyzing ${done}/${total} done · ${remaining} left · now: ${current}.${progress}${err}`;
 }
 
 function syncAiBatchLogFromJob(job) {
@@ -275,6 +277,54 @@ function groupVideosByDate(videos) {
   return [...groups.values()].sort((a, b) => b.sortKey.localeCompare(a.sortKey));
 }
 
+function getVideoAnalysisMeta(video) {
+  if (video?.analysisMeta?.video_id) return video.analysisMeta;
+  if (state.videoAnalysis?.[video.id]) return state.videoAnalysis[video.id];
+  return null;
+}
+
+function renderVideoAnalysisBody(video, { compact = false } = {}) {
+  const meta = getVideoAnalysisMeta(video);
+  if (!meta?.fruits?.length) return '';
+
+  const partyTags = (meta.parties || []).slice(0, compact ? 4 : 8)
+    .map((party) => tag(party, 'relevance-relevant')).join('');
+  const areaTags = (meta.areas || []).slice(0, compact ? 4 : 8)
+    .map((area) => tag(area, 'relevance-relevant')).join('');
+
+  const fruitBlocks = meta.fruits.slice(0, compact ? 4 : 12).map((fruit) => {
+    const mentionLinks = fruit.mentions.slice(0, compact ? 3 : 8).map((mention) => {
+      const price = formatPriceRange(mention.min_price_inr, mention.max_price_inr);
+      const detail = [mention.quality_grade, mention.party_name, price !== 'Rate not stated' ? price : '']
+        .filter(Boolean).join(' · ');
+      return `<a class="timestamp-link" href="${escapeHtml(mention.timestamp_url)}" target="_blank" rel="noreferrer">▶ ${escapeHtml(mention.timestamp_label)}${detail ? ` · ${escapeHtml(detail)}` : ''}</a>`;
+    }).join('');
+
+    const gradeTags = (fruit.quality_grades || []).map((grade) => tag(`Grade ${grade}`, 'relevance-relevant')).join('');
+    const fruitParties = (fruit.parties || []).slice(0, 3).map((party) => tag(party, 'relevance-relevant')).join('');
+
+    return `
+      <section class="video-fruit-block">
+        <div class="video-fruit-head">
+          <strong>${escapeHtml(fruit.fruit)}${fruit.fruit_hindi ? ` · ${escapeHtml(fruit.fruit_hindi)}` : ''}</strong>
+          <span>${escapeHtml(formatPriceRange(fruit.min_price_inr, fruit.max_price_inr))}${fruit.unit && fruit.unit !== 'unknown' ? ` / ${escapeHtml(fruit.unit)}` : ''}</span>
+        </div>
+        <div class="card-tags">${gradeTags}${fruitParties}</div>
+        ${mentionLinks ? `<div class="video-mention-links">${mentionLinks}</div>` : ''}
+        ${fruit.mentions[0]?.line ? `<div class="price-hindi">${escapeHtml(fruit.mentions[0].line)}</div>` : ''}
+      </section>
+    `;
+  }).join('');
+
+  return `
+    <div class="video-analysis-body ${compact ? 'is-compact' : ''}">
+      ${partyTags ? `<div class="analysis-meta-row"><span class="analysis-meta-label">Parties</span><div class="card-tags">${partyTags}</div></div>` : ''}
+      ${areaTags ? `<div class="analysis-meta-row"><span class="analysis-meta-label">Areas</span><div class="card-tags">${areaTags}</div></div>` : ''}
+      <div class="video-fruit-list">${fruitBlocks}</div>
+    </div>
+  `;
+}
+
 function renderVideoCard(video) {
   const segCount = segmentCount(video);
   const hasData = hasTranscriptData(video);
@@ -288,15 +338,23 @@ function renderVideoCard(video) {
         ? 'Fetching transcript...'
         : 'Capture visible transcript';
 
+  const analysisMeta = getVideoAnalysisMeta(video);
+  const analysisPreview = analysisMeta && displayPriceStatus(video) === 'ok'
+    ? renderVideoAnalysisBody(video, { compact: true })
+    : '';
+
   return `
-    <article class="video-card ${video.isNew ? 'is-new' : ''} ${status === 'skipped' ? 'is-skipped' : ''} ${hasData ? 'has-transcript' : ''}">
+    <article class="video-card ${video.isNew ? 'is-new' : ''} ${status === 'skipped' ? 'is-skipped' : ''} ${hasData ? 'has-transcript' : ''} ${analysisMeta ? 'has-analysis' : ''}">
       <h3><a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a></h3>
       <div class="card-tags">
         ${video.channelIndex ? tag(`#${video.channelIndex}`, 'channel-index') : ''}
         ${tag(status, status)}
         ${tag(video.relevance || 'unclassified', `relevance-${video.relevance || 'unclassified'}`)}
         ${hasData ? tag(`${segCount} lines`, 'relevance-relevant') : ''}
+        ${analysisMeta ? tag(`${analysisMeta.mention_count} mention${analysisMeta.mention_count === 1 ? '' : 's'}`, 'ok') : ''}
+        ${analysisMeta?.fruits?.length ? tag(`${analysisMeta.fruits.length} fruit${analysisMeta.fruits.length === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
       </div>
+      ${analysisPreview}
       ${video.relevanceReason ? `<div class="mini">${escapeHtml(video.relevanceReason)}</div>` : ''}
       ${showBtn ? `
         <div class="card-actions">
@@ -518,14 +576,17 @@ function secondsToClock(seconds) {
 
 function renderAnalysisCard(video) {
   const priceStatus = displayPriceStatus(video);
+  const analysisMeta = getVideoAnalysisMeta(video);
   const rowCount = Number(video.priceRowCount || 0);
   const videoRows = state.priceRows.filter((row) => row.video_id === video.id).length;
-  const shownRows = rowCount || videoRows;
-  const marketDay = parseVideoDate(video).label;
-  const summary = video.analysisSummary || {};
-  const fruitList = Array.isArray(summary.fruits) ? summary.fruits : [];
-  const partyCount = Array.isArray(summary.parties) ? summary.parties.length : 0;
-  const areaCount = Array.isArray(summary.areas) ? summary.areas.length : 0;
+  const shownRows = analysisMeta?.mention_count || rowCount || videoRows;
+  const marketDay = analysisMeta?.market_date || parseVideoDate(video).label;
+  const fruitList = analysisMeta?.fruits?.map((fruit) => fruit.fruit)
+    || (Array.isArray(video.analysisSummary?.fruits) ? video.analysisSummary.fruits : []);
+  const partyCount = analysisMeta?.parties?.length
+    || (Array.isArray(video.analysisSummary?.parties) ? video.analysisSummary.parties.length : 0);
+  const areaCount = analysisMeta?.areas?.length
+    || (Array.isArray(video.analysisSummary?.areas) ? video.analysisSummary.areas.length : 0);
   const statusLabel = priceStatus === 'ok'
     ? 'analyzed'
     : priceStatus === 'running'
@@ -535,14 +596,15 @@ function renderAnalysisCard(video) {
         : priceStatus === 'no-transcript'
           ? 'no transcript'
           : 'pending';
+  const analysisBody = priceStatus === 'ok' ? renderVideoAnalysisBody(video) : '';
 
   return `
-    <article class="video-card ${priceStatus === 'running' ? 'is-running' : ''} ${priceStatus === 'ok' ? 'has-transcript' : ''}">
+    <article class="video-card ${priceStatus === 'running' ? 'is-running' : ''} ${priceStatus === 'ok' ? 'has-transcript has-analysis' : ''}">
       <h3>
         ${video.channelIndex ? `<span class="channel-index-label">#${video.channelIndex}</span> ` : ''}
         <a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a>
       </h3>
-      <div class="card-meta">${escapeHtml(marketDay)}</div>
+      <div class="card-meta">${escapeHtml(marketDay)}${analysisMeta?.source ? ` · ${escapeHtml(analysisMeta.source)} extraction` : ''}</div>
       <div class="card-tags">
         ${tag(statusLabel, priceStatus === 'ok' ? 'ok' : priceStatus)}
         ${tag(`${segmentCount(video)} lines`, 'relevance-relevant')}
@@ -551,7 +613,8 @@ function renderAnalysisCard(video) {
         ${partyCount ? tag(`${partyCount} part${partyCount === 1 ? 'y' : 'ies'}`, 'relevance-relevant') : ''}
         ${areaCount ? tag(`${areaCount} area${areaCount === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
       </div>
-      ${fruitList.length ? `<div class="analysis-summary-line">${fruitList.slice(0, 8).map((fruit) => tag(fruit, 'relevance-relevant')).join('')}</div>` : ''}
+      ${fruitList.length && !analysisBody ? `<div class="analysis-summary-line">${fruitList.slice(0, 8).map((fruit) => tag(fruit, 'relevance-relevant')).join('')}</div>` : ''}
+      ${analysisBody}
       ${video.priceError ? `<div class="mini">${escapeHtml(video.priceError)}</div>` : ''}
     </article>
   `;
@@ -868,6 +931,7 @@ async function saveLocal() {
   const payload = {
     videos: state.videos,
     priceRows: state.priceRows,
+    videoAnalysis: state.videoAnalysis || {},
     lastSync: state.lastSync,
     currentStep: state.currentStep,
   };
@@ -901,6 +965,19 @@ async function loadLocal() {
 
   if (Array.isArray(saved.videos)) state.videos = saved.videos;
   if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
+  if (saved.videoAnalysis && typeof saved.videoAnalysis === 'object') {
+    state.videoAnalysis = saved.videoAnalysis;
+  } else {
+    state.videoAnalysis = {};
+    for (const video of state.videos) {
+      if (video.analysisMeta?.video_id) state.videoAnalysis[video.id] = video.analysisMeta;
+    }
+  }
+  for (const video of state.videos) {
+    if (!video.analysisMeta && state.videoAnalysis[video.id]) {
+      video.analysisMeta = state.videoAnalysis[video.id];
+    }
+  }
   if (saved.lastSync) state.lastSync = saved.lastSync;
   if (saved.currentStep) state.currentStep = saved.currentStep;
 
@@ -908,6 +985,7 @@ async function loadLocal() {
 
   applyOpenAiKeyToInput();
   renderVideos();
+  renderAnalysisList();
   renderPrices();
   goToStep(state.currentStep || suggestedStep());
 }
@@ -1015,6 +1093,19 @@ function applySavedProject(saved, { keepRunning = false, keepAiRunning = false }
   if (!saved) return;
   if (Array.isArray(saved.videos)) state.videos = saved.videos;
   if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
+  if (saved.videoAnalysis && typeof saved.videoAnalysis === 'object') {
+    state.videoAnalysis = saved.videoAnalysis;
+  } else {
+    state.videoAnalysis = {};
+    for (const video of state.videos) {
+      if (video.analysisMeta?.video_id) state.videoAnalysis[video.id] = video.analysisMeta;
+    }
+  }
+  for (const video of state.videos) {
+    if (!video.analysisMeta && state.videoAnalysis[video.id]) {
+      video.analysisMeta = state.videoAnalysis[video.id];
+    }
+  }
   if (saved.lastSync) state.lastSync = saved.lastSync;
   if (saved.currentStep) state.currentStep = saved.currentStep;
   normalizeVideos({ keepRunning, keepAiRunning });
@@ -1075,6 +1166,9 @@ async function aiAnalysisStep() {
   }
 
   const apiKey = getOpenAiKey();
+  if (!apiKey) {
+    log('No OpenAI key in Settings — will use basic regex extraction (no grades/parties).', { level: 'warn' });
+  }
   if (apiKey) localStorage.setItem('fruitTranscriptMinerOpenAIKey', apiKey);
 
   await saveLocal();
@@ -1135,6 +1229,7 @@ async function updateDatasetStep() {
       channelUrl: ($('channelUrl')?.value || '').trim(),
       videos: state.videos,
       priceRows: state.priceRows,
+      videoAnalysis: state.videoAnalysis || {},
       knownVideoIds: state.videos.map(v => v.id),
     }),
   });
@@ -1224,8 +1319,15 @@ $('pullDataBtn')?.addEventListener('click', async () => {
     const data = await res.json();
     if (Array.isArray(data.data?.videos)) state.videos = data.data.videos;
     if (Array.isArray(data.data?.priceRows)) state.priceRows = data.data.priceRows;
-    renderVideos();
-    renderPrices();
+    if (data.data?.videoAnalysis && typeof data.data.videoAnalysis === 'object') {
+      state.videoAnalysis = data.data.videoAnalysis;
+    }
+    for (const video of state.videos) {
+      if (!video.analysisMeta && state.videoAnalysis?.[video.id]) {
+        video.analysisMeta = state.videoAnalysis[video.id];
+      }
+    }
+    renderAll();
     log('Loaded from website.');
   } catch (e) { log(e.message); }
   finally { setBusy(false); }
@@ -1243,9 +1345,11 @@ $('clearBtn')?.addEventListener('click', () => {
   if (!confirm('Clear all local data?')) return;
   state.videos = [];
   state.priceRows = [];
+  state.videoAnalysis = {};
   state.lastSync = null;
   if ($('log')) $('log').textContent = '';
   renderVideos();
+  renderAnalysisList();
   renderPrices();
   goToStep(1);
 });
@@ -1370,7 +1474,18 @@ chrome.runtime.onMessage.addListener((message) => {
           currentId: message.videoId,
           currentTitle: message.title || message.videoId,
         });
+      } else if (message.status === 'ok') {
+        loadLocal().then(() => {
+          normalizeVideos({ keepAiRunning: true });
+          renderAll();
+          updateUI();
+        }).catch(() => {});
       } else if (message.status === 'failed') {
+        loadLocal().then(() => {
+          normalizeVideos({ keepAiRunning: true });
+          renderAnalysisList();
+          updateUI();
+        }).catch(() => {});
         updateAnalysisStatusUI({
           ...(state.aiBatchJob || {}),
           running: true,
@@ -1411,7 +1526,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.29 — sequential AI analysis list';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.32 — per-video analysis on cards';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
