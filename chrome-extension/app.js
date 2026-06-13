@@ -1313,17 +1313,17 @@ async function analyzeOneVideo(videoId) {
   video.priceStatus = 'running';
   video.priceError = '';
   renderAnalysisList();
-  log(`Analyzing ${video.title || videoId}...`);
-
   const apiKey = getOpenAiKey();
   if (!apiKey) throw new Error('Add your OpenAI API key in Settings first.');
   await persistOpenAiKey();
+  const model = ($('openaiModel')?.value || 'gpt-4o-mini').trim();
+  log(`Analyzing ${video.title || videoId} with OpenAI (${model}) from the extension background worker...`);
 
   try {
     const data = await api('/api/analyze-single-video', {
       videoId,
       apiKey: getOpenAiKey(),
-      model: ($('openaiModel')?.value || 'gpt-4o-mini').trim(),
+      model,
       maxCharsPerCall: Number($('aiMaxChars')?.value || 10000),
       pendingVideo: {
         id: video.id,
@@ -1343,7 +1343,7 @@ async function analyzeOneVideo(videoId) {
     renderAll();
     log(data.count
       ? `OK ${video.title || videoId} (${data.count} mention${data.count === 1 ? '' : 's'})`
-      : `No prices found in ${video.title || videoId}. Add OpenAI key for richer extraction.`, { level: data.count ? 'info' : 'warn' });
+      : `OpenAI returned no price rows for ${video.title || videoId}.`, { level: data.count ? 'info' : 'warn' });
   } finally {
     setBusy(false);
   }
@@ -1368,12 +1368,13 @@ async function aiAnalysisStep() {
 
   await saveLocal();
   state.aiBatchLogCursor = 0;
-  log(`Analyzing ${pending.length} transcript(s) in channel index order...`);
+  const model = ($('openaiModel')?.value || 'gpt-4o-mini').trim();
+  log(`Starting OpenAI analysis for ${pending.length} transcript(s) using ${model}. Requests run in the extension background worker, not Cloudflare.`);
 
   const data = await api('/api/fetch-ai-analysis-batch', {
     delayMs: 400,
     apiKey,
-    model: ($('openaiModel')?.value || 'gpt-4o-mini').trim(),
+    model,
     maxCharsPerCall: Number($('aiMaxChars')?.value || 10000),
     pendingVideos: pending.map((video) => ({
       id: video.id,
@@ -1970,7 +1971,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.2 — vector DB chat (Step 5)';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.3 — OpenAI analysis via extension background';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

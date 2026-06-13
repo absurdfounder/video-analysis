@@ -116,15 +116,18 @@ async function handleApi(path, body) {
   return { ok: false, error: `Unknown extension API route: ${path}` };
 }
 
-function status() {
+async function status() {
+  const storedKey = await resolveOpenAiKey('');
   return {
     ok: true,
     extensionMode: true,
     ytdlpVersion: 'not needed in Chrome extension',
     youtubeCookiesConfigured: true,
-    openaiConfigured: false,
-    note: 'Chrome extension mode uses your browser YouTube session instead of Netlify/yt-dlp.',
-    features: ['classify-videos', 'check-new-videos', 'channel-watch'],
+    openaiConfigured: Boolean(storedKey),
+    aiProvider: 'openai',
+    aiTransport: 'extension-background',
+    note: 'Chrome extension mode uses your browser YouTube session for transcripts and sends Step 3 analysis directly from the extension background worker to OpenAI.',
+    features: ['classify-videos', 'check-new-videos', 'channel-watch', 'openai-price-analysis'],
   };
 }
 
@@ -1394,7 +1397,14 @@ async function fetchAiAnalysisBatch(body) {
   const apiKey = await resolveOpenAiKey(body.apiKey);
   const model = safeText(body.model || 'gpt-4o-mini');
   const maxCharsPerCall = Math.max(2500, Math.min(Number(body.maxCharsPerCall || 10000), 20000));
-  if (apiKey) await saveStoredOpenAiKey(apiKey);
+  if (!apiKey) {
+    return {
+      ok: false,
+      started: false,
+      error: 'OpenAI API key required for AI analysis. Add it in Settings, save, then retry.',
+    };
+  }
+  await saveStoredOpenAiKey(apiKey);
   let project = await loadProjectState();
   let videos = [...(project.videos || [])];
 
@@ -1433,9 +1443,7 @@ async function fetchAiAnalysisBatch(body) {
     };
   }
 
-  const startLog = apiKey
-    ? `Started AI analysis for ${pending.length} video(s).`
-    : `Started regex analysis for ${pending.length} video(s) — add OpenAI key in Settings for rich grades/parties.`;
+  const startLog = `Started OpenAI analysis for ${pending.length} video(s) using ${model}. Requests are sent from the extension background service worker to OpenAI.`;
 
   await chrome.storage.local.set({
     [AI_ANALYSIS_BATCH_KEY]: {
@@ -1453,7 +1461,7 @@ async function fetchAiAnalysisBatch(body) {
       startedAt: new Date().toISOString(),
       log: [{
         at: new Date().toISOString(),
-        level: apiKey ? 'info' : 'warn',
+        level: 'info',
         message: startLog,
       }],
       lastError: '',
@@ -1466,7 +1474,14 @@ async function fetchAiAnalysisBatch(body) {
   });
   await ensureAiBatchWatchdog();
 
-  return { ok: true, started: true, total: pending.length };
+  return {
+    ok: true,
+    started: true,
+    total: pending.length,
+    aiProvider: 'openai',
+    aiTransport: 'extension-background',
+    model,
+  };
 }
 
 async function resumeAiAnalysisBatchIfNeeded() {
@@ -1577,7 +1592,7 @@ function videoToAnalysisItem(video) {
   };
 }
 
-async function analyzeVideoForPrices(video, { apiKey, model, maxCharsPerCall, logFallback = null }) {
+async function analyzeVideoForPrices(video, { apiKey, model, maxCharsPerCall, logFallback = null, requireAi = false }) {
   const analysisItem = videoToAnalysisItem(video);
   let rows = [];
   let summary = null;
@@ -1602,6 +1617,8 @@ async function analyzeVideoForPrices(video, { apiKey, model, maxCharsPerCall, lo
     }
     analysisSource = 'ai';
   } else {
+    if (requireAi) throw new Error('OpenAI API key required for AI analysis.');
+    if (!logFallback) throw new Error('OpenAI API key required for AI analysis.');
     if (logFallback) await logFallback('No OpenAI key — using regex extraction.');
     rows = extractPricesFromSegments(analysisItem);
   }
@@ -1615,7 +1632,8 @@ async function analyzeSingleVideo(body) {
   const model = safeText(body.model || 'gpt-4o-mini');
   const maxCharsPerCall = Math.max(2500, Math.min(Number(body.maxCharsPerCall || 10000), 20000));
   if (!videoId) return { ok: false, error: 'Missing video id.' };
-  if (apiKey) await saveStoredOpenAiKey(apiKey);
+  if (!apiKey) return { ok: false, error: 'OpenAI API key required for AI analysis. Add it in Settings and save, then retry.' };
+  await saveStoredOpenAiKey(apiKey);
 
   let project = await loadProjectState();
   let videos = [...(project.videos || [])];
@@ -1651,6 +1669,7 @@ async function analyzeSingleVideo(body) {
       apiKey,
       model,
       maxCharsPerCall,
+      requireAi: true,
     });
     const hasAnalysis = rows.length || aiVideoMetadata?.fruits?.length;
     await mergeProjectPriceRowsForVideo(videoId, rows, {
@@ -1789,6 +1808,7 @@ async function processNextAiAnalysisInBatch() {
       apiKey: job.apiKey,
       model: job.model,
       maxCharsPerCall: job.maxCharsPerCall,
+      requireAi: true,
       logFallback: (message) => appendAiBatchJobLog(message, 'warn', {
         videoId,
         title: video.title || videoId,
