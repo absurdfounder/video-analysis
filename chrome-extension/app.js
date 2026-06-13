@@ -955,7 +955,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.24 — innertube segments + panel retry';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.25 — API first, scroll only on fallback';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

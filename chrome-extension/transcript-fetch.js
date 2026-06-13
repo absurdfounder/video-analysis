@@ -479,57 +479,83 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
     };
   }
 
-  return (async () => {
-    const errors = [];
-    await waitForPageReady();
-    await wakeYouTubePageInPage();
-    mutePlayer();
-
-    const player = getLivePlayerResponse();
-    const visibleSegments = extractSegmentsFromPanel();
-    if (visibleSegments.length) {
-      return {
-        ok: true,
-        segments: visibleSegments,
-        language: 'unknown',
-        fileName: 'youtube-visible-panel',
-        method: 'visible-panel-dom',
-      };
+  async function waitForPlayerReady() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const player = getLivePlayerResponse();
+      const videoId = player?.videoDetails?.videoId || '';
+      if (videoId) return { player, videoId };
+      await sleep(150);
     }
+    return { player: getLivePlayerResponse(), videoId: getLivePlayerResponse()?.videoDetails?.videoId || '' };
+  }
 
-    const htmlSegments = extractSegmentsFromTranscriptHtml(document.documentElement.innerHTML);
-    if (htmlSegments.length) {
-      return {
-        ok: true,
-        segments: htmlSegments,
-        language: 'unknown',
-        fileName: 'youtube-visible-panel-html',
-        method: 'visible-panel-html',
-      };
-    }
-
+  async function tryApiPaths(player, innerTubeMethod = 'innertube') {
     const [innerTubeResult, captionResult] = await Promise.all([
-      tryInnerTube(player),
+      tryInnerTube(player, innerTubeMethod),
       tryCaptionTracks(player),
     ]);
     if (innerTubeResult?.segments?.length) return { ...innerTubeResult, ok: true };
-    if (innerTubeResult?.error) errors.push(innerTubeResult.error);
     if (captionResult?.segments?.length) return { ...captionResult, ok: true };
-    if (captionResult === null && player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length) {
-      errors.push('Caption track download returned empty.');
+    return {
+      ok: false,
+      errors: [
+        innerTubeResult?.error,
+        captionResult === null && player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length
+          ? 'Caption track download returned empty.'
+          : null,
+      ].filter(Boolean),
+    };
+  }
+
+  return (async () => {
+    const errors = [];
+    mutePlayer();
+    let { player } = await waitForPlayerReady();
+
+    // Fast path: direct HTTP requests from data already in the page (no scroll, no clicks).
+    const apiFirst = await tryApiPaths(player);
+    if (apiFirst?.ok) return apiFirst;
+    if (apiFirst?.errors?.length) errors.push(...apiFirst.errors);
+
+    if (!backgroundOnly) {
+      const visibleSegments = extractSegmentsFromPanel();
+      if (visibleSegments.length) {
+        return {
+          ok: true,
+          segments: visibleSegments,
+          language: 'unknown',
+          fileName: 'youtube-visible-panel',
+          method: 'visible-panel-dom',
+        };
+      }
+
+      const htmlSegments = extractSegmentsFromTranscriptHtml(document.documentElement.innerHTML);
+      if (htmlSegments.length) {
+        return {
+          ok: true,
+          segments: htmlSegments,
+          language: 'unknown',
+          fileName: 'youtube-visible-panel-html',
+          method: 'visible-panel-html',
+        };
+      }
     }
+
+    // Slow path: lazy-loaded pages may only expose transcript token/UI after interaction.
+    await wakeYouTubePageInPage();
+    player = getLivePlayerResponse();
+    const apiAfterWake = await tryApiPaths(player, 'innertube-after-wake');
+    if (apiAfterWake?.ok) return apiAfterWake;
+    if (apiAfterWake?.errors?.length) errors.push(...apiAfterWake.errors);
 
     const openResult = await openTranscriptUi();
     if (!openResult.ok) {
       errors.push(openResult.error);
     } else {
-      const freshPlayer = getLivePlayerResponse();
-      const retryInnerTube = await tryInnerTube(freshPlayer, 'innertube-after-panel');
-      if (retryInnerTube?.segments?.length) return { ...retryInnerTube, ok: true };
-      if (retryInnerTube?.error) errors.push(retryInnerTube.error);
-
-      const retryCaptions = await tryCaptionTracks(freshPlayer);
-      if (retryCaptions?.segments?.length) return { ...retryCaptions, ok: true };
+      player = getLivePlayerResponse();
+      const apiAfterPanel = await tryApiPaths(player, 'innertube-after-panel');
+      if (apiAfterPanel?.ok) return apiAfterPanel;
+      if (apiAfterPanel?.errors?.length) errors.push(...apiAfterPanel.errors);
     }
 
     const panelResult = await scrapeTranscriptPanel();

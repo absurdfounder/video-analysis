@@ -1260,10 +1260,19 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
   await waitForYouTubePageReady(tabId, videoId);
 
-  broadcastCaptureProgress(videoId, 'fetch', 'Fetching captions in background...');
+  broadcastCaptureProgress(videoId, 'fetch', 'Fetching captions via API...');
+  try {
+    const html = await fetchTextViaYouTubeTab(videoUrl);
+    const apiResult = await buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, 'page-html');
+    if (apiResult?.segments?.length) return { ...apiResult, ok: true };
+    if (apiResult?.error) errors.push(apiResult.error);
+  } catch (error) {
+    errors.push(cleanError(error));
+  }
+
   let pageResult = null;
   try {
-    pageResult = await runInYouTubeTab('fetchTranscriptInPage', [languages, false], tabId);
+    pageResult = await runInYouTubeTab('fetchTranscriptInPage', [languages, true], tabId);
     if (pageResult?.segments?.length) {
       return {
         ok: true,
@@ -1274,15 +1283,6 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options
       };
     }
     if (pageResult?.error) errors.push(pageResult.error);
-  } catch (error) {
-    errors.push(cleanError(error));
-  }
-
-  try {
-    const html = await fetchTextViaYouTubeTab(videoUrl);
-    const apiResult = await buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, 'page-html');
-    if (apiResult?.segments?.length) return { ...apiResult, ok: true };
-    if (apiResult?.error) errors.push(apiResult.error);
   } catch (error) {
     errors.push(cleanError(error));
   }
