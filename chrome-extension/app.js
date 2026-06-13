@@ -725,7 +725,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Uses a muted background YouTube tab — you stay on your current page';
+    if ($('statusText')) $('statusText').textContent = 'One muted worker tab handles all videos — no focus steal, no new tabs per video';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

@@ -14,6 +14,26 @@ chrome.runtime.onInstalled.addListener(async () => {
   await schedulePoll(settings.pollIntervalMinutes);
 });
 
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const storedId = await getStoredWorkerTabId();
+  if (tabId === cachedYouTubeTabId || tabId === storedId) {
+    cachedYouTubeTabId = null;
+    await setStoredWorkerTabId(null);
+  }
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  const workerId = cachedYouTubeTabId || await getStoredWorkerTabId();
+  if (!workerId || tabId !== workerId) return;
+  cachedYouTubeTabId = workerId;
+  if (changeInfo.audible || changeInfo.status === 'complete') {
+    muteWorkerTab(tabId).catch(() => {});
+  }
+  if (changeInfo.status === 'complete') {
+    installMuteHook(tabId).catch(() => {});
+  }
+});
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'pollChannel') return;
   await checkForNewVideosBackground();
@@ -439,6 +459,75 @@ async function extractPricesAi(body) {
 }
 
 let cachedYouTubeTabId = null;
+const WORKER_TAB_KEY = 'youtubeWorkerTabId';
+const WORKER_TAB_URL = 'https://www.youtube.com/?fruit_miner=worker';
+
+async function getStoredWorkerTabId() {
+  const data = await chrome.storage.local.get(WORKER_TAB_KEY);
+  return data[WORKER_TAB_KEY] || null;
+}
+
+async function setStoredWorkerTabId(tabId) {
+  if (tabId) await chrome.storage.local.set({ [WORKER_TAB_KEY]: tabId });
+  else await chrome.storage.local.remove(WORKER_TAB_KEY);
+}
+
+async function muteWorkerTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab?.mutedInfo?.muted) await chrome.tabs.update(tabId, { muted: true });
+  } catch {
+    // Tab may have been closed.
+  }
+}
+
+function installMuteHookInPage() {
+  if (window.__fruitMinerMuteHook) return true;
+  window.__fruitMinerMuteHook = true;
+
+  const enforce = () => {
+    const video = document.querySelector('video');
+    if (!video) return;
+    video.muted = true;
+    video.volume = 0;
+    video.defaultMuted = true;
+    try {
+      video.pause();
+    } catch {
+      // ignore
+    }
+  };
+
+  enforce();
+  new MutationObserver(enforce).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('play', (event) => {
+    const target = event.target;
+    if (target?.tagName === 'VIDEO') {
+      target.muted = true;
+      target.volume = 0;
+    }
+  }, true);
+  document.addEventListener('volumechange', (event) => {
+    const target = event.target;
+    if (target?.tagName === 'VIDEO' && !target.muted) {
+      target.muted = true;
+      target.volume = 0;
+    }
+  }, true);
+  return true;
+}
+
+async function installMuteHook(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: installMuteHookInPage,
+    });
+  } catch {
+    // Page may still be loading.
+  }
+}
 
 function isYouTubeUrl(url) {
   return /(youtube\.com|youtu\.be|googlevideo\.com)/i.test(String(url || ''));
@@ -463,42 +552,59 @@ async function waitForTabComplete(tabId, timeoutMs = 20000, expectedVideoId = ''
 async function ensureYouTubeTab() {
   if (cachedYouTubeTabId) {
     try {
-      const tab = await chrome.tabs.get(cachedYouTubeTabId);
-      if (tab?.id) return cachedYouTubeTabId;
+      await chrome.tabs.get(cachedYouTubeTabId);
+      await muteWorkerTab(cachedYouTubeTabId);
+      return cachedYouTubeTabId;
     } catch {
       cachedYouTubeTabId = null;
+      await setStoredWorkerTabId(null);
+    }
+  }
+
+  const storedId = await getStoredWorkerTabId();
+  if (storedId) {
+    try {
+      await chrome.tabs.get(storedId);
+      cachedYouTubeTabId = storedId;
+      await muteWorkerTab(storedId);
+      return storedId;
+    } catch {
+      await setStoredWorkerTabId(null);
     }
   }
 
   const tab = await chrome.tabs.create({
-    url: 'https://www.youtube.com/',
+    url: WORKER_TAB_URL,
     active: false,
-    muted: true,
   });
   cachedYouTubeTabId = tab.id;
+  await setStoredWorkerTabId(tab.id);
   await waitForTabComplete(cachedYouTubeTabId, 25000);
+  await muteWorkerTab(cachedYouTubeTabId);
   try {
-    await chrome.tabs.update(cachedYouTubeTabId, { muted: true });
+    await chrome.tabs.move(cachedYouTubeTabId, { index: -1 });
   } catch {
-    cachedYouTubeTabId = null;
+    // ignore
   }
+  await installMuteHook(cachedYouTubeTabId);
   return cachedYouTubeTabId;
 }
 
 async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
-  await chrome.tabs.update(tabId, { url: videoUrl, active: false, muted: true });
-  await waitForTabComplete(tabId, 30000, videoId);
-  try {
-    await chrome.tabs.update(tabId, { muted: true });
-  } catch {
-    // Tab may have closed; caller will handle fetch errors.
+  const tab = await chrome.tabs.get(tabId);
+  const currentUrl = String(tab.url || '');
+  if (!currentUrl.includes(videoId)) {
+    await chrome.tabs.update(tabId, { url: videoUrl, active: false });
+    await waitForTabComplete(tabId, 30000, videoId);
   }
+  await muteWorkerTab(tabId);
+  await installMuteHook(tabId);
 }
 
-async function runInYouTubeTab(func, args = []) {
-  const tabId = await ensureYouTubeTab();
+async function runInYouTubeTab(func, args = [], tabId = null) {
+  const targetTabId = tabId || await ensureYouTubeTab();
   const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId },
+    target: { tabId: targetTabId },
     world: 'MAIN',
     func,
     args,
@@ -528,7 +634,7 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
 
-  const result = await runInYouTubeTab(fetchTranscriptInPageContext, [videoId, languages]);
+  const result = await runInYouTubeTab(fetchTranscriptInPageContext, [videoId, languages], tabId);
   if (!result?.ok) {
     throw new Error(result?.error || 'Failed to fetch transcript in YouTube tab.');
   }
@@ -874,10 +980,14 @@ function fetchTranscriptInPageContext(expectedVideoId, languages) {
   }
 
   async function fetchViaInnerTube(player) {
+    const panelParams = player?.engagementPanels
+      ?.map(panel => panel?.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint?.params)
+      .find(Boolean);
     const params = player?.captions?.playerCaptionsTracklistRenderer?.openTranscriptParams
-      || player?.engagementPanels
+      || panelParams
+      || (window.ytInitialData?.engagementPanels
         ?.map(panel => panel?.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint?.params)
-        .find(Boolean);
+        .find(Boolean));
 
     if (!params) return null;
 
@@ -955,12 +1065,41 @@ function fetchTranscriptInPageContext(expectedVideoId, languages) {
     }
 
     const tracks = playerResult.player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+    const selected = tracks.length ? chooseTrack(tracks, languages) : null;
+
+    if (selected) {
+      try {
+        const captionResult = await fetchCaptionSegments(selected);
+        if (captionResult.segments.length) {
+          return {
+            ok: true,
+            language: selected.languageCode || 'unknown',
+            fileName: selected.name?.simpleText || selected.languageCode || 'caption',
+            segments: captionResult.segments,
+            method: `${playerResult.method}-${captionResult.format}`,
+          };
+        }
+      } catch {
+        // Fall through to innerTube / DOM.
+      }
+    }
+
+    const innerTube = await fetchViaInnerTube(playerResult.player);
+    if (innerTube?.segments?.length) {
+      return {
+        ok: true,
+        language: selected?.languageCode || 'unknown',
+        fileName: 'innertube-transcript',
+        segments: innerTube.segments,
+        method: `innertube-${innerTube.format}`,
+      };
+    }
 
     const domResult = await fetchTranscriptFromDom();
     if (domResult?.segments?.length) {
       return {
         ok: true,
-        language: chooseTrack(tracks, languages)?.languageCode || 'unknown',
+        language: selected?.languageCode || 'unknown',
         fileName: 'youtube-transcript-panel',
         segments: domResult.segments,
         method: `panel-${domResult.format}`,
@@ -968,42 +1107,10 @@ function fetchTranscriptInPageContext(expectedVideoId, languages) {
     }
 
     if (!tracks.length) {
-      const innerTube = await fetchViaInnerTube(playerResult.player);
-      if (innerTube?.segments?.length) {
-        return {
-          ok: true,
-          language: 'unknown',
-          fileName: 'innertube-transcript',
-          segments: innerTube.segments,
-          method: `innertube-${innerTube.format}`,
-        };
-      }
-      return { ok: false, error: 'Could not load transcript panel. Open the video on YouTube, click Show transcript manually once, then retry.' };
+      return { ok: false, error: 'No captions on this video. Open it on YouTube and confirm CC is available.' };
     }
 
-    const selected = chooseTrack(tracks, languages);
-    try {
-      const captionResult = await fetchCaptionSegments(selected);
-      return {
-        ok: true,
-        language: selected.languageCode || 'unknown',
-        fileName: selected.name?.simpleText || selected.languageCode || 'caption',
-        segments: captionResult.segments,
-        method: `${playerResult.method}-${captionResult.format}`,
-      };
-    } catch (captionError) {
-      const innerTube = await fetchViaInnerTube(playerResult.player);
-      if (innerTube?.segments?.length) {
-        return {
-          ok: true,
-          language: selected.languageCode || 'unknown',
-          fileName: selected.name?.simpleText || selected.languageCode || 'caption',
-          segments: innerTube.segments,
-          method: `innertube-fallback-${innerTube.format}`,
-        };
-      }
-      return { ok: false, error: String(captionError?.message || captionError) };
-    }
+    return { ok: false, error: 'Could not download captions. Stay signed in at youtube.com and retry.' };
   })();
 }
 
