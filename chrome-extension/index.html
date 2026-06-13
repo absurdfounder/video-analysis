@@ -57,9 +57,9 @@
     </section>
 
     <section class="step-panel" id="panel-2">
-      <p class="step-desc" id="stepDesc2">Download Hindi captions for relevant videos only. This is the slow step.</p>
-      <p class="hint youtube-hint">Uses a muted YouTube worker tab in the background, tries innerTube + caption APIs first, and falls back to the transcript panel when available.</p>
-      <button id="stepBtn2" class="btn-primary btn-large" type="button">Fetch transcripts</button>
+      <p class="step-desc" id="stepDesc2">Capture transcripts from YouTube pages with the transcript panel open.</p>
+      <p class="hint youtube-hint">Reliable mode: open the video on YouTube, click Show transcript, then return here and capture the visible transcript. Automatic background fetch is best-effort because YouTube often does not render transcript rows in hidden tabs.</p>
+      <button id="stepBtn2" class="btn-primary btn-large" type="button">Try automatic transcript fetch</button>
       <div id="transcriptList" class="date-groups"></div>
     </section>
 

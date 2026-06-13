@@ -162,10 +162,10 @@ function renderVideoCard(video) {
   const btnLabel = hasData
     ? `Read transcript (${segCount} lines)`
     : status === 'failed'
-      ? 'Retry transcript'
+      ? 'Retry visible transcript'
       : status === 'running'
         ? 'Fetching transcript...'
-        : 'Fetch transcript';
+        : 'Capture visible transcript';
 
   return `
     <article class="video-card ${video.isNew ? 'is-new' : ''} ${status === 'skipped' ? 'is-skipped' : ''} ${hasData ? 'has-transcript' : ''}">
@@ -176,7 +176,12 @@ function renderVideoCard(video) {
         ${hasData ? tag(`${segCount} lines`, 'relevance-relevant') : ''}
       </div>
       ${video.relevanceReason ? `<div class="mini">${escapeHtml(video.relevanceReason)}</div>` : ''}
-      ${showBtn ? `<button type="button" class="btn-view-transcript" data-open-transcript="${escapeHtml(video.id)}">${escapeHtml(btnLabel)}</button>` : ''}
+      ${showBtn ? `
+        <div class="card-actions">
+          <a class="btn-open-youtube" href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">Open YouTube</a>
+          <button type="button" class="btn-view-transcript" data-open-transcript="${escapeHtml(video.id)}">${escapeHtml(btnLabel)}</button>
+        </div>
+      ` : ''}
     </article>
   `;
 }
@@ -401,7 +406,7 @@ function deriveStepStatus() {
         : transcriptStats.running
           ? `${transcriptStats.running} transcript(s) currently fetching.`
           : `${transcriptStats.waiting} transcript(s) to fetch.`
-    : done ? 'All relevant transcripts fetched.' : 'Fetch transcripts after step 1.';
+    : done ? 'All relevant transcripts fetched.' : 'Open each YouTube video, show transcript, then capture it here.';
 
   return {
     1: { done: total > 0, meta: total ? `${total} videos` : 'Start here', desc: total ? `${total} videos loaded (${relevant} relevant).` : 'Pull latest videos from the channel.' },
@@ -447,12 +452,12 @@ function updateUI() {
   for (let i = 1; i <= 4; i++) setDisabled(`stepBtn${i}`, busy);
   if ($('stepBtn2')) {
     $('stepBtn2').textContent = transcriptStats.failed && transcriptStats.waiting
-      ? `Fetch ${transcriptStats.waiting} + retry ${transcriptStats.failed}`
+      ? `Try ${transcriptStats.waiting} + retry ${transcriptStats.failed}`
       : transcriptStats.failed
         ? `Retry ${transcriptStats.failed} failed transcript${transcriptStats.failed === 1 ? '' : 's'}`
         : transcriptStats.waiting
-          ? `Fetch ${transcriptStats.waiting} transcript${transcriptStats.waiting === 1 ? '' : 's'}`
-          : 'Fetch transcripts';
+          ? `Try ${transcriptStats.waiting} transcript${transcriptStats.waiting === 1 ? '' : 's'}`
+          : 'Try automatic transcript fetch';
   }
 
   document.querySelectorAll('.step').forEach(el => {
@@ -575,7 +580,7 @@ async function fetchTranscriptsStep() {
   }
 
   await saveLocal();
-  log(`Fetching ${pending.length} transcript(s). A muted YouTube worker tab will run in the background so you can keep working.`);
+  log(`Trying ${pending.length} transcript(s). Reliable capture needs each YouTube page open with its transcript panel visible; hidden-tab background fetch is best-effort.`);
 
   const data = await api('/api/fetch-transcripts-batch', {
     delayMs,
@@ -583,7 +588,7 @@ async function fetchTranscriptsStep() {
   });
 
   if (data.alreadyRunning) {
-    log('Transcript batch already running in background.');
+    log('Transcript batch already running.');
     setBusy(true);
     return;
   }
@@ -853,7 +858,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.10 — direct visible-panel reader';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.11 — visible YouTube tab required';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

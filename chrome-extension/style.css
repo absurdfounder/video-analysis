@@ -323,21 +323,41 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   border-color: rgba(26, 122, 76, 0.35);
 }
 
-.btn-view-transcript {
+.card-actions {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.45fr) 1fr;
+  gap: 8px;
   margin-top: 10px;
+}
+
+.btn-view-transcript,
+.btn-open-youtube {
   width: 100%;
   border: 0;
   border-radius: 12px;
   padding: 10px 12px;
-  background: var(--soft-green);
-  color: var(--green-dark);
   font: inherit;
   font-weight: 800;
+  text-align: center;
+}
+
+.btn-view-transcript {
+  background: var(--soft-green);
+  color: var(--green-dark);
   cursor: pointer;
+}
+
+.btn-open-youtube {
+  background: #eef1ed;
+  color: var(--muted);
 }
 
 .btn-view-transcript:hover {
   background: #d8edde;
+}
+
+.btn-open-youtube:hover {
+  color: var(--green-dark);
 }
 
 /* Transcript modal */
@@ -563,4 +583,5 @@ input {
   .step-line { display: none; }
   .step { grid-template-columns: auto 1fr; justify-items: start; text-align: left; }
   .step-num { grid-row: span 2; }
+  .card-actions { grid-template-columns: 1fr; }
 }
