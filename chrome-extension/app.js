@@ -11,7 +11,6 @@ const state = {
   runningTask: '',
   currentStep: 1,
   lastSync: null,
-  batchJob: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -71,9 +70,8 @@ function displayStatus(video) {
   return 'pending';
 }
 
-function normalizeVideos({ keepRunning = false } = {}) {
+function normalizeVideos() {
   for (const video of state.videos) {
-    if (!keepRunning && video.status === 'running') video.status = 'pending';
     if (video.status === 'ok' && !hasTranscriptData(video)) video.status = 'pending';
     if (hasTranscriptData(video)) video.status = 'ok';
   }
@@ -156,7 +154,6 @@ function renderVideoCard(video) {
         ${hasData ? tag(`${segCount} lines`, 'relevance-relevant') : ''}
       </div>
       ${video.relevanceReason ? `<div class="mini">${escapeHtml(video.relevanceReason)}</div>` : ''}
-      ${video.error && status === 'failed' ? `<div class="mini error-text">${escapeHtml(video.error)}</div>` : ''}
       ${showBtn ? `<button type="button" class="btn-view-transcript" data-open-transcript="${escapeHtml(video.id)}">${escapeHtml(btnLabel)}</button>` : ''}
     </article>
   `;
@@ -204,12 +201,51 @@ function timestampUrl(videoUrl, seconds) {
 
 let modalVideoId = '';
 
+function getTranscriptFetchMode() {
+  return ($('transcriptFetchMode')?.value || localStorage.getItem('fruitTranscriptMinerFetchMode') || 'background').trim();
+}
+
+function updateTranscriptModeUi() {
+  const mode = getTranscriptFetchMode();
+  if (mode !== 'embed-preview') $('embedWorker')?.classList.add('hidden');
+
+  if ($('stepDesc2') && state.currentStep === 2) {
+    $('stepDesc2').textContent = mode === 'embed-preview'
+      ? 'Preview each video here while captions load silently in a background YouTube tab.'
+      : 'Download Hindi captions for relevant videos only. Runs silently in a background YouTube tab.';
+  }
+
+  if ($('transcriptModeHint')) {
+    $('transcriptModeHint').textContent = mode === 'embed-preview'
+      ? 'Embed preview shows the current video on this page. Captions are still fetched from a hidden YouTube tab — you can keep working elsewhere.'
+      : 'Background mode keeps working while you use other tabs. Stay signed in at youtube.com.';
+  }
+}
+
+function showEmbedWorker(video, status = 'Fetching captions in background...') {
+  if (getTranscriptFetchMode() !== 'embed-preview' || !video) return;
+  const panel = $('embedWorker');
+  if (panel) panel.classList.remove('hidden');
+  if ($('embedWorkerTitle')) $('embedWorkerTitle').textContent = video.title || video.id;
+  if ($('embedWorkerStatus')) $('embedWorkerStatus').textContent = status;
+  if ($('embedWorkerFrame') && video.id) {
+    $('embedWorkerFrame').src = `https://www.youtube.com/embed/${video.id}?rel=0&modestbranding=1`;
+  }
+}
+
+function hideEmbedWorker() {
+  if ($('embedWorkerFrame')) $('embedWorkerFrame').src = 'about:blank';
+  if (getTranscriptFetchMode() !== 'embed-preview') $('embedWorker')?.classList.add('hidden');
+}
+
 async function fetchTranscriptForVideo(video) {
   const languages = ($('languages')?.value || 'hi.*,hi,en.*').trim();
+  const fetchMode = getTranscriptFetchMode();
   video.status = 'running';
+  showEmbedWorker(video, 'Fetching captions in background...');
   renderVideos();
   try {
-    const data = await api('/api/transcript', { id: video.id, videoUrl: video.url, languages });
+    const data = await api('/api/transcript', { id: video.id, videoUrl: video.url, languages, fetchMode });
     Object.assign(video, {
       status: 'ok',
       language: data.language,
@@ -220,10 +256,12 @@ async function fetchTranscriptForVideo(video) {
       needsWork: false,
     });
     if (hasTranscriptData(video)) await markVideosProcessed([video.id]);
+    showEmbedWorker(video, `Loaded ${segmentCount(video)} caption lines`);
     log(`Transcript loaded: ${video.title} (${segmentCount(video)} lines${data.method ? ` · ${data.method}` : ''})`);
   } catch (error) {
     video.status = 'failed';
     video.error = error.message.slice(0, 200);
+    showEmbedWorker(video, `Failed: ${error.message.slice(0, 80)}`);
     log(`Transcript failed: ${video.title}: ${error.message}`);
     throw error;
   } finally {
@@ -356,7 +394,7 @@ function renderVideos() {
     'No relevant videos. Fetch videos in step 1 first.',
   );
   updateUI();
-  saveLocal({ keepRunning: Boolean(state.batchJob?.running) });
+  saveLocal();
 }
 
 function deriveStepStatus() {
@@ -364,18 +402,11 @@ function deriveStepStatus() {
   const relevant = state.videos.filter(isProcessable).length;
   const done = transcriptReady().length;
   const pending = pendingTranscripts().length;
-  const failed = state.videos.filter(v => v.status === 'failed').length;
   const prices = state.priceRows.length;
-
-  const step2Meta = pending
-    ? `${pending} pending${failed ? ` · ${failed} failed` : ''}`
-    : done
-      ? `${done} done${failed ? ` · ${failed} failed` : ''}`
-      : 'Waiting';
 
   return {
     1: { done: total > 0, meta: total ? `${total} videos` : 'Start here', desc: total ? `${total} videos loaded (${relevant} relevant).` : 'Pull latest videos from the channel.' },
-    2: { done: relevant > 0 && pending === 0 && !failed, meta: step2Meta, desc: pending ? `${pending} transcript(s) to fetch.` : failed ? `${failed} failed — check pinned YouTube tab or retry.` : done ? 'All relevant transcripts fetched.' : 'Fetch transcripts after step 1.' },
+    2: { done: relevant > 0 && pending === 0, meta: pending ? `${pending} pending` : done ? `${done} done` : 'Waiting', desc: pending ? `${pending} transcript(s) to fetch.` : done ? 'All relevant transcripts fetched.' : 'Fetch transcripts after step 1.' },
     3: { done: prices > 0, meta: prices ? `${prices} rows` : 'Waiting', desc: prices ? `${prices} price rows extracted.` : 'Run AI on transcripts to extract mandi prices.' },
     4: { done: Boolean(state.lastSync), meta: state.lastSync ? 'Synced' : 'Waiting', desc: state.lastSync ? `Last pushed ${new Date(state.lastSync).toLocaleString()}` : 'Push results to your website dataset.' },
   };
@@ -413,10 +444,7 @@ function updateUI() {
   if ($('statPrices')) $('statPrices').textContent = state.priceRows.length;
 
   const busy = Boolean(state.runningTask);
-  const batchRunning = Boolean(state.batchJob?.running && !state.batchJob?.paused);
-  for (let i = 1; i <= 4; i++) {
-    setDisabled(`stepBtn${i}`, busy || (i === 2 && batchRunning));
-  }
+  for (let i = 1; i <= 4; i++) setDisabled(`stepBtn${i}`, busy);
 
   document.querySelectorAll('.step').forEach(el => {
     const n = Number(el.dataset.step);
@@ -427,57 +455,16 @@ function updateUI() {
     $('syncSummary').textContent = `Last dataset update: ${new Date(state.lastSync).toLocaleString()} · ${state.priceRows.length} price rows · ${state.videos.length} videos`;
   }
 
-  updateBatchControls();
-}
-
-function updateBatchControls() {
-  const controls = $('transcriptBatchControls');
-  const progress = $('batchProgress');
-  const pauseBtn = $('pauseTranscriptsBtn');
-  const stopBtn = $('stopTranscriptsBtn');
-  const job = state.batchJob;
-  const running = Boolean(job?.running);
-  const paused = Boolean(job?.paused);
-
-  if (controls) controls.classList.toggle('hidden', !running && !paused);
-  if (progress && job) {
-    const done = job.done || 0;
-    const total = job.total || 0;
-    const current = job.currentTitle || job.currentId || '';
-    if (paused) {
-      progress.textContent = `Paused · ${done}/${total} done${current ? ` · last: ${current}` : ''}`;
-    } else if (current) {
-      progress.textContent = `Fetching ${done + 1}/${total}: ${current}`;
-    } else {
-      progress.textContent = `Fetching transcripts · ${done}/${total} done`;
-    }
-  }
-  if (pauseBtn) {
-    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
-    pauseBtn.disabled = !running;
-  }
-  if (stopBtn) stopBtn.disabled = !running && !paused;
+  updateTranscriptModeUi();
 }
 
 function setBusy(busy) {
   state.runningTask = busy ? 'busy' : '';
   updateUI();
-  updateBatchControls();
 }
 
-async function refreshBatchJob() {
-  try {
-    const data = await api('/api/transcript-batch-status');
-    state.batchJob = data.job || null;
-  } catch {
-    state.batchJob = null;
-  }
-  updateBatchControls();
-}
-
-async function saveLocal({ keepRunning = false } = {}) {
-  const duringBatch = keepRunning || Boolean(state.batchJob?.running);
-  normalizeVideos({ keepRunning: duringBatch });
+async function saveLocal() {
+  normalizeVideos();
   const payload = {
     videos: state.videos,
     priceRows: state.priceRows,
@@ -491,7 +478,7 @@ async function saveLocal({ keepRunning = false } = {}) {
     log(`localStorage save failed (${error.message}). Using chrome.storage.`);
   }
 
-  if (chrome.storage?.local && !duringBatch) {
+  if (chrome.storage?.local) {
     await chrome.storage.local.set({ fruitTranscriptMinerStateV2: payload });
   }
 }
@@ -576,91 +563,25 @@ async function fetchTranscriptsStep() {
   const pending = pendingTranscripts();
   if (!pending.length) {
     log('No pending transcripts.');
+    hideEmbedWorker();
     goToStep(3);
     return;
   }
 
-  await saveLocal();
-  log(`Fetching ${pending.length} transcript(s) in background — you can switch tabs freely.`);
+  log(`Fetching ${pending.length} transcript(s) in ${getTranscriptFetchMode()} mode...`);
+  updateTranscriptModeUi();
 
-  const data = await api('/api/fetch-transcripts-batch', {
-    delayMs,
-    languages: ($('languages')?.value || 'hi.*,hi,en.*').trim(),
-  });
-
-  if (data.alreadyRunning) {
-    log('Transcript batch already running in background.');
-    await refreshBatchJob();
-    updateBatchControls();
-    return;
-  }
-
-  if (!data.started) {
-    goToStep(3);
-    return;
-  }
-
-  await refreshBatchJob();
-  updateBatchControls();
-  goToStep(2);
-}
-
-async function pauseOrResumeTranscripts() {
-  const job = state.batchJob;
-  if (!job?.running) return;
-  if (job.paused) {
-    await api('/api/resume-transcripts-batch');
-    log('Resumed transcript batch.');
-  } else {
-    await api('/api/pause-transcripts-batch');
-    log('Paused transcript batch.');
-  }
-  await refreshBatchJob();
-}
-
-async function stopTranscripts() {
-  const job = state.batchJob;
-  if (!job?.running && !job?.paused) return;
-  await api('/api/cancel-transcripts-batch');
-  await refreshBatchJob();
-  normalizeVideos();
-  renderVideos();
-  log('Stopped transcript batch.');
-}
-
-function applySavedProject(saved, { keepRunning } = {}) {
-  if (!saved) return;
-  if (Array.isArray(saved.videos)) state.videos = saved.videos;
-  if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
-  if (saved.lastSync) state.lastSync = saved.lastSync;
-  if (saved.currentStep) state.currentStep = saved.currentStep;
-  const preserveRunning = keepRunning ?? (saved.videos || []).some(video => video.status === 'running');
-  normalizeVideos({ keepRunning: preserveRunning });
-  renderVideos();
-  renderPrices();
-  updateUI();
-}
-
-function syncFromStorageChanges(changes) {
-  if (changes.fruitTranscriptMinerStateV2?.newValue) {
-    applySavedProject(changes.fruitTranscriptMinerStateV2.newValue, {
-      keepRunning: Boolean(changes.transcriptBatchJob?.newValue?.running || state.batchJob?.running),
-    });
-    if (state.currentStep) goToStep(state.currentStep);
-    renderVideos();
-  }
-
-  if (changes.transcriptBatchJob?.newValue) {
-    state.batchJob = changes.transcriptBatchJob.newValue;
-    updateBatchControls();
-    if (!state.batchJob?.running && state.batchJob?.finishedAt) {
-      log(`Background transcript batch finished (${state.batchJob.done || 0}/${state.batchJob.total || 0}).`);
-      goToStep(3);
+  for (const video of pending) {
+    try {
+      await fetchTranscriptForVideo(video);
+    } catch {
+      // error already logged
     }
-    if (state.batchJob?.cancelledAt) {
-      log(`Transcript batch stopped (${state.batchJob.done || 0}/${state.batchJob.total || 0} completed).`);
-    }
+    if (delayMs > 0) await sleep(delayMs);
   }
+
+  hideEmbedWorker();
+  goToStep(3);
 }
 
 async function aiAnalysisStep() {
@@ -730,11 +651,17 @@ async function loadWatchSettings() {
   const settings = data.settings || {};
   if ($('pollIntervalMinutes')) $('pollIntervalMinutes').value = settings.pollIntervalMinutes || 360;
   if ($('notificationsEnabled')) $('notificationsEnabled').checked = settings.notificationsEnabled !== false;
+  if ($('transcriptFetchMode')) {
+    $('transcriptFetchMode').value = settings.transcriptFetchMode
+      || localStorage.getItem('fruitTranscriptMinerFetchMode')
+      || 'background';
+  }
   if ($('lastPollText')) {
     $('lastPollText').textContent = settings.lastPollAt
       ? `Last check: ${new Date(settings.lastPollAt).toLocaleString()}`
       : 'Last check: never';
   }
+  updateTranscriptModeUi();
 }
 
 document.querySelectorAll('.step').forEach(btn => {
@@ -748,18 +675,9 @@ $('stepBtn1')?.addEventListener('click', async () => {
 });
 
 $('stepBtn2')?.addEventListener('click', async () => {
-  try { await fetchTranscriptsStep(); }
-  catch (e) { log(`Step 2 failed: ${e.message}`); setBusy(false); }
-});
-
-$('pauseTranscriptsBtn')?.addEventListener('click', async () => {
-  try { await pauseOrResumeTranscripts(); }
-  catch (e) { log(`Pause/resume failed: ${e.message}`); }
-});
-
-$('stopTranscriptsBtn')?.addEventListener('click', async () => {
-  try { await stopTranscripts(); }
-  catch (e) { log(`Stop failed: ${e.message}`); }
+  try { setBusy(true); await fetchTranscriptsStep(); }
+  catch (e) { log(`Step 2 failed: ${e.message}`); }
+  finally { setBusy(false); }
 });
 
 $('stepBtn3')?.addEventListener('click', async () => {
@@ -777,16 +695,24 @@ $('stepBtn4')?.addEventListener('click', async () => {
 $('saveWatchBtn')?.addEventListener('click', async () => {
   try {
     setBusy(true);
+    const transcriptFetchMode = getTranscriptFetchMode();
+    localStorage.setItem('fruitTranscriptMinerFetchMode', transcriptFetchMode);
     await api('/api/channel-settings', {
       method: 'set',
       channelUrl: ($('channelUrl')?.value || '').trim(),
       pollIntervalMinutes: Number($('pollIntervalMinutes')?.value || 360),
       notificationsEnabled: $('notificationsEnabled')?.checked !== false,
+      transcriptFetchMode,
     });
     log('Watch settings saved.');
     await loadWatchSettings();
   } catch (e) { log(e.message); }
   finally { setBusy(false); }
+});
+
+$('transcriptFetchMode')?.addEventListener('change', () => {
+  localStorage.setItem('fruitTranscriptMinerFetchMode', getTranscriptFetchMode());
+  updateTranscriptModeUi();
 });
 
 $('pullDataBtn')?.addEventListener('click', async () => {
@@ -854,60 +780,12 @@ if ($('syncSiteUrl')) $('syncSiteUrl').value = localStorage.getItem('fruitTransc
 if ($('syncToken')) $('syncToken').value = localStorage.getItem('fruitTranscriptMinerSyncToken') || '';
 
 loadLocal().catch((error) => log(`Load failed: ${error.message}`));
-
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local') return;
-  syncFromStorageChanges(changes);
-});
-
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type !== 'transcript-batch-event') return;
-  if (message.event === 'complete') {
-    goToStep(3);
-    log(`Transcript batch complete (${message.done || 0} videos).`);
-    refreshBatchJob().then(() => renderVideos());
-    return;
-  }
-  if (message.event === 'cancelled') {
-    refreshBatchJob().then(() => {
-      normalizeVideos();
-      renderVideos();
-    });
-    return;
-  }
-  if (message.event === 'paused' || message.event === 'resumed') {
-    refreshBatchJob();
-    return;
-  }
-  if (message.event === 'progress') {
-    if (message.status === 'running') {
-      log(`Fetching transcript: ${message.title || message.videoId}...`);
-    } else if (message.status === 'ok') {
-      log(`Transcript loaded: ${message.title || message.videoId} (${message.segmentCount || 0} lines${message.method ? ` · ${message.method}` : ''})`);
-    } else if (message.status === 'failed') {
-      log(`Transcript failed: ${message.title || message.videoId}: ${message.error || 'unknown error'}`);
-    }
-    refreshBatchJob().then(() => renderVideos());
-  }
-});
-
-api('/api/transcript-batch-status').then(async (data) => {
-  state.batchJob = data?.job || null;
-  if (state.batchJob?.running) {
-    normalizeVideos({ keepRunning: true });
-    renderVideos();
-    updateBatchControls();
-  } else {
-    normalizeVideos();
-    renderVideos();
-  }
-}).catch(() => {});
-loadWatchSettings();
+loadWatchSettings().then(() => updateTranscriptModeUi());
 
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Pinned YouTube worker tab — failures show as failed, not silent skip.';
+    if ($('statusText')) $('statusText').textContent = 'Transcripts fetch in a background YouTube tab — switch modes in Settings';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

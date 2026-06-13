@@ -57,14 +57,16 @@
     </section>
 
     <section class="step-panel" id="panel-2">
-      <p class="step-desc" id="stepDesc2">Download Hindi captions for relevant videos only. This is the slow step.</p>
-      <p class="hint youtube-hint">Opens a <strong>pinned YouTube tab</strong> in your browser (muted, no audio). Caption API is tried first; Show transcript is clicked briefly only if needed, then your tab is restored.</p>
-      <div class="batch-controls hidden" id="transcriptBatchControls">
-        <p class="batch-progress" id="batchProgress">Preparing batch...</p>
-        <div class="batch-actions">
-          <button id="pauseTranscriptsBtn" class="btn-secondary" type="button">Pause</button>
-          <button id="stopTranscriptsBtn" class="btn-ghost" type="button">Stop</button>
+      <p class="step-desc" id="stepDesc2">Download Hindi captions for relevant videos only. Runs silently in a background YouTube tab.</p>
+      <p class="hint youtube-hint" id="transcriptModeHint">Background mode keeps working while you use other tabs. Stay signed in at <strong>youtube.com</strong>.</p>
+      <div id="embedWorker" class="embed-worker hidden">
+        <div class="embed-worker-head">
+          <div>
+            <strong id="embedWorkerTitle">Waiting for video...</strong>
+            <p class="embed-worker-status" id="embedWorkerStatus">Preview mode — captions load in background</p>
+          </div>
         </div>
+        <iframe id="embedWorkerFrame" title="Video preview" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin"></iframe>
       </div>
       <button id="stepBtn2" class="btn-primary btn-large" type="button">Fetch transcripts</button>
       <div id="transcriptList" class="date-groups"></div>
@@ -95,6 +97,12 @@
           <label>Poll every (min)<input id="pollIntervalMinutes" type="number" min="30" max="1440" value="360" /></label>
         </div>
         <label class="check-row"><input id="notificationsEnabled" type="checkbox" checked /> Notify on new uploads</label>
+        <label>Transcript fetch mode
+          <select id="transcriptFetchMode">
+            <option value="background">Background tab (no tab switching)</option>
+            <option value="embed-preview">Embed preview on this page</option>
+          </select>
+        </label>
         <p class="hint" id="lastPollText">Last check: never</p>
         <div class="grid-2">
           <label>Languages<input id="languages" value="hi.*,hi,en.*" /></label>
