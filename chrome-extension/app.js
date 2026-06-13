@@ -268,29 +268,58 @@ async function openTranscriptModal(videoId) {
   if ($('modalTitle')) $('modalTitle').textContent = video.title || video.id;
   if ($('modalYoutube')) $('modalYoutube').href = video.url;
   if ($('modalSearch')) $('modalSearch').value = '';
-  if ($('modalMeta')) $('modalMeta').textContent = 'Loading...';
-  if ($('modalSegments')) $('modalSegments').innerHTML = '<div class="empty-state">Loading transcript...</div>';
+  if ($('modalCapture')) $('modalCapture').disabled = false;
   modal.classList.remove('hidden');
   document.body.classList.add('modal-open');
 
-  try {
-    if (!hasTranscriptData(video)) await fetchTranscriptForVideo(video);
-  } catch (error) {
-    if ($('modalSegments')) {
-      $('modalSegments').innerHTML = `<div class="empty-state">Could not load transcript: ${escapeHtml(error.message)}</div>`;
+  renderTranscriptModalState(video);
+}
+
+function renderTranscriptModalState(video) {
+  if (!video) return;
+  if (hasTranscriptData(video)) {
+    if ($('modalMeta')) {
+      $('modalMeta').textContent = `${segmentCount(video)} lines · ${video.language || 'unknown'} · ${parseVideoDate(video).label}`;
     }
+    if ($('modalCapture')) $('modalCapture').textContent = 'Recapture now';
+    renderModalSegments(video);
     return;
   }
 
-  if (!hasTranscriptData(video)) {
-    if ($('modalSegments')) $('modalSegments').innerHTML = '<div class="empty-state">No caption lines found for this video.</div>';
-    return;
+  if ($('modalMeta')) $('modalMeta').textContent = 'Open the exact YouTube video, show transcript, then capture.';
+  if ($('modalCapture')) $('modalCapture').textContent = 'Capture now';
+  if ($('modalSegments')) {
+    $('modalSegments').innerHTML = `
+      <div class="empty-state">
+        Open this exact video on YouTube, click Show transcript, then press Capture now.
+      </div>
+    `;
   }
+}
 
-  if ($('modalMeta')) {
-    $('modalMeta').textContent = `${segmentCount(video)} lines · ${video.language || 'unknown'} · ${parseVideoDate(video).label}`;
+async function captureTranscriptFromModal() {
+  const video = state.videos.find(v => v.id === modalVideoId);
+  if (!video) return;
+  if ($('modalCapture')) {
+    $('modalCapture').disabled = true;
+    $('modalCapture').textContent = 'Capturing...';
   }
-  renderModalSegments(video);
+  if ($('modalMeta')) $('modalMeta').textContent = 'Capturing visible YouTube transcript...';
+  if ($('modalSegments')) $('modalSegments').innerHTML = '<div class="empty-state">Checking open YouTube tabs...</div>';
+
+  try {
+    await fetchTranscriptForVideo(video);
+    renderTranscriptModalState(video);
+  } catch (error) {
+    if ($('modalMeta')) $('modalMeta').textContent = 'Capture needs the exact YouTube tab.';
+    if ($('modalSegments')) {
+      $('modalSegments').innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    }
+    if ($('modalCapture')) {
+      $('modalCapture').disabled = false;
+      $('modalCapture').textContent = 'Capture now';
+    }
+  }
 }
 
 function closeTranscriptModal() {
@@ -808,6 +837,12 @@ $('modalSearch')?.addEventListener('input', () => {
   if (video) renderModalSegments(video);
 });
 
+$('modalCapture')?.addEventListener('click', () => {
+  captureTranscriptFromModal().catch((error) => {
+    log(`Transcript capture failed: ${error.message}`);
+  });
+});
+
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeTranscriptModal();
 });
@@ -860,7 +895,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.14 — no flicker on capture';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.15 — manual capture modal';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
