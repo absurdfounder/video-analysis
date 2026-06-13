@@ -217,7 +217,7 @@ async function fetchTranscriptForVideo(video) {
       needsWork: false,
     });
     if (hasTranscriptData(video)) await markVideosProcessed([video.id]);
-    log(`Transcript loaded: ${video.title} (${segmentCount(video)} lines)`);
+    log(`Transcript loaded: ${video.title} (${segmentCount(video)} lines${data.method ? ` · ${data.method}` : ''})`);
   } catch (error) {
     video.status = 'failed';
     video.error = error.message.slice(0, 200);
