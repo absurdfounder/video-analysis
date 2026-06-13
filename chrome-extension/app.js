@@ -1911,7 +1911,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.0 — vector DB chat (Step 5)';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.1 — vector DB chat (Step 5)';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
