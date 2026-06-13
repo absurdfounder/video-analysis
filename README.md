@@ -1,34 +1,30 @@
-# Netlify Base Directory Lock Fix
+# Fruit Price Transcript Miner
 
-Your Netlify deploy log still shows:
+Pull YouTube channel videos, collect timestamped captions, extract fruit mandi price rows, and export CSV/JSON.
 
-```text
-base: /opt/build/repo/app/public
-publish: /opt/build/repo/app/public/app/public
-functionsDirectory: /opt/build/repo/app/public/app/netlify/functions
-```
+## Hosted Netlify app
 
-That means Netlify is still using `app/public` as the Base directory. Replace the root `netlify.toml` in your GitHub repo with the `netlify.toml` in this folder.
+The Netlify app lives in `app/`.
 
-This version includes:
-
-```toml
-base = "."
-```
-
-That forces Netlify to resolve all paths from the repository root.
-
-Then in Netlify UI, also set:
+Netlify settings:
 
 - Base directory: blank
-- Build command: `npm --prefix app install`
+- Build command: `npm --prefix app install && npm --prefix app run install-ytdlp`
 - Publish directory: `app/public`
 - Functions directory: `app/netlify/functions`
 
-After pushing, use **Clear cache and deploy site**.
-
-Test:
+If YouTube blocks Netlify with `Sign in to confirm you're not a bot`, add YouTube cookies as a Netlify environment variable:
 
 ```text
-https://videostudy.netlify.app/api/status
+YOUTUBE_COOKIES_BASE64=base64_encoded_cookies_file
 ```
+
+Use a dedicated/throwaway YouTube account for cookies. Never commit cookies to GitHub.
+
+## Chrome extension mode
+
+The Chrome extension lives in `chrome-extension/`.
+
+Use this when Netlify/cloud IPs get blocked by YouTube. The extension fetches YouTube data from your own Chrome browser session instead of a serverless IP.
+
+Load it from `chrome://extensions` with Developer mode -> Load unpacked -> select `chrome-extension`.
