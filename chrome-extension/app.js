@@ -1,7 +1,16 @@
+const MONTHS = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+];
+
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 const state = {
   videos: [],
   priceRows: [],
   runningTask: '',
+  currentStep: 1,
+  lastSync: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -9,10 +18,6 @@ const $ = (id) => document.getElementById(id);
 function setDisabled(id, disabled) {
   const el = $(id);
   if (el) el.disabled = disabled;
-}
-
-function isChromeExtension() {
-  return typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id;
 }
 
 function log(message) {
@@ -33,21 +38,122 @@ async function api(path, body) {
   return data;
 }
 
-function isProcessable(video) {
-  return video.relevance !== 'irrelevant' && video.status !== 'skipped';
-}
-
-function pendingVideos() {
-  return state.videos.filter(video => video.needsWork !== false && isProcessable(video) && video.status !== 'ok');
-}
-
 function escapeHtml(text) {
   return String(text || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+    .replace(/"/g, '&quot;');
+}
+
+function tag(text, cls) {
+  return `<span class="badge ${cls}">${escapeHtml(text)}</span>`;
+}
+
+function isProcessable(video) {
+  return video.relevance !== 'irrelevant' && video.status !== 'skipped';
+}
+
+function pendingTranscripts() {
+  return state.videos.filter(v => isProcessable(v) && v.status !== 'ok');
+}
+
+function transcriptReady() {
+  return state.videos.filter(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
+}
+
+function parseVideoDate(video) {
+  const title = String(video.title || '');
+  const upload = String(video.upload_date || '').trim();
+
+  const dmy = title.match(/\b(\d{1,2})\s*(st|nd|rd|th)?\s*(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b/i);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = MONTHS.indexOf(dmy[3].toLowerCase());
+    const year = Number(dmy[4]);
+    if (month >= 0) return makeDateKey(year, month, day);
+  }
+
+  const mdy = title.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})\b/i);
+  if (mdy) {
+    const month = MONTHS.indexOf(mdy[1].toLowerCase());
+    const day = Number(mdy[2]);
+    const year = Number(mdy[3]);
+    if (month >= 0) return makeDateKey(year, month, day);
+  }
+
+  if (/^\d{8}$/.test(upload)) {
+    const year = Number(upload.slice(0, 4));
+    const month = Number(upload.slice(4, 6)) - 1;
+    const day = Number(upload.slice(6, 8));
+    return makeDateKey(year, month, day);
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(upload)) {
+    const [year, month, day] = upload.slice(0, 10).split('-').map(Number);
+    return makeDateKey(year, month - 1, day);
+  }
+
+  return { sortKey: '0000-00-00', label: 'Unknown date' };
+}
+
+function makeDateKey(year, monthIndex, day) {
+  const sortKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const label = `${day}/${MONTH_SHORT[monthIndex]}/${year}`;
+  return { sortKey, label };
+}
+
+function groupVideosByDate(videos) {
+  const groups = new Map();
+  for (const video of videos) {
+    const { sortKey, label } = parseVideoDate(video);
+    if (!groups.has(sortKey)) groups.set(sortKey, { sortKey, label, videos: [] });
+    groups.get(sortKey).videos.push(video);
+  }
+  return [...groups.values()].sort((a, b) => b.sortKey.localeCompare(a.sortKey));
+}
+
+function renderVideoCard(video) {
+  return `
+    <article class="video-card ${video.isNew ? 'is-new' : ''} ${video.status === 'skipped' ? 'is-skipped' : ''}">
+      <h3><a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a></h3>
+      <div class="card-tags">
+        ${tag(video.status || 'pending', video.status || 'pending')}
+        ${tag(video.relevance || 'unclassified', `relevance-${video.relevance || 'unclassified'}`)}
+      </div>
+      ${video.relevanceReason ? `<div class="mini">${escapeHtml(video.relevanceReason)}</div>` : ''}
+    </article>
+  `;
+}
+
+function renderDateGroups(videos, containerId, emptyMessage) {
+  const container = $(containerId);
+  if (!container) return;
+
+  const q = (containerId === 'videoList' ? ($('videoSearch')?.value || '') : '').toLowerCase().trim();
+  const filtered = videos.filter(v => {
+    if (!q) return true;
+    const hay = [v.title, v.status, v.relevance, parseVideoDate(v).label].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+
+  if (!filtered.length) {
+    container.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
+    return;
+  }
+
+  const groups = groupVideosByDate(filtered);
+  container.innerHTML = groups.map(group => `
+    <section class="date-group">
+      <header class="date-group-head">
+        <h3>${escapeHtml(group.label)}</h3>
+        <span>${group.videos.length} video${group.videos.length === 1 ? '' : 's'}</span>
+      </header>
+      <div class="card-list">
+        ${group.videos.map(renderVideoCard).join('')}
+      </div>
+    </section>
+  `).join('');
 }
 
 function secondsToClock(seconds) {
@@ -58,165 +164,137 @@ function secondsToClock(seconds) {
 }
 
 function timestampUrl(videoUrl, seconds) {
-  const sec = Math.max(0, Math.floor(Number(seconds) || 0));
   try {
     const url = new URL(videoUrl);
-    url.searchParams.set('t', `${sec}s`);
+    url.searchParams.set('t', `${Math.max(0, Math.floor(Number(seconds) || 0))}s`);
     return url.toString();
   } catch {
-    return `${videoUrl}${String(videoUrl).includes('?') ? '&' : '?'}t=${sec}s`;
+    return videoUrl;
   }
 }
 
-function tag(text, cls) {
-  return `<span class="badge ${cls}">${escapeHtml(text)}</span>`;
+function renderPrices() {
+  const list = $('priceList');
+  if (!list) return;
+
+  const q = ($('priceSearch')?.value || '').toLowerCase().trim();
+  const rows = state.priceRows.filter(row => !q || Object.values(row).join(' ').toLowerCase().includes(q));
+
+  const renderCard = (row) => `
+    <article class="price-card">
+      <h3>${escapeHtml(row.fruit || 'unknown')}${row.fruit_hindi ? ` · ${escapeHtml(row.fruit_hindi)}` : ''}</h3>
+      <div class="card-meta">${escapeHtml(row.video_title || row.video_id)}</div>
+      <div class="price-grid">
+        <div><span>Min</span><strong>₹${escapeHtml(row.min_price_inr)}</strong></div>
+        <div><span>Max</span><strong>₹${escapeHtml(row.max_price_inr)}</strong></div>
+        <div><span>Unit</span><strong>${escapeHtml(row.unit || '-')}</strong></div>
+        <div><span>Time</span><strong>${escapeHtml(row.timestamp_label || secondsToClock(row.timestamp_seconds))}</strong></div>
+      </div>
+    </article>
+  `;
+
+  if (!rows.length) {
+    list.innerHTML = '<div class="empty-state">No prices yet. Complete step 3.</div>';
+  } else {
+    list.innerHTML = rows.map(renderCard).join('');
+  }
+
+  const preview = $('pricePreview');
+  if (preview) {
+    preview.innerHTML = rows.length
+      ? rows.slice(0, 6).map(renderCard).join('')
+      : '<div class="empty-state">Run AI analysis first.</div>';
+  }
+
+  updateUI();
+  saveLocal();
 }
 
-function updateStats() {
-  const pending = pendingVideos();
-  const done = state.videos.filter(v => v.status === 'ok').length;
-  if ($('statPending')) $('statPending').textContent = pending.length;
-  if ($('statDone')) $('statDone').textContent = done;
+function renderVideos() {
+  renderDateGroups(
+    state.videos,
+    'videoList',
+    'No videos yet. Click “Fetch videos from channel” in step 1.',
+  );
+  renderDateGroups(
+    state.videos.filter(v => isProcessable(v)),
+    'transcriptList',
+    'No relevant videos. Fetch videos in step 1 first.',
+  );
+  updateUI();
+  saveLocal();
+}
+
+function deriveStepStatus() {
+  const total = state.videos.length;
+  const relevant = state.videos.filter(isProcessable).length;
+  const done = transcriptReady().length;
+  const pending = pendingTranscripts().length;
+  const prices = state.priceRows.length;
+
+  return {
+    1: { done: total > 0, meta: total ? `${total} videos` : 'Start here', desc: total ? `${total} videos loaded (${relevant} relevant).` : 'Pull latest videos from the channel.' },
+    2: { done: relevant > 0 && pending === 0, meta: pending ? `${pending} pending` : done ? `${done} done` : 'Waiting', desc: pending ? `${pending} transcript(s) to fetch.` : done ? 'All relevant transcripts fetched.' : 'Fetch transcripts after step 1.' },
+    3: { done: prices > 0, meta: prices ? `${prices} rows` : 'Waiting', desc: prices ? `${prices} price rows extracted.` : 'Run AI on transcripts to extract mandi prices.' },
+    4: { done: Boolean(state.lastSync), meta: state.lastSync ? 'Synced' : 'Waiting', desc: state.lastSync ? `Last pushed ${new Date(state.lastSync).toLocaleString()}` : 'Push results to your website dataset.' },
+  };
+}
+
+function suggestedStep() {
+  if (!state.videos.length) return 1;
+  if (pendingTranscripts().length) return 2;
+  if (!state.priceRows.length) return 3;
+  return 4;
+}
+
+function goToStep(step) {
+  state.currentStep = step;
+  document.querySelectorAll('.step').forEach(el => {
+    const n = Number(el.dataset.step);
+    el.classList.toggle('active', n === step);
+    el.classList.toggle('done', n < step || (deriveStepStatus()[n]?.done && n !== step));
+  });
+  document.querySelectorAll('.step-panel').forEach(el => el.classList.remove('active'));
+  $(`panel-${step}`)?.classList.add('active');
+}
+
+function updateUI() {
+  const status = deriveStepStatus();
+  for (let i = 1; i <= 4; i++) {
+    const meta = $(`stepMeta${i}`);
+    if (meta) meta.textContent = status[i].meta;
+    const desc = $(`stepDesc${i}`);
+    if (desc) desc.textContent = status[i].desc;
+  }
+
+  if ($('statVideos')) $('statVideos').textContent = state.videos.length;
+  if ($('statDone')) $('statDone').textContent = transcriptReady().length;
   if ($('statPrices')) $('statPrices').textContent = state.priceRows.length;
-  if ($('videoCount')) $('videoCount').textContent = state.videos.length;
-  if ($('okCount')) $('okCount').textContent = done;
-  if ($('failCount')) $('failCount').textContent = state.videos.filter(v => v.status === 'failed').length;
-  if ($('priceCount')) $('priceCount').textContent = state.priceRows.length;
-}
 
-function updateNextAction() {
-  const pending = pendingVideos();
-  const skipped = state.videos.filter(v => v.status === 'skipped' || v.relevance === 'irrelevant').length;
-  const el = $('nextAction');
-  if (!el) return;
+  const busy = Boolean(state.runningTask);
+  for (let i = 1; i <= 4; i++) setDisabled(`stepBtn${i}`, busy);
 
-  if (!state.videos.length) {
-    el.textContent = 'Check the channel for new fruit/vegetable price videos.';
-    return;
+  document.querySelectorAll('.step').forEach(el => {
+    const n = Number(el.dataset.step);
+    el.classList.toggle('done', status[n].done);
+  });
+
+  if ($('syncSummary') && state.lastSync) {
+    $('syncSummary').textContent = `Last dataset update: ${new Date(state.lastSync).toLocaleString()} · ${state.priceRows.length} price rows · ${state.videos.length} videos`;
   }
-  if (pending.length) {
-    el.textContent = `${pending.length} video(s) ready to process${skipped ? ` · ${skipped} irrelevant skipped` : ''}.`;
-    return;
-  }
-  if (!state.priceRows.length) {
-    el.textContent = 'Transcripts are ready. Extract prices next.';
-    return;
-  }
-  el.textContent = `${state.priceRows.length} price rows ready. Push to website when done.`;
 }
 
 function setBusy(busy) {
   state.runningTask = busy ? 'busy' : '';
-  setDisabled('runAllBtn', busy);
-  setDisabled('checkNewBtn', busy);
-  setDisabled('fetchTranscriptsBtn', busy);
-  setDisabled('extractAiBtn', busy);
-  setDisabled('pushDataBtn', busy);
-  setDisabled('fetchVideosBtn', busy);
-  setDisabled('classifyBtn', busy);
-  setDisabled('saveWatchBtn', busy);
-}
-
-function renderPendingPanel() {
-  const pill = $('pendingPill');
-  const list = $('pendingList');
-  if (!pill || !list) return;
-
-  const pending = pendingVideos();
-  const fresh = pending.filter(video => video.isNew);
-  pill.textContent = fresh.length ? `${fresh.length} new upload(s)` : `${pending.length} pending`;
-
-  if (!fresh.length) {
-    list.innerHTML = '';
-    return;
-  }
-
-  list.innerHTML = fresh.slice(0, 6).map(video => `
-    <article class="pending-item ${video.isNew ? 'is-new' : ''}">
-      <strong>${escapeHtml(video.title || video.id)}</strong>
-      <div class="mini">${escapeHtml(video.relevance || 'unclassified')}${video.relevanceCategory ? ` · ${escapeHtml(video.relevanceCategory)}` : ''}</div>
-    </article>
-  `).join('');
-}
-
-function renderVideos() {
-  const q = ($('videoSearch')?.value || '').toLowerCase().trim();
-  const list = $('videoList');
-  if (!list) return;
-
-  const rows = state.videos.filter(v => {
-    const hay = [v.title, v.status, v.relevance, v.relevanceCategory, v.error].join(' ').toLowerCase();
-    return !q || hay.includes(q);
-  });
-
-  if (!rows.length) {
-    list.innerHTML = `<div class="empty-state">${state.videos.length ? 'No videos match search.' : 'No videos yet. Click “Check & process new videos”.'}</div>`;
-  } else {
-    list.innerHTML = rows.map(v => `
-      <article class="video-card ${v.isNew ? 'is-new' : ''} ${v.status === 'skipped' ? 'is-skipped' : ''}">
-        <h3><a href="${escapeHtml(v.url)}" target="_blank" rel="noreferrer">${escapeHtml(v.title || v.id)}</a></h3>
-        <div class="card-meta">${escapeHtml(v.upload_date || 'Unknown date')}${v.language ? ` · ${escapeHtml(v.language)}` : ''}${v.error ? ` · ${escapeHtml(v.error)}` : ''}</div>
-        <div class="card-tags">
-          ${tag(v.status || 'pending', v.status || 'pending')}
-          ${tag(v.relevance || 'unclassified', `relevance-${v.relevance || 'unclassified'}`)}
-          ${v.isNew ? tag('new', 'relevance-uncertain') : ''}
-        </div>
-        ${v.relevanceReason ? `<div class="mini">${escapeHtml(v.relevanceReason)}</div>` : ''}
-      </article>
-    `).join('');
-  }
-
-  renderPendingPanel();
-  updateStats();
-  updateNextAction();
-  saveLocal();
-}
-
-function renderPrices() {
-  const q = ($('priceSearch')?.value || '').toLowerCase().trim();
-  const list = $('priceList');
-  if (!list) return;
-
-  const rows = state.priceRows.filter(row => {
-    const hay = Object.values(row).join(' ').toLowerCase();
-    return !q || hay.includes(q);
-  });
-
-  if (!rows.length) {
-    list.innerHTML = '<div class="empty-state">No prices yet. Process videos first.</div>';
-  } else {
-    list.innerHTML = rows.map(row => {
-      const timeUrl = row.timestamp_url || timestampUrl(row.video_url, row.timestamp_seconds);
-      const label = row.timestamp_label || secondsToClock(row.timestamp_seconds);
-      return `
-        <article class="price-card">
-          <h3>${escapeHtml(row.fruit || 'unknown')}${row.fruit_hindi ? ` · ${escapeHtml(row.fruit_hindi)}` : ''}</h3>
-          <div class="card-meta"><a href="${escapeHtml(row.video_url)}" target="_blank" rel="noreferrer">${escapeHtml(row.video_title || row.video_id)}</a></div>
-          <div class="price-grid">
-            <div><span>Min</span><strong>₹${escapeHtml(row.min_price_inr)}</strong></div>
-            <div><span>Max</span><strong>₹${escapeHtml(row.max_price_inr)}</strong></div>
-            <div><span>Unit</span><strong>${escapeHtml(row.unit || '-')}</strong></div>
-            <div><span>Jump</span><strong><a href="${escapeHtml(timeUrl)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a></strong></div>
-          </div>
-          <div class="card-tags">
-            ${tag(row.source || 'regex', row.source === 'ai' ? 'source-pill ai' : 'relevance-relevant')}
-            ${row.confidence ? tag(row.confidence, 'relevance-unclassified') : ''}
-          </div>
-          ${row.clean_hindi_line || row.original_line ? `<div class="mini">${escapeHtml(row.clean_hindi_line || row.original_line)}</div>` : ''}
-        </article>
-      `;
-    }).join('');
-  }
-
-  updateStats();
-  updateNextAction();
-  saveLocal();
+  updateUI();
 }
 
 function saveLocal() {
   localStorage.setItem('fruitTranscriptMinerStateV2', JSON.stringify({
     videos: state.videos,
     priceRows: state.priceRows,
+    lastSync: state.lastSync,
+    currentStep: state.currentStep,
   }));
 }
 
@@ -225,74 +303,19 @@ function loadLocal() {
     const saved = JSON.parse(localStorage.getItem('fruitTranscriptMinerStateV2') || '{}');
     if (Array.isArray(saved.videos)) state.videos = saved.videos;
     if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
+    if (saved.lastSync) state.lastSync = saved.lastSync;
+    if (saved.currentStep) state.currentStep = saved.currentStep;
   } catch {}
   const savedKey = localStorage.getItem('fruitTranscriptMinerOpenAIKey') || '';
   if (savedKey && $('openaiKey')) $('openaiKey').value = savedKey;
   renderVideos();
   renderPrices();
-}
-
-function csvEscape(value) {
-  const str = String(value ?? '');
-  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
-  return str;
-}
-
-function toCsv(rows, columns) {
-  const header = columns.join(',');
-  const body = rows.map(row => columns.map(col => csvEscape(row[col])).join(',')).join('\n');
-  return `${header}\n${body}`;
-}
-
-function downloadFile(filename, content, type = 'text/plain;charset=utf-8') {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  goToStep(state.currentStep || suggestedStep());
 }
 
 async function markVideosProcessed(videoIds) {
   if (!videoIds.length) return;
   await chrome.runtime.sendMessage({ type: 'api', path: '/api/mark-processed', body: { videoIds } });
-}
-
-async function loadWatchSettings() {
-  const data = await chrome.runtime.sendMessage({ type: 'api', path: '/api/channel-settings', body: { method: 'get' } });
-  if (!data?.ok) return;
-  const settings = data.settings || {};
-  if ($('pollIntervalMinutes')) $('pollIntervalMinutes').value = settings.pollIntervalMinutes || 360;
-  if ($('notificationsEnabled')) $('notificationsEnabled').checked = settings.notificationsEnabled !== false;
-  if ($('lastPollText')) {
-    $('lastPollText').textContent = settings.lastPollAt
-      ? `Last check: ${new Date(settings.lastPollAt).toLocaleString()}`
-      : 'Last check: never';
-  }
-}
-
-function syncSettings() {
-  return {
-    siteUrl: ($('syncSiteUrl')?.value || localStorage.getItem('fruitTranscriptMinerSyncSiteUrl') || '').trim().replace(/\/$/, ''),
-    token: ($('syncToken')?.value || localStorage.getItem('fruitTranscriptMinerSyncToken') || '').trim(),
-  };
-}
-
-async function remoteDataRequest(method, body) {
-  const { siteUrl, token } = syncSettings();
-  if (!siteUrl) throw new Error('Set your Netlify URL in Settings first.');
-  if (siteUrl) localStorage.setItem('fruitTranscriptMinerSyncSiteUrl', siteUrl);
-  if (token) localStorage.setItem('fruitTranscriptMinerSyncToken', token);
-
-  const headers = { 'Content-Type': 'application/json' };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${siteUrl}/api/data`, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) throw new Error(data.error || `Sync failed: ${res.status}`);
-  return data;
 }
 
 async function classifyCurrentVideos() {
@@ -307,13 +330,45 @@ async function classifyCurrentVideos() {
   return data;
 }
 
-async function pullTranscripts() {
+async function fetchVideosStep() {
+  const channelUrl = ($('channelUrl')?.value || '').trim();
+  const maxVideos = Number($('maxVideos')?.value || 25);
+
+  try {
+    const check = await api('/api/check-new-videos', {
+      channelUrl,
+      maxVideos,
+      pollIntervalMinutes: Number($('pollIntervalMinutes')?.value || 360),
+      notificationsEnabled: $('notificationsEnabled')?.checked !== false,
+    });
+    if (check.videos?.length) {
+      const merged = new Map(state.videos.map(video => [video.id, video]));
+      for (const video of check.videos) merged.set(video.id, { ...merged.get(video.id), ...video });
+      state.videos = [...merged.values()];
+      log(check.newCount ? `Found ${check.newCount} new video(s).` : `Loaded ${check.videos.length} videos.`);
+    }
+  } catch {
+    const data = await api('/api/list-videos', { channelUrl, maxVideos });
+    state.videos = data.videos;
+    log(`Fetched ${data.count} videos.`);
+  }
+
+  await classifyCurrentVideos();
+  renderVideos();
+  goToStep(2);
+}
+
+async function fetchTranscriptsStep() {
   const languages = ($('languages')?.value || 'hi.*,hi,en.*').trim();
   const delayMs = Number($('delayMs')?.value || 1500);
-  const pending = state.videos.filter(v => v.status !== 'ok' && isProcessable(v));
-  if (!pending.length) return 0;
+  const pending = pendingTranscripts();
+  if (!pending.length) {
+    log('No pending transcripts.');
+    goToStep(3);
+    return;
+  }
 
-  log(`Pulling transcripts for ${pending.length} relevant video(s)...`);
+  log(`Fetching ${pending.length} transcript(s)...`);
   const processedIds = [];
 
   for (const video of state.videos) {
@@ -343,12 +398,12 @@ async function pullTranscripts() {
   }
 
   await markVideosProcessed(processedIds);
-  return processedIds.length;
+  goToStep(3);
 }
 
-async function extractPrices() {
-  const items = state.videos.filter(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
-  if (!items.length) return 0;
+async function aiAnalysisStep() {
+  const items = transcriptReady();
+  if (!items.length) throw new Error('No transcripts ready. Complete step 2 first.');
 
   const apiKey = ($('openaiKey')?.value || '').trim();
   if (apiKey) localStorage.setItem('fruitTranscriptMinerOpenAIKey', apiKey);
@@ -366,109 +421,86 @@ async function extractPrices() {
   } else {
     const data = await api('/api/extract-prices', { items });
     state.priceRows = data.rows;
-    log(`Regex extracted ${data.count} price rows. Add OpenAI key in Settings for better Hindi cleanup.`);
+    log(`Regex extracted ${data.count} rows. Add OpenAI key in Settings for better results.`);
   }
 
   renderPrices();
-  return state.priceRows.length;
+  goToStep(4);
 }
 
-async function checkOrFetchVideos() {
-  const channelUrl = ($('channelUrl')?.value || '').trim();
-  const maxVideos = Number($('maxVideos')?.value || 25);
+async function updateDatasetStep() {
+  const { siteUrl, token } = {
+    siteUrl: ($('syncSiteUrl')?.value || localStorage.getItem('fruitTranscriptMinerSyncSiteUrl') || '').trim().replace(/\/$/, ''),
+    token: ($('syncToken')?.value || localStorage.getItem('fruitTranscriptMinerSyncToken') || '').trim(),
+  };
+  if (!siteUrl) throw new Error('Set your Netlify URL in Settings first.');
+  localStorage.setItem('fruitTranscriptMinerSyncSiteUrl', siteUrl);
+  if (token) localStorage.setItem('fruitTranscriptMinerSyncToken', token);
 
-  try {
-    const check = await api('/api/check-new-videos', {
-      channelUrl,
-      maxVideos,
-      pollIntervalMinutes: Number($('pollIntervalMinutes')?.value || 360),
-      notificationsEnabled: $('notificationsEnabled')?.checked !== false,
-    });
-    if (check.videos?.length) {
-      const merged = new Map(state.videos.map(video => [video.id, video]));
-      for (const video of check.videos) merged.set(video.id, { ...merged.get(video.id), ...video });
-      state.videos = [...merged.values()];
-      log(check.newCount ? `Found ${check.newCount} new upload(s).` : 'Channel checked, no new uploads.');
-      return check.newCount || 0;
-    }
-  } catch (error) {
-    log(`Check-new fallback: ${error.message}`);
-  }
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
 
-  const data = await api('/api/list-videos', { channelUrl, maxVideos });
-  state.videos = data.videos;
-  log(`Fetched ${data.count} videos.`);
-  return data.count;
-}
-
-// Tabs
-document.querySelectorAll('.tab').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    $(`tab-${btn.dataset.tab}`)?.classList.add('active');
-  });
-});
-
-$('runAllBtn')?.addEventListener('click', async () => {
-  try {
-    setBusy(true);
-    log('Pipeline started: check → classify → transcripts → prices');
-    await checkOrFetchVideos();
-    renderVideos();
-    await classifyCurrentVideos();
-    await pullTranscripts();
-    await extractPrices();
-    log('Pipeline complete.');
-    await loadWatchSettings();
-  } catch (error) {
-    log(`Pipeline failed: ${error.message}`);
-  } finally {
-    setBusy(false);
-  }
-});
-
-$('checkNewBtn')?.addEventListener('click', async () => {
-  try {
-    setBusy(true);
-    await checkOrFetchVideos();
-    renderVideos();
-    await loadWatchSettings();
-  } catch (error) {
-    log(`Check failed: ${error.message}`);
-  } finally {
-    setBusy(false);
-  }
-});
-
-$('fetchVideosBtn')?.addEventListener('click', async () => {
-  try {
-    setBusy(true);
-    const data = await api('/api/list-videos', {
+  const res = await fetch(`${siteUrl}/api/data`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
       channelUrl: ($('channelUrl')?.value || '').trim(),
-      maxVideos: Number($('maxVideos')?.value || 25),
-    });
-    state.videos = data.videos;
-    renderVideos();
-    log(`Fetched ${data.count} videos.`);
-  } catch (error) {
-    log(`Fetch failed: ${error.message}`);
-  } finally {
-    setBusy(false);
+      videos: state.videos,
+      priceRows: state.priceRows,
+      knownVideoIds: state.videos.map(v => v.id),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.error || `Sync failed: ${res.status}`);
+
+  state.lastSync = new Date().toISOString();
+  if ($('syncSummary')) {
+    $('syncSummary').textContent = `Dataset updated · ${data.counts.videos} videos · ${data.counts.priceRows} price rows`;
   }
+  log(`Dataset updated on website.`);
+  updateUI();
+  saveLocal();
+}
+
+async function loadWatchSettings() {
+  const data = await chrome.runtime.sendMessage({ type: 'api', path: '/api/channel-settings', body: { method: 'get' } });
+  if (!data?.ok) return;
+  const settings = data.settings || {};
+  if ($('pollIntervalMinutes')) $('pollIntervalMinutes').value = settings.pollIntervalMinutes || 360;
+  if ($('notificationsEnabled')) $('notificationsEnabled').checked = settings.notificationsEnabled !== false;
+  if ($('lastPollText')) {
+    $('lastPollText').textContent = settings.lastPollAt
+      ? `Last check: ${new Date(settings.lastPollAt).toLocaleString()}`
+      : 'Last check: never';
+  }
+}
+
+document.querySelectorAll('.step').forEach(btn => {
+  btn.addEventListener('click', () => goToStep(Number(btn.dataset.step)));
 });
 
-$('classifyBtn')?.addEventListener('click', async () => {
-  try {
-    setBusy(true);
-    await classifyCurrentVideos();
-    log('Titles re-classified.');
-  } catch (error) {
-    log(`Classify failed: ${error.message}`);
-  } finally {
-    setBusy(false);
-  }
+$('stepBtn1')?.addEventListener('click', async () => {
+  try { setBusy(true); await fetchVideosStep(); }
+  catch (e) { log(`Step 1 failed: ${e.message}`); }
+  finally { setBusy(false); }
+});
+
+$('stepBtn2')?.addEventListener('click', async () => {
+  try { setBusy(true); await fetchTranscriptsStep(); }
+  catch (e) { log(`Step 2 failed: ${e.message}`); }
+  finally { setBusy(false); }
+});
+
+$('stepBtn3')?.addEventListener('click', async () => {
+  try { setBusy(true); await aiAnalysisStep(); }
+  catch (e) { log(`Step 3 failed: ${e.message}`); }
+  finally { setBusy(false); }
+});
+
+$('stepBtn4')?.addEventListener('click', async () => {
+  try { setBusy(true); await updateDatasetStep(); }
+  catch (e) { log(`Step 4 failed: ${e.message}`); }
+  finally { setBusy(false); }
 });
 
 $('saveWatchBtn')?.addEventListener('click', async () => {
@@ -482,136 +514,60 @@ $('saveWatchBtn')?.addEventListener('click', async () => {
     });
     log('Watch settings saved.');
     await loadWatchSettings();
-  } catch (error) {
-    log(`Save settings failed: ${error.message}`);
-  } finally {
-    setBusy(false);
-  }
-});
-
-$('fetchTranscriptsBtn')?.addEventListener('click', async () => {
-  try {
-    setBusy(true);
-    await pullTranscripts();
-  } catch (error) {
-    log(`Transcripts failed: ${error.message}`);
-  } finally {
-    setBusy(false);
-  }
-});
-
-$('extractAiBtn')?.addEventListener('click', async () => {
-  try {
-    setBusy(true);
-    await extractPrices();
-  } catch (error) {
-    log(`Extract failed: ${error.message}`);
-  } finally {
-    setBusy(false);
-  }
-});
-
-$('extractPricesBtn')?.addEventListener('click', async () => {
-  try {
-    setBusy(true);
-    const items = state.videos.filter(v => v.status === 'ok' && v.transcriptText);
-    const data = await api('/api/extract-prices', { items });
-    state.priceRows = data.rows;
-    renderPrices();
-    log(`Regex extracted ${data.count} rows.`);
-  } catch (error) {
-    log(`Regex extract failed: ${error.message}`);
-  } finally {
-    setBusy(false);
-  }
-});
-
-$('pushDataBtn')?.addEventListener('click', async () => {
-  try {
-    setBusy(true);
-    const data = await remoteDataRequest('POST', {
-      channelUrl: ($('channelUrl')?.value || '').trim(),
-      videos: state.videos,
-      priceRows: state.priceRows,
-      knownVideoIds: state.videos.map(v => v.id),
-    });
-    log(`Pushed to website: ${data.counts.videos} videos, ${data.counts.priceRows} prices.`);
-  } catch (error) {
-    log(`Push failed: ${error.message}`);
-  } finally {
-    setBusy(false);
-  }
+  } catch (e) { log(e.message); }
+  finally { setBusy(false); }
 });
 
 $('pullDataBtn')?.addEventListener('click', async () => {
   try {
     setBusy(true);
-    const data = await remoteDataRequest('GET');
+    const siteUrl = ($('syncSiteUrl')?.value || '').trim().replace(/\/$/, '');
+    if (!siteUrl) throw new Error('Set Netlify URL first.');
+    const res = await fetch(`${siteUrl}/api/data`);
+    const data = await res.json();
     if (Array.isArray(data.data?.videos)) state.videos = data.data.videos;
     if (Array.isArray(data.data?.priceRows)) state.priceRows = data.data.priceRows;
-    if (data.data?.channelUrl && $('channelUrl')) $('channelUrl').value = data.data.channelUrl;
     renderVideos();
     renderPrices();
-    log(`Loaded from website.`);
-  } catch (error) {
-    log(`Pull failed: ${error.message}`);
-  } finally {
-    setBusy(false);
-  }
-});
-
-$('exportPricesBtn')?.addEventListener('click', () => {
-  const cols = ['source', 'fruit', 'fruit_hindi', 'variety', 'unit', 'min_price_inr', 'max_price_inr', 'timestamp_label', 'video_title', 'video_url', 'confidence'];
-  downloadFile('fruit_prices.csv', toCsv(state.priceRows, cols), 'text/csv;charset=utf-8');
+    log('Loaded from website.');
+  } catch (e) { log(e.message); }
+  finally { setBusy(false); }
 });
 
 $('exportJsonBtn')?.addEventListener('click', () => {
-  downloadFile('fruit_project.json', JSON.stringify(state, null, 2), 'application/json;charset=utf-8');
-});
-
-$('exportTranscriptsBtn')?.addEventListener('click', () => {
-  const rows = state.videos.map(v => ({
-    video_id: v.id, title: v.title, url: v.url, status: v.status, language: v.language, transcript_text: v.transcriptText || '',
-  }));
-  downloadFile('transcripts.csv', toCsv(rows, ['video_id', 'title', 'url', 'status', 'language', 'transcript_text']), 'text/csv;charset=utf-8');
-});
-
-$('exportSegmentsBtn')?.addEventListener('click', () => {
-  const rows = [];
-  for (const v of state.videos) {
-    for (const seg of (v.segments || [])) {
-      rows.push({ video_id: v.id, title: v.title, timestamp_label: seg.timestamp_label, text: seg.text });
-    }
-  }
-  downloadFile('segments.csv', toCsv(rows, ['video_id', 'title', 'timestamp_label', 'text']), 'text/csv;charset=utf-8');
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'fruit_project.json';
+  a.click();
 });
 
 $('clearBtn')?.addEventListener('click', () => {
   if (!confirm('Clear all local data?')) return;
   state.videos = [];
   state.priceRows = [];
+  state.lastSync = null;
   if ($('log')) $('log').textContent = '';
   renderVideos();
   renderPrices();
+  goToStep(1);
 });
 
 $('videoSearch')?.addEventListener('input', renderVideos);
 $('priceSearch')?.addEventListener('input', renderPrices);
 
-loadLocal();
-loadWatchSettings();
 if ($('syncSiteUrl')) $('syncSiteUrl').value = localStorage.getItem('fruitTranscriptMinerSyncSiteUrl') || '';
 if ($('syncToken')) $('syncToken').value = localStorage.getItem('fruitTranscriptMinerSyncToken') || '';
-if (window.location.hash === '#pending') {
-  document.querySelector('[data-tab="queue"]')?.click();
-}
+
+loadLocal();
+loadWatchSettings();
 
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = data.note || 'Extension ready';
+    if ($('statusText')) $('statusText').textContent = 'Signed into YouTube in this Chrome profile';
   } catch (error) {
-    if ($('statusText')) $('statusText').textContent = 'Extension error — reload from chrome://extensions';
+    if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
   }
 })();

@@ -15,124 +15,125 @@
         <p class="status-line" id="statusText">Extension ready</p>
       </div>
       <div class="topbar-stats">
-        <div><strong id="statPending">0</strong><span>pending</span></div>
-        <div><strong id="statDone">0</strong><span>done</span></div>
+        <div><strong id="statVideos">0</strong><span>videos</span></div>
+        <div><strong id="statDone">0</strong><span>transcripts</span></div>
         <div><strong id="statPrices">0</strong><span>prices</span></div>
       </div>
     </header>
 
-    <section class="action-card">
-      <p class="next-step" id="nextAction">Check the channel for new fruit/veg price videos.</p>
-      <button id="runAllBtn" class="btn-primary btn-large">Check &amp; process new videos</button>
-      <div class="quick-actions">
-        <button id="checkNewBtn" class="btn-secondary">Check only</button>
-        <button id="fetchTranscriptsBtn" class="btn-secondary">Pull transcripts</button>
-        <button id="extractAiBtn" class="btn-secondary">Extract prices</button>
-        <button id="pushDataBtn" class="btn-secondary">Push to website</button>
-      </div>
-    </section>
-
-    <nav class="tabs" role="tablist">
-      <button class="tab active" data-tab="queue" type="button">Queue</button>
-      <button class="tab" data-tab="prices" type="button">Prices</button>
-      <button class="tab" data-tab="settings" type="button">Settings</button>
+    <nav class="stepper" id="stepper" aria-label="Workflow steps">
+      <button class="step active" type="button" data-step="1">
+        <span class="step-num">1</span>
+        <span class="step-label">Fetch Videos</span>
+        <small id="stepMeta1">Start here</small>
+      </button>
+      <div class="step-line" aria-hidden="true"></div>
+      <button class="step" type="button" data-step="2">
+        <span class="step-num">2</span>
+        <span class="step-label">Fetch Transcripts</span>
+        <small id="stepMeta2">Waiting</small>
+      </button>
+      <div class="step-line" aria-hidden="true"></div>
+      <button class="step" type="button" data-step="3">
+        <span class="step-num">3</span>
+        <span class="step-label">AI Analysis</span>
+        <small id="stepMeta3">Waiting</small>
+      </button>
+      <div class="step-line" aria-hidden="true"></div>
+      <button class="step" type="button" data-step="4">
+        <span class="step-num">4</span>
+        <span class="step-label">Update Dataset</span>
+        <small id="stepMeta4">Waiting</small>
+      </button>
     </nav>
 
-    <section class="tab-panel active" id="tab-queue">
-      <div class="panel-head">
-        <h2>Videos to process</h2>
+    <section class="step-panel active" id="panel-1">
+      <p class="step-desc" id="stepDesc1">Pull the latest videos from the YouTube channel. Irrelevant titles (gold, silver, etc.) are auto-filtered.</p>
+      <button id="stepBtn1" class="btn-primary btn-large" type="button">Fetch videos from channel</button>
+      <div class="panel-tools">
         <input id="videoSearch" placeholder="Search videos..." />
       </div>
-      <div id="pendingPill" class="inline-pill">0 new</div>
-      <div id="pendingList" class="card-list compact-list"></div>
-      <div id="videoList" class="card-list"></div>
+      <div id="videoList" class="date-groups"></div>
     </section>
 
-    <section class="tab-panel" id="tab-prices">
-      <div class="panel-head">
-        <h2>Extracted prices</h2>
-        <input id="priceSearch" placeholder="Search fruit..." />
+    <section class="step-panel" id="panel-2">
+      <p class="step-desc" id="stepDesc2">Download Hindi captions for relevant videos only. This is the slow step.</p>
+      <button id="stepBtn2" class="btn-primary btn-large" type="button">Fetch transcripts</button>
+      <div id="transcriptList" class="date-groups"></div>
+    </section>
+
+    <section class="step-panel" id="panel-3">
+      <p class="step-desc" id="stepDesc3">Use AI to extract fruit/vegetable mandi prices from captions. Add your OpenAI key in Settings if needed.</p>
+      <button id="stepBtn3" class="btn-primary btn-large" type="button">Run AI analysis</button>
+      <div class="panel-tools">
+        <input id="priceSearch" placeholder="Search prices..." />
       </div>
       <div id="priceList" class="card-list"></div>
     </section>
 
-    <section class="tab-panel" id="tab-settings">
-      <div class="settings-group">
-        <h3>Channel</h3>
+    <section class="step-panel" id="panel-4">
+      <p class="step-desc" id="stepDesc4">Append processed data to your website JSON store on Netlify.</p>
+      <button id="stepBtn4" class="btn-primary btn-large" type="button">Update dataset on website</button>
+      <div id="syncSummary" class="sync-summary">Nothing pushed yet.</div>
+      <div id="pricePreview" class="card-list compact-preview"></div>
+    </section>
+
+    <details class="fold-panel">
+      <summary>Settings</summary>
+      <div class="settings-body">
         <label>Channel URL<input id="channelUrl" value="https://www.youtube.com/@delhifruitmarket/videos" /></label>
         <div class="grid-2">
           <label>Max videos<input id="maxVideos" type="number" min="1" max="100" value="25" /></label>
           <label>Poll every (min)<input id="pollIntervalMinutes" type="number" min="30" max="1440" value="360" /></label>
         </div>
-        <label class="check-row"><input id="notificationsEnabled" type="checkbox" checked /> Notify when new videos appear</label>
+        <label class="check-row"><input id="notificationsEnabled" type="checkbox" checked /> Notify on new uploads</label>
         <p class="hint" id="lastPollText">Last check: never</p>
-        <div class="quick-actions">
-          <button id="saveWatchBtn" class="btn-secondary" type="button">Save watch settings</button>
-          <button id="fetchVideosBtn" class="btn-secondary" type="button">Fetch videos manually</button>
-          <button id="classifyBtn" class="btn-secondary" type="button">Re-classify titles</button>
-        </div>
-      </div>
-
-      <div class="settings-group">
-        <h3>Transcripts</h3>
         <div class="grid-2">
           <label>Languages<input id="languages" value="hi.*,hi,en.*" /></label>
           <label>Delay ms<input id="delayMs" type="number" min="0" value="1500" /></label>
         </div>
-        <button id="extractPricesBtn" class="btn-secondary" type="button">Basic regex extraction</button>
-      </div>
-
-      <div class="settings-group">
-        <h3>AI</h3>
         <label>OpenAI API key<input id="openaiKey" type="password" placeholder="sk-..." autocomplete="off" /></label>
         <div class="grid-2">
           <label>Model<input id="openaiModel" value="gpt-4o-mini" /></label>
-          <label>Max videos/run<input id="aiMaxVideos" type="number" min="1" max="100" value="5" /></label>
+          <label>AI max videos<input id="aiMaxVideos" type="number" min="1" max="100" value="25" /></label>
         </div>
         <label>Max chars/call<input id="aiMaxChars" type="number" min="2500" max="20000" value="10000" /></label>
-      </div>
-
-      <div class="settings-group">
-        <h3>Website sync</h3>
         <label>Netlify URL<input id="syncSiteUrl" placeholder="https://your-site.netlify.app" /></label>
-        <label>Sync token (optional)<input id="syncToken" type="password" placeholder="DATA_SYNC_TOKEN" autocomplete="off" /></label>
-        <button id="pullDataBtn" class="btn-secondary" type="button">Pull from website</button>
-      </div>
-
-      <div class="settings-group">
-        <h3>Export</h3>
+        <label>Sync token<input id="syncToken" type="password" placeholder="optional" autocomplete="off" /></label>
         <div class="quick-actions">
-          <button id="exportPricesBtn" class="btn-secondary" type="button">CSV prices</button>
-          <button id="exportJsonBtn" class="btn-secondary" type="button">JSON backup</button>
-          <button id="exportTranscriptsBtn" class="btn-secondary" type="button">CSV transcripts</button>
-          <button id="exportSegmentsBtn" class="btn-secondary" type="button">CSV segments</button>
-          <button id="clearBtn" class="btn-ghost" type="button">Clear local data</button>
+          <button id="saveWatchBtn" class="btn-secondary" type="button">Save watch settings</button>
+          <button id="pullDataBtn" class="btn-secondary" type="button">Pull from website</button>
+          <button id="exportJsonBtn" class="btn-secondary" type="button">Export JSON</button>
+          <button id="clearBtn" class="btn-ghost" type="button">Clear data</button>
         </div>
       </div>
-    </section>
+    </details>
 
-    <details class="log-panel">
+    <details class="fold-panel log-panel">
       <summary>Activity log</summary>
       <pre id="log"></pre>
     </details>
 
-    <!-- legacy hooks kept for workflow helpers -->
     <div class="sr-only" aria-hidden="true">
+      <span id="statPending">0</span>
       <span id="videoCount">0</span>
       <span id="okCount">0</span>
       <span id="failCount">0</span>
       <span id="priceCount">0</span>
-      <span id="statusCard"></span>
-      <span id="stepVideos"></span>
-      <span id="stepTranscripts"></span>
-      <span id="stepPrices"></span>
-      <span id="stepExport"></span>
-      <table><tbody id="videoTable"></tbody></table>
-      <table><tbody id="priceTable"></tbody></table>
-      <select id="segmentVideoSelect"></select>
-      <input id="segmentSearch" />
-      <table><tbody id="segmentTable"></tbody></table>
-      <button id="checkBtn" type="button"></button>
+      <button id="fetchVideosBtn" type="button"></button>
+      <button id="fetchTranscriptsBtn" type="button"></button>
+      <button id="extractAiBtn" type="button"></button>
+      <button id="pushDataBtn" type="button"></button>
+      <button id="checkNewBtn" type="button"></button>
+      <button id="classifyBtn" type="button"></button>
+      <button id="extractPricesBtn" type="button"></button>
+      <button id="runAllBtn" type="button"></button>
+      <button id="exportPricesBtn" type="button"></button>
+      <button id="exportTranscriptsBtn" type="button"></button>
+      <button id="exportSegmentsBtn" type="button"></button>
+      <span id="pendingPill"></span>
+      <div id="pendingList"></div>
+      <span id="nextAction"></span>
     </div>
   </main>
 
