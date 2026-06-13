@@ -5,6 +5,7 @@ import {
   getVectorStatus,
   indexVectorDatabase,
 } from './vectors.js';
+import { DASHBOARD_HTML } from './dashboard.js';
 
 const WHISPER_MODEL = '@cf/openai/whisper-large-v3-turbo';
 const AUDIO_LIMIT_BYTES = 24 * 1024 * 1024;
@@ -24,6 +25,13 @@ function jsonResponse(body, status = 200, request) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...JSON_HEADERS, ...corsHeaders(request) },
+  });
+}
+
+function htmlResponse(body, status = 200, request) {
+  return new Response(body, {
+    status,
+    headers: { 'content-type': 'text/html; charset=utf-8', ...corsHeaders(request) },
   });
 }
 
@@ -465,7 +473,7 @@ async function deleteVideo(db, videoId) {
 }
 
 async function listPrices(db, url) {
-  const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
+  const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 5000);
   const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0);
   const fruit = safeText(url.searchParams.get('fruit'));
   const videoId = safeText(url.searchParams.get('video_id'));
@@ -881,6 +889,12 @@ export default {
     const path = url.pathname.replace(/\/+$/, '') || '/';
 
     try {
+      if ((path === '/' || path === '/dashboard') && (request.method === 'GET' || request.method === 'HEAD')) {
+        return request.method === 'HEAD'
+          ? new Response(null, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', ...corsHeaders(request) } })
+          : htmlResponse(DASHBOARD_HTML, 200, request);
+      }
+
       if (path === '/api/health' && request.method === 'GET') {
         const counts = await getCounts(env.DB);
         const vectors = await getVectorStatus(env.DB, env).catch(() => null);

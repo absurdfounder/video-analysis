@@ -81,6 +81,12 @@ Your API URL will look like:
 https://fruit-mandi-api.<your-subdomain>.workers.dev
 ```
 
+Open the same URL in a browser to use the dashboard:
+
+```text
+https://fruit-mandi-api.<your-subdomain>.workers.dev/
+```
+
 ### 6. Point the extension at it
 
 1. Reload extension (v1.5.35+)
@@ -114,6 +120,8 @@ npm run deploy
 ## Server-side transcription
 
 The Worker now has a Cloudflare Workers AI Whisper route for Hindi/Hinglish transcripts with timestamps.
+
+Open `/` or `/dashboard` on the Worker to test transcription and price charts in the browser.
 
 What it can do:
 
@@ -169,6 +177,8 @@ curl "https://fruit-mandi-api.YOUR.workers.dev/api/transcripts/VIDEO_ID"
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
+| GET | `/` | — | Browser dashboard for transcript testing and price trend charts |
+| GET | `/dashboard` | — | Same browser dashboard |
 | GET | `/api/health` | — | Health + row counts |
 | GET | `/api/data` | — | Full export (extension pull) |
 | POST | `/api/data` | Bearer* | Bulk sync from extension |
