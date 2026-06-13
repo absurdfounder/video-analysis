@@ -327,11 +327,25 @@ async function transcript(body) {
   const languages = safeText(body.languages || 'hi.*,hi,en.*');
   if (!/^https?:\/\//i.test(videoUrl)) return { ok: false, error: 'Invalid video URL.' };
 
-  const html = await fetchText(videoUrl);
-  const player = extractJsonObject(html, 'ytInitialPlayerResponse');
+  let player = null;
+  try {
+    player = await loadPlayerResponseInYouTubeTab(videoUrl);
+  } catch (tabError) {
+    try {
+      const html = await fetchText(videoUrl);
+      player = extractJsonObject(html, 'ytInitialPlayerResponse');
+    } catch (fallbackError) {
+      return {
+        ok: false,
+        id,
+        error: `${tabError.message || tabError}. Also try: open youtube.com in Chrome, sign in, then retry.`,
+      };
+    }
+  }
+
   const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
   if (!tracks.length) {
-    return { ok: false, id, error: 'No transcript/caption track found for this video.' };
+    return { ok: false, id, error: 'No transcript/caption track found. Open the video on YouTube and check captions exist.' };
   }
 
   const selected = chooseCaptionTrack(tracks, languages);
@@ -407,7 +421,141 @@ async function extractPricesAi(body) {
   return { ok: true, count: rows.length, rows: dedupeRows(rows) };
 }
 
+let cachedYouTubeTabId = null;
+
+function isYouTubeUrl(url) {
+  return /(youtube\.com|youtu\.be|googlevideo\.com)/i.test(String(url || ''));
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForTabComplete(tabId, timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status === 'complete') return tab;
+    await sleep(250);
+  }
+  throw new Error('YouTube tab took too long to load.');
+}
+
+async function ensureYouTubeTab() {
+  if (cachedYouTubeTabId) {
+    try {
+      await chrome.tabs.get(cachedYouTubeTabId);
+      return cachedYouTubeTabId;
+    } catch {
+      cachedYouTubeTabId = null;
+    }
+  }
+
+  const tabs = await chrome.tabs.query({ url: ['https://www.youtube.com/*', 'https://youtu.be/*'] });
+  if (tabs.length && tabs[0].id) {
+    cachedYouTubeTabId = tabs[0].id;
+    return cachedYouTubeTabId;
+  }
+
+  const tab = await chrome.tabs.create({ url: 'https://www.youtube.com/', active: false });
+  cachedYouTubeTabId = tab.id;
+  await waitForTabComplete(cachedYouTubeTabId, 25000);
+  return cachedYouTubeTabId;
+}
+
+async function runInYouTubeTab(func, args = []) {
+  const tabId = await ensureYouTubeTab();
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func,
+    args,
+  });
+  return result;
+}
+
+async function fetchTextViaYouTubeTab(url) {
+  const result = await runInYouTubeTab(async (fetchUrl) => {
+    try {
+      const response = await fetch(fetchUrl, { credentials: 'include' });
+      const text = await response.text();
+      if (!response.ok) return { ok: false, error: `HTTP ${response.status}`, preview: text.slice(0, 180) };
+      return { ok: true, text };
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error) };
+    }
+  }, [url]);
+
+  if (!result?.ok) {
+    throw new Error(result?.error || 'YouTube tab fetch failed. Open youtube.com and sign in.');
+  }
+  return result.text;
+}
+
+async function loadPlayerResponseInYouTubeTab(videoUrl) {
+  const tabId = await ensureYouTubeTab();
+  await chrome.tabs.update(tabId, { url: videoUrl, active: false });
+  await waitForTabComplete(tabId, 25000);
+
+  const result = await runInYouTubeTab(() => {
+    try {
+      if (window.ytInitialPlayerResponse) {
+        return { ok: true, player: window.ytInitialPlayerResponse };
+      }
+      const html = document.documentElement?.outerHTML || '';
+      const marker = 'ytInitialPlayerResponse';
+      const start = html.indexOf(marker);
+      if (start === -1) return { ok: false, error: 'Player data missing. Sign in to YouTube in this Chrome profile.' };
+      const brace = html.indexOf('{', start);
+      if (brace === -1) return { ok: false, error: 'Could not parse YouTube player JSON.' };
+      let depth = 0;
+      let inString = false;
+      let quote = '';
+      let escaped = false;
+      for (let i = brace; i < html.length; i++) {
+        const char = html[i];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === quote) inString = false;
+          continue;
+        }
+        if (char === '"' || char === "'") {
+          inString = true;
+          quote = char;
+        } else if (char === '{') depth++;
+        else if (char === '}') {
+          depth--;
+          if (depth === 0) {
+            return { ok: true, player: JSON.parse(html.slice(brace, i + 1)) };
+          }
+        }
+      }
+      return { ok: false, error: 'Could not parse YouTube player JSON.' };
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error) };
+    }
+  });
+
+  if (!result?.ok || !result.player) {
+    throw new Error(result?.error || 'Failed to load video in YouTube tab.');
+  }
+  return result.player;
+}
+
 async function fetchText(url) {
+  if (isYouTubeUrl(url)) {
+    try {
+      return await fetchTextViaYouTubeTab(url);
+    } catch (tabError) {
+      const response = await fetch(url, { credentials: 'include' });
+      if (!response.ok) {
+        throw new Error(`${tabError.message || tabError} (HTTP ${response.status}). Open youtube.com and sign in.`);
+      }
+      return response.text();
+    }
+  }
+
   const response = await fetch(url, { credentials: 'include' });
   if (!response.ok) throw new Error(`Request failed: ${response.status}`);
   return response.text();
