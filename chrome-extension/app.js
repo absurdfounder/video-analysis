@@ -65,15 +65,57 @@ function setStep(id, stateName, label) {
   if (small) small.textContent = label;
 }
 
+function isProcessable(video) {
+  return video.relevance !== 'irrelevant' && video.status !== 'skipped';
+}
+
+function pendingVideos() {
+  return state.videos.filter(video => video.needsWork !== false && isProcessable(video) && video.status !== 'ok');
+}
+
+function renderPendingPanel() {
+  const pill = $('pendingPill');
+  const list = $('pendingList');
+  if (!pill || !list) return;
+
+  const pending = pendingVideos();
+  const fresh = pending.filter(video => video.isNew);
+  pill.textContent = `${pending.length} pending${fresh.length ? ` · ${fresh.length} new` : ''}`;
+
+  if (!pending.length) {
+    list.textContent = 'No pending videos. Fetch or check for new channel uploads.';
+    return;
+  }
+
+  list.innerHTML = pending.slice(0, 12).map(video => `
+    <article class="pending-item ${video.isNew ? 'is-new' : ''}">
+      <div>
+        <strong>${escapeHtml(video.title || video.id)}</strong>
+        <div class="mini">${escapeHtml(video.relevance || 'unclassified')}${video.relevanceCategory ? ` · ${escapeHtml(video.relevanceCategory)}` : ''}${video.isNew ? ' · new upload' : ''}</div>
+      </div>
+      <span class="badge ${escapeHtml(video.status || 'pending')}">${escapeHtml(video.status || 'pending')}</span>
+    </article>
+  `).join('');
+}
+
+function renderRelevanceBadge(video) {
+  const relevance = video.relevance || 'unclassified';
+  const extra = video.isNew ? ' · new' : '';
+  const category = video.relevanceCategory ? ` (${video.relevanceCategory})` : '';
+  return `<span class="badge relevance-${escapeHtml(relevance)}">${escapeHtml(relevance)}${escapeHtml(category)}${extra}</span>`;
+}
+
 function workflowState() {
   const hasVideos = state.videos.length > 0;
   const okVideos = state.videos.filter(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
   const failedVideos = state.videos.filter(v => v.status === 'failed');
+  const skippedVideos = state.videos.filter(v => v.status === 'skipped' || v.relevance === 'irrelevant');
+  const pending = pendingVideos();
   const hasPrices = state.priceRows.length > 0;
 
   if (!hasVideos) {
     return {
-      next: 'Paste or keep the channel URL, then fetch videos.',
+      next: 'Paste or keep the channel URL, then fetch videos or check for new uploads.',
       steps: [
         ['stepVideos', 'active', 'Ready'],
         ['stepTranscripts', '', 'Waiting'],
@@ -85,7 +127,9 @@ function workflowState() {
 
   if (!okVideos.length) {
     return {
-      next: `${state.videos.length} videos found. Pull transcripts next; rows will stay pending until captions are collected.`,
+      next: pending.length
+        ? `${pending.length} relevant videos pending transcripts${skippedVideos.length ? ` (${skippedVideos.length} skipped as irrelevant)` : ''}.`
+        : `${state.videos.length} videos found. Pull transcripts next.`,
       steps: [
         ['stepVideos', 'done', `${state.videos.length} found`],
         ['stepTranscripts', failedVideos.length ? 'error' : 'active', failedVideos.length ? `${failedVideos.length} failed` : 'Next'],
@@ -130,6 +174,9 @@ function updateWorkflow() {
   $('fetchTranscriptsBtn').disabled = busy || !hasVideos;
   $('extractPricesBtn').disabled = busy || !hasTranscripts;
   $('extractAiBtn').disabled = busy || !hasTranscripts;
+  $('checkNewBtn')?.disabled = busy;
+  $('classifyBtn')?.disabled = busy || !hasVideos;
+  $('saveWatchBtn')?.disabled = busy;
 }
 
 function counts() {
@@ -137,6 +184,7 @@ function counts() {
   $('okCount').textContent = state.videos.filter(v => v.status === 'ok').length;
   $('failCount').textContent = state.videos.filter(v => v.status === 'failed').length;
   $('priceCount').textContent = state.priceRows.length;
+  renderPendingPanel();
   updateWorkflow();
 }
 
@@ -174,13 +222,13 @@ function timestampUrl(videoUrl, seconds) {
 function renderVideos() {
   const q = $('videoSearch').value.toLowerCase().trim();
   const rows = state.videos.filter(v => {
-    const hay = [v.title, v.status, v.language, v.error].join(' ').toLowerCase();
+    const hay = [v.title, v.status, v.language, v.error, v.relevance, v.relevanceCategory].join(' ').toLowerCase();
     return !q || hay.includes(q);
   });
 
   if (!rows.length) {
     const message = state.videos.length ? 'No videos match this search.' : 'No videos loaded yet. Fetch videos to start.';
-    $('videoTable').innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(message)}</td></tr>`;
+    $('videoTable').innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(message)}</td></tr>`;
     renderSegmentsPreview();
     counts();
     saveLocal();
@@ -191,10 +239,12 @@ function renderVideos() {
     const firstSegment = Array.isArray(v.segments) && v.segments.length ? v.segments[0] : null;
     const firstUrl = firstSegment ? timestampUrl(v.url, firstSegment.start) : v.url;
     return `
-      <tr>
+      <tr class="${v.isNew ? 'row-new' : ''}">
         <td><span class="badge ${escapeHtml(v.status || 'pending')}">${escapeHtml(v.status || 'pending')}</span></td>
+        <td>${renderRelevanceBadge(v)}</td>
         <td>
           <a href="${escapeHtml(v.url)}" target="_blank" rel="noreferrer">${escapeHtml(v.title || v.id)}</a>
+          ${v.relevanceReason ? `<div class="mini">${escapeHtml(v.relevanceReason)}</div>` : ''}
           ${firstSegment ? `<div class="mini"><a href="${escapeHtml(firstUrl)}" target="_blank" rel="noreferrer">open at ${escapeHtml(firstSegment.timestamp_label || '0:00')}</a></div>` : ''}
         </td>
         <td>${escapeHtml(v.language || '')}</td>
@@ -342,6 +392,115 @@ $('checkBtn').addEventListener('click', async () => {
   }
 });
 
+async function markVideosProcessed(videoIds) {
+  if (!isChromeExtension() || !videoIds.length) return;
+  await chrome.runtime.sendMessage({
+    type: 'api',
+    path: '/api/mark-processed',
+    body: { videoIds },
+  });
+}
+
+async function loadWatchSettings() {
+  if (!isChromeExtension()) return;
+  const data = await chrome.runtime.sendMessage({
+    type: 'api',
+    path: '/api/channel-settings',
+    body: { method: 'get' },
+  });
+  if (!data?.ok) return;
+  const settings = data.settings || {};
+  if ($('pollIntervalMinutes')) $('pollIntervalMinutes').value = settings.pollIntervalMinutes || 360;
+  if ($('notificationsEnabled')) $('notificationsEnabled').checked = settings.notificationsEnabled !== false;
+  if ($('lastPollText')) {
+    $('lastPollText').textContent = settings.lastPollAt
+      ? `Last check: ${new Date(settings.lastPollAt).toLocaleString()}`
+      : 'Last check: never';
+  }
+  if ($('pendingPill') && typeof data.pendingCount === 'number') {
+    $('pendingPill').textContent = `${data.pendingCount} pending`;
+  }
+}
+
+$('saveWatchBtn')?.addEventListener('click', async () => {
+  try {
+    state.runningTask = 'watch';
+    updateWorkflow();
+    const data = await api('/api/channel-settings', {
+      method: 'set',
+      channelUrl: $('channelUrl').value.trim(),
+      pollIntervalMinutes: Number($('pollIntervalMinutes').value || 360),
+      notificationsEnabled: $('notificationsEnabled').checked,
+    });
+    log(`Watch settings saved. Poll every ${data.settings.pollIntervalMinutes} min. Pending badge: ${data.pendingCount}.`);
+    await loadWatchSettings();
+  } catch (error) {
+    log(`Save watch settings failed: ${error.message}`);
+  } finally {
+    state.runningTask = '';
+    updateWorkflow();
+  }
+});
+
+$('checkNewBtn')?.addEventListener('click', async () => {
+  try {
+    state.runningTask = 'watch';
+    updateWorkflow();
+    log('Checking channel for new uploads...');
+    const data = await api('/api/check-new-videos', {
+      channelUrl: $('channelUrl').value.trim(),
+      maxVideos: Number($('maxVideos').value || 15),
+      pollIntervalMinutes: Number($('pollIntervalMinutes').value || 360),
+      notificationsEnabled: $('notificationsEnabled').checked,
+    });
+    if (data.newCount) {
+      const merged = new Map(state.videos.map(video => [video.id, video]));
+      for (const video of data.videos) merged.set(video.id, { ...merged.get(video.id), ...video });
+      state.videos = [...merged.values()];
+      renderVideos();
+      log(`Found ${data.newCount} new upload(s). ${data.pendingCount} total pending in badge.`);
+    } else {
+      log(`No new uploads. ${data.pendingCount} still pending in badge.`);
+    }
+    await loadWatchSettings();
+  } catch (error) {
+    log(`New video check failed: ${error.message}`);
+  } finally {
+    state.runningTask = '';
+    updateWorkflow();
+  }
+});
+
+$('classifyBtn')?.addEventListener('click', async () => {
+  if (!state.videos.length) {
+    log('Fetch videos first.');
+    return;
+  }
+  try {
+    state.runningTask = 'classify';
+    updateWorkflow();
+    const apiKey = $('openaiKey')?.value.trim() || '';
+    log(apiKey ? 'Classifying titles with heuristics + AI for uncertain videos...' : 'Classifying titles with heuristics...');
+    const data = await api('/api/classify-videos', {
+      videos: state.videos,
+      apiKey,
+      model: $('openaiModel')?.value.trim() || 'gpt-4o-mini',
+    });
+    const byId = new Map(data.videos.map(video => [video.id, video]));
+    state.videos = state.videos.map(video => ({ ...video, ...byId.get(video.id) }));
+    const skipped = state.videos.filter(video => video.status === 'skipped');
+    const toMark = skipped.map(video => video.id);
+    if (toMark.length) await markVideosProcessed(toMark);
+    renderVideos();
+    log(`Classification done${data.aiUsed ? ' (AI used for uncertain titles)' : ''}: ${JSON.stringify(data.counts)}. ${skipped.length} skipped.`);
+  } catch (error) {
+    log(`Classification failed: ${error.message}`);
+  } finally {
+    state.runningTask = '';
+    updateWorkflow();
+  }
+});
+
 $('fetchVideosBtn').addEventListener('click', async () => {
   try {
     state.runningTask = 'videos';
@@ -354,8 +513,9 @@ $('fetchVideosBtn').addEventListener('click', async () => {
     state.priceRows = [];
     renderVideos();
     renderPrices();
-    log(`Found ${data.count} videos.`);
-    log('Next: pull transcripts. This fills the segments table and unlocks price extraction.');
+    const skipped = state.videos.filter(video => video.status === 'skipped').length;
+    log(`Found ${data.count} videos.${skipped ? ` ${skipped} auto-skipped from title heuristics.` : ''}`);
+    log('Next: run Classify titles for uncertain videos, then pull transcripts for relevant ones.');
   } catch (error) {
     log(`Video fetch failed: ${error.message}`);
   } finally {
@@ -367,20 +527,26 @@ $('fetchVideosBtn').addEventListener('click', async () => {
 $('fetchTranscriptsBtn').addEventListener('click', async () => {
   const languages = $('languages').value.trim() || 'hi.*,hi,en.*';
   const delayMs = Number($('delayMs').value || 1000);
-  const pending = state.videos.filter(v => v.status !== 'ok');
+  const pending = state.videos.filter(v => v.status !== 'ok' && isProcessable(v));
 
   if (!state.videos.length) {
     log('Fetch videos first.');
     return;
   }
+  if (!pending.length) {
+    log('No relevant pending videos. Irrelevant/skipped videos are not processed.');
+    return;
+  }
 
   state.runningTask = 'transcripts';
   updateWorkflow();
-  log(`Pulling transcripts for ${pending.length} videos...`);
+  log(`Pulling transcripts for ${pending.length} relevant videos...`);
+
+  const processedIds = [];
 
   for (let i = 0; i < state.videos.length; i++) {
     const video = state.videos[i];
-    if (video.status === 'ok') continue;
+    if (video.status === 'ok' || !isProcessable(video)) continue;
 
     video.status = 'running';
     video.error = '';
@@ -398,6 +564,9 @@ $('fetchTranscriptsBtn').addEventListener('click', async () => {
       video.transcriptText = data.transcriptText;
       video.segments = data.segments;
       video.error = '';
+      video.isNew = false;
+      video.needsWork = false;
+      processedIds.push(video.id);
       log(`✓ ${video.title} (${data.segmentCount} timestamped segments, ${data.language})`);
     } catch (error) {
       video.status = 'failed';
@@ -409,8 +578,10 @@ $('fetchTranscriptsBtn').addEventListener('click', async () => {
     if (delayMs > 0) await sleep(delayMs);
   }
 
+  await markVideosProcessed(processedIds);
   state.runningTask = '';
   updateWorkflow();
+  await loadWatchSettings();
   log('Transcript pull complete.');
   log('Next: extract prices. Use AI cleanup if the captions look noisy or mixed Hindi/English.');
 });
@@ -520,6 +691,80 @@ $('exportPricesBtn').addEventListener('click', () => {
   downloadFile('fruit_price_mentions_with_timestamps.csv', csv, 'text/csv;charset=utf-8');
 });
 
+function syncSettings() {
+  return {
+    siteUrl: ($('syncSiteUrl')?.value || localStorage.getItem('fruitTranscriptMinerSyncSiteUrl') || '').trim().replace(/\/$/, ''),
+    token: ($('syncToken')?.value || localStorage.getItem('fruitTranscriptMinerSyncToken') || '').trim(),
+  };
+}
+
+function saveSyncSettings() {
+  const { siteUrl, token } = syncSettings();
+  if (siteUrl) localStorage.setItem('fruitTranscriptMinerSyncSiteUrl', siteUrl);
+  if (token) localStorage.setItem('fruitTranscriptMinerSyncToken', token);
+}
+
+async function remoteDataRequest(method, body) {
+  const { siteUrl, token } = syncSettings();
+  if (!siteUrl) throw new Error('Set your Netlify / website URL first.');
+  saveSyncSettings();
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${siteUrl}/api/data`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || `Sync failed: ${res.status}`);
+  }
+  return data;
+}
+
+$('pushDataBtn')?.addEventListener('click', async () => {
+  try {
+    state.runningTask = 'sync';
+    updateWorkflow();
+    log('Pushing local data to website JSON store...');
+    const data = await remoteDataRequest('POST', {
+      channelUrl: $('channelUrl').value.trim(),
+      videos: state.videos,
+      priceRows: state.priceRows,
+      knownVideoIds: state.videos.map(v => v.id),
+    });
+    log(`Synced to website: ${data.counts.videos} videos, ${data.counts.priceRows} price rows.`);
+  } catch (error) {
+    log(`Website push failed: ${error.message}`);
+  } finally {
+    state.runningTask = '';
+    updateWorkflow();
+  }
+});
+
+$('pullDataBtn')?.addEventListener('click', async () => {
+  try {
+    state.runningTask = 'sync';
+    updateWorkflow();
+    log('Pulling data from website JSON store...');
+    const data = await remoteDataRequest('GET');
+    if (Array.isArray(data.data?.videos)) state.videos = data.data.videos;
+    if (Array.isArray(data.data?.priceRows)) state.priceRows = data.data.priceRows;
+    if (data.data?.channelUrl && $('channelUrl')) $('channelUrl').value = data.data.channelUrl;
+    renderVideos();
+    renderPrices();
+    saveLocal();
+    log(`Loaded from website: ${state.videos.length} videos, ${state.priceRows.length} price rows.`);
+  } catch (error) {
+    log(`Website pull failed: ${error.message}`);
+  } finally {
+    state.runningTask = '';
+    updateWorkflow();
+  }
+});
+
 $('exportJsonBtn').addEventListener('click', () => {
   downloadFile('fruit_transcript_project_with_timestamps.json', JSON.stringify(state, null, 2), 'application/json;charset=utf-8');
 });
@@ -541,6 +786,12 @@ $('segmentVideoSelect').addEventListener('change', renderSegmentsPreview);
 $('segmentSearch').addEventListener('input', renderSegmentsPreview);
 
 loadLocal();
+loadWatchSettings();
+if (window.location.hash === '#pending') {
+  document.getElementById('pending')?.scrollIntoView({ behavior: 'smooth' });
+}
+if ($('syncSiteUrl')) $('syncSiteUrl').value = localStorage.getItem('fruitTranscriptMinerSyncSiteUrl') || '';
+if ($('syncToken')) $('syncToken').value = localStorage.getItem('fruitTranscriptMinerSyncToken') || '';
 
 if (isFilePreview()) {
   setStatus('bad', 'Open via Netlify or localhost');

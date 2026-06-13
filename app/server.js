@@ -1,4 +1,6 @@
 const express = require('express');
+const { loadProjectData, saveProjectData, mergeProjectData, authorizeWrite } = require('./netlify/functions/_dataStore');
+const { classifyVideosHeuristic } = require('./netlify/functions/_classify');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -560,6 +562,53 @@ app.post('/api/extract-prices-ai', async (req, res) => {
     }
 
     res.json({ ok: true, count: allRows.length, rows: allRows, model });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.post('/api/classify-videos', (req, res) => {
+  try {
+    const videos = Array.isArray(req.body.videos) ? req.body.videos : [];
+    if (!videos.length) return res.status(400).json({ ok: false, error: 'No videos to classify.' });
+    const classified = classifyVideosHeuristic(videos);
+    const counts = classified.reduce((acc, video) => {
+      const key = video.relevance || 'unclassified';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    res.json({ ok: true, videos: classified, aiUsed: false, counts });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/data', async (_req, res) => {
+  try {
+    const data = await loadProjectData();
+    res.json({ ok: true, data });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.post('/api/data', async (req, res) => {
+  try {
+    if (!authorizeWrite({ headers: { authorization: req.headers.authorization || '' } })) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized. Set Authorization: Bearer <DATA_SYNC_TOKEN>.' });
+    }
+    const existing = await loadProjectData();
+    const merged = mergeProjectData(existing, req.body || {});
+    const saved = await saveProjectData(merged);
+    res.json({
+      ok: true,
+      counts: {
+        videos: saved.videos.length,
+        priceRows: saved.priceRows.length,
+        knownVideoIds: saved.knownVideoIds.length,
+      },
+      updatedAt: saved.updatedAt,
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }

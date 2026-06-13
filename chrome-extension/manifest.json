@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fruit Price Transcript Miner",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Pull YouTube captions from your browser session and extract timestamped fruit price rows.",
   "action": {
     "default_title": "Open Fruit Price Transcript Miner"
@@ -11,11 +11,15 @@
   },
   "permissions": [
     "tabs",
-    "storage"
+    "storage",
+    "alarms",
+    "notifications"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://youtu.be/*",
-    "https://api.openai.com/*"
+    "https://api.openai.com/*",
+    "https://*.netlify.app/*",
+    "http://localhost/*"
   ]
 }

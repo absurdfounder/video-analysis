@@ -508,6 +508,60 @@ $('exportPricesBtn').addEventListener('click', () => {
   downloadFile('fruit_price_mentions_with_timestamps.csv', csv, 'text/csv;charset=utf-8');
 });
 
+async function remoteDataRequest(method, body) {
+  const res = await fetch('/api/data', {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || `Sync failed: ${res.status}`);
+  }
+  return data;
+}
+
+$('pushDataBtn')?.addEventListener('click', async () => {
+  try {
+    state.runningTask = 'sync';
+    updateWorkflow();
+    log('Saving to server JSON store...');
+    const data = await remoteDataRequest('POST', {
+      channelUrl: $('channelUrl').value.trim(),
+      videos: state.videos,
+      priceRows: state.priceRows,
+      knownVideoIds: state.videos.map(v => v.id),
+    });
+    log(`Saved on server: ${data.counts.videos} videos, ${data.counts.priceRows} price rows.`);
+  } catch (error) {
+    log(`Server save failed: ${error.message}`);
+  } finally {
+    state.runningTask = '';
+    updateWorkflow();
+  }
+});
+
+$('pullDataBtn')?.addEventListener('click', async () => {
+  try {
+    state.runningTask = 'sync';
+    updateWorkflow();
+    log('Loading from server JSON store...');
+    const data = await remoteDataRequest('GET');
+    if (Array.isArray(data.data?.videos)) state.videos = data.data.videos;
+    if (Array.isArray(data.data?.priceRows)) state.priceRows = data.data.priceRows;
+    if (data.data?.channelUrl && $('channelUrl')) $('channelUrl').value = data.data.channelUrl;
+    renderVideos();
+    renderPrices();
+    saveLocal();
+    log(`Loaded from server: ${state.videos.length} videos, ${state.priceRows.length} price rows.`);
+  } catch (error) {
+    log(`Server load failed: ${error.message}`);
+  } finally {
+    state.runningTask = '';
+    updateWorkflow();
+  }
+});
+
 $('exportJsonBtn').addEventListener('click', () => {
   downloadFile('fruit_transcript_project_with_timestamps.json', JSON.stringify(state, null, 2), 'application/json;charset=utf-8');
 });

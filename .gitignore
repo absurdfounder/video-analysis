@@ -1,2 +1,2 @@
-.DS_Store
-.DS_Store
+# Local JSON fallback for website sync (use Netlify Blobs in production)
+app/data/project.json
