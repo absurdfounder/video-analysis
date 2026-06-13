@@ -1026,6 +1026,38 @@ function initUiMode() {
   applyOpenUiMode();
 }
 
+function resetProjectState() {
+  state.videos = [];
+  state.priceRows = [];
+  state.videoAnalysis = {};
+  state.lastSync = null;
+  state.currentStep = 1;
+  state.chatMessages = [];
+  state.vectorIndexStatus = null;
+  state.batchRunning = false;
+  state.aiBatchRunning = false;
+  state.batchJob = null;
+  state.aiBatchJob = null;
+  state.batchLogCursor = 0;
+  state.aiBatchLogCursor = 0;
+  state.runningTask = '';
+}
+
+async function clearLocalProjectStorage() {
+  try {
+    localStorage.removeItem('fruitTranscriptMinerStateV2');
+  } catch {
+    // ignore
+  }
+  if (chrome.storage?.local) {
+    await chrome.storage.local.remove([
+      'fruitTranscriptMinerStateV2',
+      'transcriptBatchJob',
+      'aiAnalysisBatchJob',
+    ]);
+  }
+}
+
 async function saveLocal() {
   normalizeVideos({ keepRunning: state.batchRunning, keepAiRunning: state.aiBatchRunning });
   const payload = {
@@ -1233,22 +1265,39 @@ function syncFromStorageChanges(changes) {
     updateAnalysisStatusUI(state.aiBatchJob);
   }
 
-  if (changes.fruitTranscriptMinerStateV2?.newValue) {
-    applySavedProject(changes.fruitTranscriptMinerStateV2.newValue, {
-      keepRunning: state.batchRunning || batchRunning,
-      keepAiRunning: state.aiBatchRunning || aiBatchRunning,
-    });
-    if (state.currentStep) goToStep(state.currentStep);
+  if (changes.fruitTranscriptMinerStateV2) {
+    const next = changes.fruitTranscriptMinerStateV2.newValue;
+    if (next) {
+      applySavedProject(next, {
+        keepRunning: state.batchRunning || batchRunning,
+        keepAiRunning: state.aiBatchRunning || aiBatchRunning,
+      });
+      if (state.currentStep) goToStep(state.currentStep);
+    } else {
+      resetProjectState();
+      renderAll();
+      goToStep(1);
+    }
   }
 
-  if (changes.transcriptBatchJob?.newValue) {
-    const job = changes.transcriptBatchJob.newValue;
-    if (!job?.running && job?.finishedAt) goToStep(3);
+  if (changes.transcriptBatchJob) {
+    if (changes.transcriptBatchJob.newValue) {
+      const job = changes.transcriptBatchJob.newValue;
+      if (!job?.running && job?.finishedAt) goToStep(3);
+    } else {
+      state.batchRunning = false;
+      state.batchJob = null;
+    }
   }
 
-  if (changes.aiAnalysisBatchJob?.newValue) {
-    const job = changes.aiAnalysisBatchJob.newValue;
-    if (!job?.running && job?.finishedAt && !pendingAnalysis().length) goToStep(4);
+  if (changes.aiAnalysisBatchJob) {
+    if (changes.aiAnalysisBatchJob.newValue) {
+      const job = changes.aiAnalysisBatchJob.newValue;
+      if (!job?.running && job?.finishedAt && !pendingAnalysis().length) goToStep(4);
+    } else {
+      state.aiBatchRunning = false;
+      state.aiBatchJob = null;
+    }
   }
 
   updateUI();
@@ -1692,17 +1741,27 @@ $('exportJsonBtn')?.addEventListener('click', () => {
   a.click();
 });
 
-$('clearBtn')?.addEventListener('click', () => {
+$('clearBtn')?.addEventListener('click', async () => {
   if (!confirm('Clear all local data?')) return;
-  state.videos = [];
-  state.priceRows = [];
-  state.videoAnalysis = {};
-  state.lastSync = null;
-  if ($('log')) $('log').textContent = '';
-  renderVideos();
-  renderAnalysisList();
-  renderPrices();
-  goToStep(1);
+  try {
+    setBusy(true);
+    await api('/api/clear-project');
+    resetProjectState();
+    await clearLocalProjectStorage();
+    if ($('log')) $('log').textContent = '';
+    if ($('syncSummary')) $('syncSummary').textContent = 'Nothing pushed yet.';
+    if ($('batchStatusText')) $('batchStatusText').textContent = '';
+    if ($('analysisStatusText')) $('analysisStatusText').textContent = '';
+    updateVectorIndexStatusUI();
+    renderAll();
+    goToStep(1);
+    updateUI();
+    log('All local project data cleared.');
+  } catch (error) {
+    log(`Clear failed: ${error.message}`, { level: 'error' });
+  } finally {
+    setBusy(false);
+  }
 });
 
 $('openaiKey')?.addEventListener('change', () => {
@@ -1911,7 +1970,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.1 — vector DB chat (Step 5)';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.2 — vector DB chat (Step 5)';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

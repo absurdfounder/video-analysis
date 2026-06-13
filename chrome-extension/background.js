@@ -112,6 +112,7 @@ async function handleApi(path, body) {
   if (path === '/api/analyze-single-video') return analyzeSingleVideo(body);
   if (path === '/api/stop-ai-analysis-batch') return stopAiAnalysisBatch(body);
   if (path === '/api/ai-analysis-batch-status') return aiAnalysisBatchStatus();
+  if (path === '/api/clear-project') return clearProjectData();
   return { ok: false, error: `Unknown extension API route: ${path}` };
 }
 
@@ -362,6 +363,26 @@ async function saveProjectState(patch) {
   };
   await chrome.storage.local.set({ [PROJECT_STATE_KEY]: next });
   return next;
+}
+
+async function clearProjectData() {
+  await chrome.alarms.clear('processNextTranscript');
+  await chrome.alarms.clear('processNextAiAnalysis');
+  await clearBatchWatchdog();
+  await clearAiBatchWatchdog();
+
+  batchProcessing = false;
+  batchProcessingStartedAt = 0;
+  aiBatchProcessing = false;
+  aiBatchProcessingStartedAt = 0;
+
+  await chrome.storage.local.remove([
+    PROJECT_STATE_KEY,
+    TRANSCRIPT_BATCH_KEY,
+    AI_ANALYSIS_BATCH_KEY,
+  ]);
+
+  return { ok: true, cleared: true };
 }
 
 function addUniqueStrings(target, value) {
