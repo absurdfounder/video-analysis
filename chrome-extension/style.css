@@ -48,6 +48,69 @@ body.sidepanel-mode .batch-status-line {
   color: var(--green-dark);
 }
 
+body.popup-mode {
+  width: 430px;
+  min-height: 560px;
+  max-width: 100vw;
+  background: var(--bg);
+}
+
+body.popup-mode .app {
+  width: 100%;
+  padding: 12px 10px 18px;
+}
+
+body.popup-mode .topbar {
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+body.popup-mode h1 {
+  font-size: 24px;
+}
+
+body.popup-mode .topbar-stats {
+  width: 100%;
+}
+
+body.popup-mode .topbar-stats div {
+  flex: 1;
+  min-width: 0;
+}
+
+body.popup-mode .stepper {
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+}
+
+body.popup-mode .step {
+  flex: 1 1 30%;
+}
+
+body.popup-mode .step-line {
+  display: none;
+}
+
+body.popup-mode .step-panel {
+  padding: 14px;
+  border-radius: 16px;
+}
+
+body.popup-mode .video-card {
+  grid-template-columns: 92px 1fr;
+  padding: 10px;
+}
+
+body.popup-mode .card-actions {
+  grid-template-columns: 1fr;
+}
+
+body.popup-mode .log-panel .log-list {
+  max-height: 180px;
+}
+
 .batch-status-line {
   min-height: 1.2em;
 }

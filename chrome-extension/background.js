@@ -14,6 +14,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await schedulePoll(settings.pollIntervalMinutes);
   await resumeTranscriptBatchIfNeeded();
   await resumeAiAnalysisBatchIfNeeded();
+  await configureActionPopup();
   try {
     await chrome.sidePanel.setOptions({
       path: 'index.html?mode=sidepanel',
@@ -23,6 +24,11 @@ chrome.runtime.onInstalled.addListener(async () => {
   } catch {
     // sidePanel unavailable on older Chrome builds
   }
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes.fruitMinerOpenUIMode) return;
+  configureActionPopup().catch(() => {});
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -73,6 +79,19 @@ chrome.notifications.onClicked.addListener(() => {
 chrome.action.onClicked.addListener(async (tab) => {
   const stored = await chrome.storage.local.get('fruitMinerOpenUIMode');
   const mode = stored.fruitMinerOpenUIMode || 'sidepanel';
+  if (mode === 'popup') {
+    await configureActionPopup('popup');
+    if (chrome.action.openPopup) {
+      try {
+        await chrome.action.openPopup();
+      } catch {
+        chrome.tabs.create({ url: chrome.runtime.getURL('index.html?mode=popup') });
+      }
+    } else {
+      chrome.tabs.create({ url: chrome.runtime.getURL('index.html?mode=popup') });
+    }
+    return;
+  }
   if (mode === 'tab') {
     chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
     return;
@@ -91,6 +110,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     .catch(error => sendResponse({ ok: false, error: cleanError(error) }));
   return true;
 });
+
+async function configureActionPopup(modeOverride = '') {
+  const stored = modeOverride ? {} : await chrome.storage.local.get('fruitMinerOpenUIMode');
+  const mode = modeOverride || stored.fruitMinerOpenUIMode || 'sidepanel';
+  await chrome.action.setPopup({
+    popup: mode === 'popup' ? 'index.html?mode=popup' : '',
+  });
+}
+
+configureActionPopup().catch(() => {});
 
 async function handleApi(path, body) {
   if (path === '/api/status') return status();
@@ -1262,6 +1291,7 @@ async function processNextTranscriptInBatch() {
 }
 
 chrome.runtime.onStartup.addListener(() => {
+  configureActionPopup().catch(() => {});
   resumeTranscriptBatchIfNeeded().catch(() => {});
   resumeAiAnalysisBatchIfNeeded().catch(() => {});
 });

@@ -1049,16 +1049,22 @@ function applyOpenUiMode() {
   if (chrome.storage?.local) {
     chrome.storage.local.set({ fruitMinerOpenUIMode: mode }).catch(() => {});
   }
-  const inSidepanel = new URLSearchParams(location.search).get('mode') === 'sidepanel' || document.body.classList.contains('sidepanel-mode');
-  document.body.classList.toggle('sidepanel-mode', inSidepanel || mode === 'sidepanel');
+  const queryMode = new URLSearchParams(location.search).get('mode');
+  const inSidepanel = queryMode === 'sidepanel' || document.body.classList.contains('sidepanel-mode');
+  const inPopup = queryMode === 'popup' || document.body.classList.contains('popup-mode');
+  document.body.classList.toggle('sidepanel-mode', inSidepanel);
+  document.body.classList.toggle('popup-mode', inPopup);
   if ($('openFullTabBtn')) {
-    $('openFullTabBtn').style.display = inSidepanel ? '' : 'none';
+    $('openFullTabBtn').style.display = (inSidepanel || inPopup) ? '' : 'none';
   }
 }
 
 function initUiMode() {
-  if (new URLSearchParams(location.search).get('mode') === 'sidepanel') {
+  const queryMode = new URLSearchParams(location.search).get('mode');
+  if (queryMode === 'sidepanel') {
     document.body.classList.add('sidepanel-mode');
+  } else if (queryMode === 'popup') {
+    document.body.classList.add('popup-mode');
   }
   const saved = localStorage.getItem('fruitMinerOpenUIMode') || 'sidepanel';
   if ($('openUIMode')) $('openUIMode').value = saved;
@@ -2010,7 +2016,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.4 — thumbnails, logs, OpenAI direct';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.5 — popup, thumbnails, logs';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
