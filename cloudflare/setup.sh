@@ -59,6 +59,13 @@ fi
 echo "==> Running schema migration (remote D1)..."
 npx wrangler d1 execute fruit-mandi --remote --file=./schema.sql
 
+echo "==> Ensuring Vectorize index 'fruit-mandi-index'..."
+VECTOR_OUT=$(npx wrangler vectorize create fruit-mandi-index --dimensions=1536 --metric=cosine 2>&1) || true
+echo "$VECTOR_OUT"
+if echo "$VECTOR_OUT" | grep -qi "already exists"; then
+  echo "==> Vectorize index already exists"
+fi
+
 echo "==> Deploying Worker..."
 DEPLOY_OUT=$(npx wrangler deploy 2>&1)
 echo "$DEPLOY_OUT"

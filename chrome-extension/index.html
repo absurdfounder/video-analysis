@@ -45,6 +45,12 @@
         <span class="step-label">Update Dataset</span>
         <small id="stepMeta4">Waiting</small>
       </button>
+      <div class="step-line" aria-hidden="true"></div>
+      <button class="step" type="button" data-step="5">
+        <span class="step-num">5</span>
+        <span class="step-label">Chat Data</span>
+        <small id="stepMeta5">Waiting</small>
+      </button>
     </nav>
 
     <section class="step-panel active" id="panel-1">
@@ -92,6 +98,26 @@
       <button id="stepBtn4" class="btn-primary btn-large" type="button">Update dataset on website</button>
       <div id="syncSummary" class="sync-summary">Nothing pushed yet.</div>
       <div id="pricePreview" class="card-list compact-preview"></div>
+    </section>
+
+    <section class="step-panel" id="panel-5">
+      <p class="step-desc" id="stepDesc5">Turn the synced database into a searchable vector index, then chat with AI about prices, parties, fruits, and market days.</p>
+      <div class="chat-index-bar">
+        <button id="stepBtn5Index" class="btn-secondary" type="button">Build search index</button>
+        <span id="vectorIndexStatus" class="hint">Index not built yet.</span>
+      </div>
+      <div id="chatMessages" class="chat-messages" aria-live="polite">
+        <div class="chat-empty">Build the search index, then ask questions like “What was garlic price on the latest market day?”</div>
+      </div>
+      <div class="chat-suggestions" id="chatSuggestions">
+        <button type="button" class="chat-chip" data-chat-prompt="What fruits had the highest prices in the latest market report?">Latest high prices</button>
+        <button type="button" class="chat-chip" data-chat-prompt="Summarize onion and garlic prices by party and grade.">Onion & garlic summary</button>
+        <button type="button" class="chat-chip" data-chat-prompt="Which parties were mentioned most often recently?">Top parties</button>
+      </div>
+      <form id="chatForm" class="chat-form">
+        <textarea id="chatInput" rows="2" placeholder="Ask about mandi prices, parties, areas, or a specific market day..." autocomplete="off"></textarea>
+        <button id="chatSendBtn" class="btn-primary" type="submit">Send</button>
+      </form>
     </section>
 
     <details class="fold-panel">

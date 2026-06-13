@@ -18,6 +18,9 @@ const state = {
   aiBatchRunning: false,
   aiBatchJob: null,
   aiBatchLogCursor: 0,
+  chatMessages: [],
+  vectorIndexStatus: null,
+  chatBusy: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -28,9 +31,24 @@ function getOpenAiKey() {
   return (localStorage.getItem('fruitTranscriptMinerOpenAIKey') || '').trim();
 }
 
-function applyOpenAiKeyToInput() {
+async function persistOpenAiKey() {
+  const key = getOpenAiKey();
+  if (key) localStorage.setItem('fruitTranscriptMinerOpenAIKey', key);
+  else localStorage.removeItem('fruitTranscriptMinerOpenAIKey');
+  if (chrome.storage?.local) {
+    if (key) await chrome.storage.local.set({ fruitTranscriptMinerOpenAIKey: key });
+    else await chrome.storage.local.remove('fruitTranscriptMinerOpenAIKey');
+  }
+}
+
+async function applyOpenAiKeyToInput() {
   if (!$('openaiKey')) return;
-  const saved = (localStorage.getItem('fruitTranscriptMinerOpenAIKey') || '').trim();
+  let saved = (localStorage.getItem('fruitTranscriptMinerOpenAIKey') || '').trim();
+  if (!saved && chrome.storage?.local) {
+    const stored = await chrome.storage.local.get('fruitTranscriptMinerOpenAIKey');
+    saved = (stored.fruitTranscriptMinerOpenAIKey || '').trim();
+    if (saved) localStorage.setItem('fruitTranscriptMinerOpenAIKey', saved);
+  }
   if (saved) $('openaiKey').value = saved;
 }
 
@@ -891,6 +909,17 @@ function deriveStepStatus() {
       desc: analysisDesc,
     },
     4: { done: Boolean(state.lastSync), meta: state.lastSync ? 'Synced' : 'Waiting', desc: state.lastSync ? `Last pushed ${new Date(state.lastSync).toLocaleString()}` : 'Push to Cloudflare D1 via Worker API (see cloudflare/README.md).' },
+    5: {
+      done: Boolean(state.vectorIndexStatus?.chunk_count),
+      meta: state.vectorIndexStatus?.chunk_count
+        ? `${state.vectorIndexStatus.chunk_count} chunks`
+        : state.lastSync ? 'Build index' : 'Sync first',
+      desc: state.vectorIndexStatus?.indexed_at
+        ? `Search index ready · ${state.vectorIndexStatus.backend || 'vectors'} · built ${new Date(state.vectorIndexStatus.indexed_at).toLocaleString()}`
+        : state.lastSync
+          ? 'Build the vector search index, then chat about your mandi data.'
+          : 'Complete Step 4 sync first, then build the search index here.',
+    },
   };
 }
 
@@ -898,7 +927,8 @@ function suggestedStep() {
   if (!state.videos.length) return 1;
   if (pendingTranscripts().length) return 2;
   if (pendingAnalysis().length) return 3;
-  return 4;
+  if (!state.lastSync) return 4;
+  return 5;
 }
 
 function goToStep(step) {
@@ -910,13 +940,17 @@ function goToStep(step) {
   });
   document.querySelectorAll('.step-panel').forEach(el => el.classList.remove('active'));
   $(`panel-${step}`)?.classList.add('active');
+  if (step === 5) {
+    refreshVectorIndexStatus().catch(() => {});
+    renderChatMessages();
+  }
 }
 
 function updateUI() {
   const status = deriveStepStatus();
   const transcriptStats = transcriptQueueStats();
   const analysisStats = analysisQueueStats();
-  for (let i = 1; i <= 4; i++) {
+  for (let i = 1; i <= 5; i++) {
     const meta = $(`stepMeta${i}`);
     if (meta) meta.textContent = status[i].meta;
     const desc = $(`stepDesc${i}`);
@@ -927,10 +961,12 @@ function updateUI() {
   if ($('statDone')) $('statDone').textContent = transcriptReady().length;
   if ($('statPrices')) $('statPrices').textContent = state.priceRows.length;
 
-  const workflowBusy = state.batchRunning || state.aiBatchRunning || Boolean(state.runningTask);
-  for (let i = 1; i <= 4; i++) setDisabled(`stepBtn${i}`, workflowBusy);
+  const workflowBusy = state.batchRunning || state.aiBatchRunning || Boolean(state.runningTask) || state.chatBusy;
+  for (let i = 1; i <= 5; i++) setDisabled(`stepBtn${i}`, workflowBusy);
   setDisabled('stopTranscriptBatchBtn', !state.batchRunning);
   setDisabled('stopAiAnalysisBatchBtn', !state.aiBatchRunning);
+  setDisabled('stepBtn5Index', workflowBusy);
+  setDisabled('chatSendBtn', workflowBusy);
 
   if ($('stepBtn2')) {
     $('stepBtn2').textContent = transcriptStats.failed && transcriptStats.waiting
@@ -1047,7 +1083,7 @@ async function loadLocal() {
 
   normalizeVideos();
 
-  applyOpenAiKeyToInput();
+  applyOpenAiKeyToInput().catch(() => {});
   renderVideos();
   renderAnalysisList();
   renderPrices();
@@ -1230,6 +1266,10 @@ async function analyzeOneVideo(videoId) {
   renderAnalysisList();
   log(`Analyzing ${video.title || videoId}...`);
 
+  const apiKey = getOpenAiKey();
+  if (!apiKey) throw new Error('Add your OpenAI API key in Settings first.');
+  await persistOpenAiKey();
+
   try {
     const data = await api('/api/analyze-single-video', {
       videoId,
@@ -1273,9 +1313,9 @@ async function aiAnalysisStep() {
 
   const apiKey = getOpenAiKey();
   if (!apiKey) {
-    log('No OpenAI key in Settings — will use basic regex extraction (no grades/parties).', { level: 'warn' });
+    throw new Error('Add your OpenAI API key in Settings before running AI analysis.');
   }
-  if (apiKey) localStorage.setItem('fruitTranscriptMinerOpenAIKey', apiKey);
+  await persistOpenAiKey();
 
   await saveLocal();
   state.aiBatchLogCursor = 0;
@@ -1362,10 +1402,146 @@ async function updateDatasetStep() {
   log(`Dataset synced to ${data.storage || 'API'}.`);
   updateUI();
   saveLocal();
+  await refreshVectorIndexStatus();
+  goToStep(5);
+}
+
+function getWorkerApiConfig() {
+  return {
+    siteUrl: ($('syncSiteUrl')?.value || localStorage.getItem('fruitTranscriptMinerSyncSiteUrl') || '').trim().replace(/\/$/, ''),
+    token: ($('syncToken')?.value || localStorage.getItem('fruitTranscriptMinerSyncToken') || '').trim(),
+  };
+}
+
+async function workerApiFetch(path, { method = 'GET', body = null } = {}) {
+  const { siteUrl, token } = getWorkerApiConfig();
+  if (!siteUrl) throw new Error('Set your Cloudflare Worker API URL in Settings first.');
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${siteUrl}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.error || `API failed: ${res.status}`);
+  return data;
+}
+
+function renderChatMessages() {
+  const box = $('chatMessages');
+  if (!box) return;
+  if (!state.chatMessages.length) {
+    box.innerHTML = '<div class="chat-empty">Build the search index, then ask questions like “What was garlic price on the latest market day?”</div>';
+    return;
+  }
+
+  box.innerHTML = state.chatMessages.map((entry) => {
+    const sources = Array.isArray(entry.sources) && entry.sources.length
+      ? `<div class="chat-sources">${entry.sources.slice(0, 4).map((source) => `
+          <div class="chat-source">${escapeHtml([
+            source.market_date,
+            source.fruit,
+            source.video_title,
+            source.excerpt,
+          ].filter(Boolean).join(' · '))}</div>
+        `).join('')}</div>`
+      : '';
+    return `
+      <div class="chat-bubble ${escapeHtml(entry.role)}${entry.error ? ' error' : ''}">
+        ${escapeHtml(entry.content)}
+        ${sources}
+      </div>
+    `;
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+function updateVectorIndexStatusUI() {
+  const el = $('vectorIndexStatus');
+  if (!el) return;
+  const status = state.vectorIndexStatus;
+  if (!status) {
+    el.textContent = 'Index not built yet.';
+    return;
+  }
+  el.textContent = status.chunk_count
+    ? `${status.chunk_count} chunks · ${status.backend || 'vectors'}${status.indexed_at ? ` · ${new Date(status.indexed_at).toLocaleString()}` : ''}`
+    : 'Index empty — click Build search index.';
+}
+
+async function refreshVectorIndexStatus() {
+  try {
+    const data = await workerApiFetch('/api/vectors/status');
+    state.vectorIndexStatus = data;
+    updateVectorIndexStatusUI();
+    updateUI();
+  } catch (error) {
+    if ($('vectorIndexStatus')) $('vectorIndexStatus').textContent = `Index status unavailable: ${error.message}`;
+  }
+}
+
+async function buildVectorIndexStep() {
+  const apiKey = getOpenAiKey();
+  if (!apiKey) throw new Error('Add your OpenAI API key in Settings first.');
+  await persistOpenAiKey();
+
+  log('Building vector search index from database...');
+  const data = await workerApiFetch('/api/vectors/index', {
+    method: 'POST',
+    body: {
+      apiKey,
+      model: ($('openaiModel')?.value || 'gpt-4o-mini').trim(),
+    },
+  });
+
+  state.vectorIndexStatus = {
+    backend: data.backend,
+    chunk_count: data.indexed,
+    indexed_at: data.indexed_at,
+  };
+  updateVectorIndexStatusUI();
+  updateUI();
+  log(`Search index built: ${data.indexed} chunks (${data.price_chunks || 0} prices, ${data.analysis_chunks || 0} analysis).`);
+}
+
+async function sendChatMessage(messageText) {
+  const message = String(messageText || '').trim();
+  if (!message) return;
+
+  const apiKey = getOpenAiKey();
+  if (!apiKey) throw new Error('Add your OpenAI API key in Settings first.');
+  await persistOpenAiKey();
+
+  state.chatMessages.push({ role: 'user', content: message });
+  renderChatMessages();
+
+  const history = state.chatMessages
+    .filter((entry) => entry.role === 'user' || entry.role === 'assistant')
+    .slice(0, -1)
+    .map((entry) => ({ role: entry.role, content: entry.content }));
+
+  const data = await workerApiFetch('/api/vectors/chat', {
+    method: 'POST',
+    body: {
+      apiKey,
+      model: ($('openaiModel')?.value || 'gpt-4o-mini').trim(),
+      message,
+      history,
+    },
+  });
+
+  state.chatMessages.push({
+    role: 'assistant',
+    content: data.answer || 'No answer returned.',
+    sources: data.sources || [],
+  });
+  renderChatMessages();
+  log('Chat answer received.');
 }
 
 async function loadWatchSettings() {
-  applyOpenAiKeyToInput();
+  applyOpenAiKeyToInput().catch(() => {});
   const data = await chrome.runtime.sendMessage({ type: 'api', path: '/api/channel-settings', body: { method: 'get' } });
   if (!data?.ok) return;
   const settings = data.settings || {};
@@ -1414,9 +1590,65 @@ $('stepBtn4')?.addEventListener('click', async () => {
   finally { setBusy(false); }
 });
 
+$('stepBtn5Index')?.addEventListener('click', async () => {
+  try {
+    setBusy(true);
+    state.chatBusy = true;
+    updateUI();
+    await buildVectorIndexStep();
+  } catch (e) {
+    log(`Index build failed: ${e.message}`, { level: 'error' });
+  } finally {
+    state.chatBusy = false;
+    setBusy(false);
+  }
+});
+
+$('chatForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = $('chatInput');
+  const message = (input?.value || '').trim();
+  if (!message || state.chatBusy) return;
+  try {
+    state.chatBusy = true;
+    updateUI();
+    if (input) input.value = '';
+    await sendChatMessage(message);
+  } catch (e) {
+    state.chatMessages.push({ role: 'assistant', content: e.message, error: true });
+    renderChatMessages();
+    log(`Chat failed: ${e.message}`, { level: 'error' });
+  } finally {
+    state.chatBusy = false;
+    updateUI();
+  }
+});
+
+$('chatSuggestions')?.addEventListener('click', async (event) => {
+  const chip = event.target.closest('[data-chat-prompt]');
+  if (!chip || state.chatBusy) return;
+  const prompt = chip.getAttribute('data-chat-prompt');
+  if (!prompt) return;
+  if ($('chatInput')) $('chatInput').value = prompt;
+  try {
+    state.chatBusy = true;
+    updateUI();
+    await sendChatMessage(prompt);
+    if ($('chatInput')) $('chatInput').value = '';
+  } catch (e) {
+    state.chatMessages.push({ role: 'assistant', content: e.message, error: true });
+    renderChatMessages();
+    log(`Chat failed: ${e.message}`, { level: 'error' });
+  } finally {
+    state.chatBusy = false;
+    updateUI();
+  }
+});
+
 $('saveWatchBtn')?.addEventListener('click', async () => {
   try {
     setBusy(true);
+    await persistOpenAiKey();
     await api('/api/channel-settings', {
       method: 'set',
       channelUrl: ($('channelUrl')?.value || '').trim(),
@@ -1473,7 +1705,9 @@ $('clearBtn')?.addEventListener('click', () => {
   goToStep(1);
 });
 
-$('videoSearch')?.addEventListener('input', renderVideos);
+$('openaiKey')?.addEventListener('change', () => {
+  persistOpenAiKey().catch(() => {});
+});
 $('analysisSearch')?.addEventListener('input', renderAnalysisList);
 
 $('analysisList')?.addEventListener('click', async (event) => {
@@ -1677,7 +1911,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.35 — Cloudflare D1 sync';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.0 — vector DB chat (Step 5)';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

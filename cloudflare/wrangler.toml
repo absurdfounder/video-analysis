@@ -8,5 +8,11 @@ binding = "DB"
 database_name = "fruit-mandi"
 database_id = "3e0380c4-93c1-4bc2-9d64-80a7aa40cdf8"
 
+# Optional Vectorize index (run: npm run vectorize:create)
+# If missing, Worker falls back to D1-stored embeddings.
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "fruit-mandi-index"
+
 # Optional: set SYNC_TOKEN in Cloudflare dashboard → Worker → Settings → Variables
 # Extension uses the same value in Settings → Sync token.

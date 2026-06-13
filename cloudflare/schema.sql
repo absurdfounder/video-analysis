@@ -77,3 +77,18 @@ CREATE INDEX IF NOT EXISTS idx_price_rows_fruit ON price_rows(fruit);
 CREATE INDEX IF NOT EXISTS idx_price_rows_market_date_sort ON price_rows(market_date_sort);
 CREATE INDEX IF NOT EXISTS idx_videos_market_date_sort ON videos(market_date_sort);
 CREATE INDEX IF NOT EXISTS idx_video_analysis_market_date_sort ON video_analysis(market_date_sort);
+
+CREATE TABLE IF NOT EXISTS vector_chunks (
+  id TEXT PRIMARY KEY,
+  doc_type TEXT,
+  video_id TEXT,
+  market_date TEXT,
+  fruit TEXT,
+  text TEXT NOT NULL,
+  embedding_json TEXT NOT NULL,
+  metadata_json TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_chunks_video_id ON vector_chunks(video_id);
+CREATE INDEX IF NOT EXISTS idx_vector_chunks_market_date ON vector_chunks(market_date);

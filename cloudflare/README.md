@@ -87,6 +87,28 @@ https://fruit-mandi-api.<your-subdomain>.workers.dev
 2. **Settings → API URL** → paste Worker URL (no trailing slash)
 3. **Step 4 → Update dataset on website**
 
+4. **Step 5 → Build search index → Chat Data**
+
+---
+
+## Step 5 — Vector chat
+
+After syncing data in Step 4:
+
+1. Extension **Step 5 → Build search index** (uses OpenAI embeddings)
+2. Ask questions in the chat box — answers use retrieved mandi context from your D1 data
+
+Uses **Cloudflare Vectorize** when bound; otherwise stores embeddings in D1 (`vector_chunks` table).
+
+Create Vectorize index manually if needed:
+
+```bash
+cd cloudflare
+npm run vectorize:create
+npm run db:migrate
+npm run deploy
+```
+
 ---
 
 ## API endpoints
@@ -102,6 +124,9 @@ https://fruit-mandi-api.<your-subdomain>.workers.dev
 | GET | `/api/prices` | — | Query prices (`?fruit=onion&market_date=2026-06-13&party=&video_id=`) |
 | GET | `/api/analysis` | — | List analysis (`?market_date=`) |
 | GET | `/api/analysis/:videoId` | — | Per-video structured analysis |
+| GET | `/api/vectors/status` | — | Vector index status |
+| POST | `/api/vectors/index` | — | Build/rebuild embeddings index (`apiKey` in body) |
+| POST | `/api/vectors/chat` | — | RAG chat over indexed data (`apiKey`, `message`, optional `history`) |
 
 \* Required only if `SYNC_TOKEN` is set on the Worker.
 

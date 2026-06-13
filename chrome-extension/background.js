@@ -311,6 +311,24 @@ async function markProcessed(body) {
 }
 
 const PROJECT_STATE_KEY = 'fruitTranscriptMinerStateV2';
+const OPENAI_KEY_STORAGE = 'fruitTranscriptMinerOpenAIKey';
+
+async function getStoredOpenAiKey() {
+  const stored = await chrome.storage.local.get(OPENAI_KEY_STORAGE);
+  return safeText(stored[OPENAI_KEY_STORAGE]);
+}
+
+async function saveStoredOpenAiKey(apiKey) {
+  const key = safeText(apiKey);
+  if (key) await chrome.storage.local.set({ [OPENAI_KEY_STORAGE]: key });
+  else await chrome.storage.local.remove(OPENAI_KEY_STORAGE);
+}
+
+async function resolveOpenAiKey(preferred = '') {
+  const direct = safeText(preferred);
+  if (direct) return direct;
+  return getStoredOpenAiKey();
+}
 const TRANSCRIPT_BATCH_KEY = 'transcriptBatchJob';
 const BATCH_LOG_LIMIT = 80;
 const BATCH_LOCK_STALE_MS = 90000;
@@ -360,7 +378,179 @@ function uniqueRowValues(rows, field) {
   return values;
 }
 
-function buildVideoAnalysisMeta(item, rows, summary = {}, source = 'ai') {
+function mergeAiVideoMetadata(existing, chunkMeta, item) {
+  if (!chunkMeta || typeof chunkMeta !== 'object') return existing;
+  const next = existing || {
+    market_date: '',
+    parties: [],
+    areas: [],
+    qualities: [],
+    fruits: [],
+    notes: '',
+  };
+
+  const mergeList = (target, values) => {
+    const list = [...(target || [])];
+    for (const value of values || []) addUniqueStrings(list, value);
+    return list;
+  };
+
+  if (chunkMeta.market_date) next.market_date = safeText(chunkMeta.market_date);
+  next.parties = mergeList(next.parties, chunkMeta.parties);
+  next.areas = mergeList(next.areas, chunkMeta.areas);
+  next.qualities = mergeList(next.qualities, chunkMeta.qualities);
+  if (chunkMeta.notes) next.notes = [next.notes, safeText(chunkMeta.notes)].filter(Boolean).join(' · ');
+
+  const fruitMap = new Map((next.fruits || []).map((fruit) => [
+    [fruit.fruit, fruit.fruit_hindi].filter(Boolean).join(' / ').toLowerCase(),
+    fruit,
+  ]));
+
+  for (const rawFruit of Array.isArray(chunkMeta.fruits) ? chunkMeta.fruits : []) {
+    const key = [rawFruit.fruit, rawFruit.fruit_hindi].filter(Boolean).join(' / ').toLowerCase() || 'unknown';
+    if (!fruitMap.has(key)) {
+      fruitMap.set(key, {
+        fruit: safeText(rawFruit.fruit) || safeText(rawFruit.fruit_hindi) || 'unknown',
+        fruit_hindi: safeText(rawFruit.fruit_hindi),
+        quality_grades: [],
+        parties: [],
+        areas: [],
+        varieties: [],
+        min_price_inr: null,
+        max_price_inr: null,
+        unit: safeText(rawFruit.unit) || 'unknown',
+        mentions: [],
+      });
+    }
+    const fruitEntry = fruitMap.get(key);
+    for (const grade of rawFruit.quality_grades || []) addUniqueStrings(fruitEntry.quality_grades, grade);
+    for (const party of rawFruit.parties || []) addUniqueStrings(fruitEntry.parties, party);
+    for (const area of rawFruit.areas || []) addUniqueStrings(fruitEntry.areas, area);
+    for (const variety of rawFruit.varieties || []) addUniqueStrings(fruitEntry.varieties, variety);
+
+    const min = normalizeNumeric(rawFruit.min_price_inr);
+    const max = normalizeNumeric(rawFruit.max_price_inr);
+    if (min !== '' && max !== '') {
+      fruitEntry.min_price_inr = fruitEntry.min_price_inr == null
+        ? Math.min(min, max)
+        : Math.min(fruitEntry.min_price_inr, Math.min(min, max));
+      fruitEntry.max_price_inr = fruitEntry.max_price_inr == null
+        ? Math.max(min, max)
+        : Math.max(fruitEntry.max_price_inr, Math.max(min, max));
+    }
+    if (fruitEntry.unit === 'unknown' && rawFruit.unit) fruitEntry.unit = safeText(rawFruit.unit);
+
+    for (const mention of Array.isArray(rawFruit.mentions) ? rawFruit.mentions : []) {
+      const timestamp = normalizeNumeric(mention.timestamp_seconds);
+      fruitEntry.mentions.push({
+        timestamp_seconds: timestamp === '' ? 0 : timestamp,
+        timestamp_label: secondsToClock(timestamp === '' ? 0 : timestamp),
+        timestamp_url: timestampUrl(item?.url || '', timestamp === '' ? 0 : timestamp),
+        quality_grade: safeText(mention.quality_grade),
+        quality_label: safeText(mention.quality_label),
+        party_name: safeText(mention.party_name),
+        area_name: safeText(mention.area_name),
+        min_price_inr: mention.min_price_inr ?? '',
+        max_price_inr: mention.max_price_inr ?? '',
+        unit: safeText(mention.unit),
+        line: safeText(mention.line || mention.clean_hindi_line || mention.original_line),
+        context: safeText(mention.context),
+      });
+    }
+  }
+
+  next.fruits = [...fruitMap.values()];
+  return next;
+}
+
+function applyAiVideoMetadataToAnalysisMeta(base, item, aiMetadata) {
+  if (!aiMetadata || typeof aiMetadata !== 'object') return base;
+  const merged = mergeAiVideoMetadata({
+    market_date: base.market_date,
+    parties: [...(base.parties || [])],
+    areas: [...(base.areas || [])],
+    qualities: [...(base.qualities || [])],
+    fruits: (base.fruits || []).map((fruit) => ({
+      ...fruit,
+      mentions: [...(fruit.mentions || [])],
+      quality_grades: [...(fruit.quality_grades || [])],
+      parties: [...(fruit.parties || [])],
+      areas: [...(fruit.areas || [])],
+      varieties: [...(fruit.varieties || [])],
+    })),
+    notes: '',
+  }, aiMetadata, item);
+
+  const fruitMap = new Map((base.fruits || []).map((fruit) => [
+    [fruit.fruit, fruit.fruit_hindi].filter(Boolean).join(' / ').toLowerCase(),
+    fruit,
+  ]));
+
+  for (const aiFruit of merged.fruits || []) {
+    const key = [aiFruit.fruit, aiFruit.fruit_hindi].filter(Boolean).join(' / ').toLowerCase() || 'unknown';
+    if (!fruitMap.has(key)) {
+      fruitMap.set(key, {
+        fruit: aiFruit.fruit,
+        fruit_hindi: aiFruit.fruit_hindi || '',
+        mention_count: 0,
+        quality_grades: [...(aiFruit.quality_grades || [])],
+        parties: [...(aiFruit.parties || [])],
+        areas: [...(aiFruit.areas || [])],
+        varieties: [...(aiFruit.varieties || [])],
+        min_price_inr: aiFruit.min_price_inr,
+        max_price_inr: aiFruit.max_price_inr,
+        unit: aiFruit.unit || 'unknown',
+        mentions: (aiFruit.mentions || []).map((mention) => ({
+          ...mention,
+          timestamp_url: mention.timestamp_url || timestampUrl(item.url, mention.timestamp_seconds),
+        })),
+      });
+      continue;
+    }
+    const fruitEntry = fruitMap.get(key);
+    for (const grade of aiFruit.quality_grades || []) addUniqueStrings(fruitEntry.quality_grades, grade);
+    for (const party of aiFruit.parties || []) addUniqueStrings(fruitEntry.parties, party);
+    for (const area of aiFruit.areas || []) addUniqueStrings(fruitEntry.areas, area);
+    for (const mention of aiFruit.mentions || []) {
+      fruitEntry.mentions.push({
+        ...mention,
+        timestamp_url: mention.timestamp_url || timestampUrl(item.url, mention.timestamp_seconds),
+      });
+    }
+  }
+
+  const fruits = [...fruitMap.values()]
+    .map((fruitEntry) => ({
+      ...fruitEntry,
+      mention_count: Math.max(fruitEntry.mention_count || 0, fruitEntry.mentions?.length || 0),
+      mentions: (fruitEntry.mentions || []).sort(
+        (a, b) => (Number(a.timestamp_seconds) || 0) - (Number(b.timestamp_seconds) || 0),
+      ),
+    }))
+    .sort((a, b) => a.fruit.localeCompare(b.fruit));
+
+  const parties = merged.parties?.length ? merged.parties : base.parties;
+  const areas = merged.areas?.length ? merged.areas : base.areas;
+  const qualities = merged.qualities?.length ? merged.qualities : base.qualities;
+
+  return {
+    ...base,
+    market_date: merged.market_date || base.market_date,
+    fruits,
+    parties,
+    areas,
+    qualities,
+    mention_count: Math.max(base.mention_count || 0, fruits.reduce((sum, fruit) => sum + (fruit.mentions?.length || 0), 0)),
+    summary: {
+      fruits: fruits.map((fruitEntry) => fruitEntry.fruit),
+      parties,
+      areas,
+      qualities,
+    },
+  };
+}
+
+function buildVideoAnalysisMeta(item, rows, summary = {}, source = 'ai', aiMetadata = null) {
   const marketDate = parseMarketDate(item.title, item.upload_date);
   const fruitMap = new Map();
 
@@ -439,7 +629,7 @@ function buildVideoAnalysisMeta(item, rows, summary = {}, source = 'ai') {
     ? summary.qualities
     : uniqueRowValues(rows, 'quality_grade');
 
-  return {
+  const base = {
     video_id: item.id || '',
     video_title: item.title || '',
     video_url: item.url || '',
@@ -460,6 +650,8 @@ function buildVideoAnalysisMeta(item, rows, summary = {}, source = 'ai') {
       qualities,
     },
   };
+
+  return aiMetadata ? applyAiVideoMetadataToAnalysisMeta(base, item, aiMetadata) : base;
 }
 
 async function mergeProjectPriceRowsForVideo(videoId, newRows, videoPatch = {}) {
@@ -474,12 +666,15 @@ async function mergeProjectPriceRowsForVideo(videoId, newRows, videoPatch = {}) 
 
   if (index >= 0) {
     const video = { ...videos[index] };
-    if (videoPatch.priceStatus === 'ok' && newRows.length) {
+    const aiVideoMetadata = videoPatch.aiVideoMetadata || null;
+    const hasAnalysis = newRows.length || aiVideoMetadata?.fruits?.length;
+    if (videoPatch.priceStatus === 'ok' && hasAnalysis) {
       const analysisMeta = buildVideoAnalysisMeta(
         videoToAnalysisItem(video),
         newRows,
         videoPatch.analysisSummary || {},
         videoPatch.analysisSource || 'ai',
+        aiVideoMetadata,
       );
       videoPatch.analysisMeta = analysisMeta;
       videoPatch.analysisSummary = analysisMeta.summary;
@@ -488,6 +683,7 @@ async function mergeProjectPriceRowsForVideo(videoId, newRows, videoPatch = {}) 
       delete videoPatch.analysisMeta;
       delete videoAnalysis[videoId];
     }
+    delete videoPatch.aiVideoMetadata;
     videos[index] = { ...video, ...videoPatch };
   }
 
@@ -1174,9 +1370,10 @@ async function aiAnalysisBatchStatus() {
 
 async function fetchAiAnalysisBatch(body) {
   const delayMs = Math.max(100, Number(body.delayMs ?? 400));
-  const apiKey = safeText(body.apiKey);
+  const apiKey = await resolveOpenAiKey(body.apiKey);
   const model = safeText(body.model || 'gpt-4o-mini');
   const maxCharsPerCall = Math.max(2500, Math.min(Number(body.maxCharsPerCall || 10000), 20000));
+  if (apiKey) await saveStoredOpenAiKey(apiKey);
   let project = await loadProjectState();
   let videos = [...(project.videos || [])];
 
@@ -1363,39 +1560,41 @@ async function analyzeVideoForPrices(video, { apiKey, model, maxCharsPerCall, lo
   const analysisItem = videoToAnalysisItem(video);
   let rows = [];
   let summary = null;
+  let aiVideoMetadata = null;
   let analysisSource = 'regex';
+  const resolvedKey = await resolveOpenAiKey(apiKey);
 
-  if (apiKey) {
+  if (resolvedKey) {
     const result = await extractPricesAiForVideo({
       item: analysisItem,
-      apiKey,
+      apiKey: resolvedKey,
       model,
       maxCharsPerCall,
     });
     if (!result?.ok) throw new Error(result?.error || 'AI price extraction failed.');
     rows = result.rows || [];
     summary = result.summary || null;
-    if (!rows.length) {
-      if (logFallback) await logFallback('AI returned 0 rows; using regex fallback.');
-      rows = extractPricesFromSegments(analysisItem);
-      analysisSource = 'regex';
-    } else {
-      analysisSource = 'ai';
+    aiVideoMetadata = result.aiVideoMetadata || null;
+    const hasAiOutput = rows.length || aiVideoMetadata?.fruits?.length;
+    if (!hasAiOutput) {
+      throw new Error('AI returned no price rows or video metadata. Check the Activity log and retry.');
     }
+    analysisSource = 'ai';
   } else {
     if (logFallback) await logFallback('No OpenAI key — using regex extraction.');
     rows = extractPricesFromSegments(analysisItem);
   }
 
-  return { rows, summary, analysisSource };
+  return { rows, summary, aiVideoMetadata, analysisSource };
 }
 
 async function analyzeSingleVideo(body) {
   const videoId = safeText(body.videoId);
-  const apiKey = safeText(body.apiKey);
+  const apiKey = await resolveOpenAiKey(body.apiKey);
   const model = safeText(body.model || 'gpt-4o-mini');
   const maxCharsPerCall = Math.max(2500, Math.min(Number(body.maxCharsPerCall || 10000), 20000));
   if (!videoId) return { ok: false, error: 'Missing video id.' };
+  if (apiKey) await saveStoredOpenAiKey(apiKey);
 
   let project = await loadProjectState();
   let videos = [...(project.videos || [])];
@@ -1427,27 +1626,29 @@ async function analyzeSingleVideo(body) {
   });
 
   try {
-    const { rows, summary, analysisSource } = await analyzeVideoForPrices(video, {
+    const { rows, summary, analysisSource, aiVideoMetadata } = await analyzeVideoForPrices(video, {
       apiKey,
       model,
       maxCharsPerCall,
     });
+    const hasAnalysis = rows.length || aiVideoMetadata?.fruits?.length;
     await mergeProjectPriceRowsForVideo(videoId, rows, {
-      priceStatus: rows.length ? 'ok' : 'failed',
+      priceStatus: hasAnalysis ? 'ok' : 'failed',
       priceRowCount: rows.length,
-      priceError: rows.length ? '' : 'No prices extracted from transcript.',
+      priceError: hasAnalysis ? '' : 'No prices or metadata extracted from transcript.',
       analysisSummary: summary,
       analysisSource,
+      aiVideoMetadata,
     });
     broadcastAiAnalysisBatchEvent({
       event: 'progress',
       videoId,
-      status: rows.length ? 'ok' : 'failed',
+      status: hasAnalysis ? 'ok' : 'failed',
       title: video.title || videoId,
       priceRowCount: rows.length,
-      error: rows.length ? '' : 'No prices extracted from transcript.',
+      error: hasAnalysis ? '' : 'No prices or metadata extracted from transcript.',
     });
-    return { ok: true, count: rows.length, rows, videoId };
+    return { ok: hasAnalysis, count: rows.length, rows, videoId };
   } catch (error) {
     const message = cleanError(error);
     await mergeProjectPriceRowsForVideo(videoId, [], {
@@ -1563,7 +1764,7 @@ async function processNextAiAnalysisInBatch() {
       return;
     }
 
-    const { rows, summary, analysisSource } = await analyzeVideoForPrices(video, {
+    const { rows, summary, analysisSource, aiVideoMetadata } = await analyzeVideoForPrices(video, {
       apiKey: job.apiKey,
       model: job.model,
       maxCharsPerCall: job.maxCharsPerCall,
@@ -1579,23 +1780,28 @@ async function processNextAiAnalysisInBatch() {
       return;
     }
 
+    const hasAnalysis = rows.length || aiVideoMetadata?.fruits?.length;
     await mergeProjectPriceRowsForVideo(videoId, rows, {
-      priceStatus: rows.length ? 'ok' : 'failed',
+      priceStatus: hasAnalysis ? 'ok' : 'failed',
       priceRowCount: rows.length,
-      priceError: rows.length ? '' : 'No prices extracted from transcript.',
+      priceError: hasAnalysis ? '' : 'No prices or metadata extracted from transcript.',
       analysisSummary: summary,
       analysisSource,
+      aiVideoMetadata,
     });
     broadcastAiAnalysisBatchEvent({
       event: 'progress',
       videoId,
-      status: 'ok',
+      status: hasAnalysis ? 'ok' : 'failed',
       title: video.title || videoId,
       priceRowCount: rows.length,
+      error: hasAnalysis ? '' : 'No prices or metadata extracted from transcript.',
     });
     await appendAiBatchJobLog(
-      `OK ${video.title || videoId} (${rows.length} price row${rows.length === 1 ? '' : 's'})`,
-      'info',
+      hasAnalysis
+        ? `OK ${video.title || videoId} (${rows.length} row${rows.length === 1 ? '' : 's'}${aiVideoMetadata?.fruits?.length ? ` · ${aiVideoMetadata.fruits.length} fruit block(s) in metadata` : ''})`
+        : `No analysis output for ${video.title || videoId}`,
+      hasAnalysis ? 'info' : 'warn',
       { videoId, title: video.title || videoId },
     );
     shouldAdvance = true;
@@ -1939,21 +2145,25 @@ function parseMarketDate(title, uploadDate = '') {
 }
 
 const PRICE_EXTRACTION_SYSTEM = [
-  'You extract structured Delhi fruit/vegetable wholesale mandi intelligence from noisy Hindi YouTube market-report captions.',
+  'You are a Delhi fruit/vegetable wholesale mandi intelligence extractor.',
+  'Read noisy Hindi YouTube market-report captions carefully and write structured metadata the UI can render on video cards.',
   'Cover ALL commodities mentioned: fruits, vegetables, garlic, onion, potato, tomato, ginger, etc.',
-  'Return JSON only:',
+  'Return JSON only with this exact shape:',
   '{"rows":[{"fruit":"","fruit_hindi":"","variety":"","quality_grade":"","quality_label":"","party_name":"","mandi_name":"","area_name":"","origin":"","unit":"","min_price_inr":null,"max_price_inr":null,"price_notes":"","market_name":"","timestamp_seconds":0,"confidence":"high|medium|low","original_line":"","clean_hindi_line":"","context":"","notes":""}],',
-  '"chunk_summary":{"fruits":[],"parties":[],"areas":[],"qualities":[]}}',
+  '"chunk_summary":{"fruits":[],"parties":[],"areas":[],"qualities":[]},',
+  '"video_metadata":{"market_date":"","parties":[],"areas":[],"qualities":[],"notes":"","fruits":[{"fruit":"","fruit_hindi":"","quality_grades":[],"parties":[],"areas":[],"varieties":[],"min_price_inr":null,"max_price_inr":null,"unit":"","mentions":[{"timestamp_seconds":0,"quality_grade":"","quality_label":"","party_name":"","area_name":"","min_price_inr":null,"max_price_inr":null,"unit":"","line":"","context":""}]}]}}',
   '',
-  'Rules:',
-  '- fruit field: English commodity name (garlic, onion, mango, potato, etc.). fruit_hindi: Hindi name when spoken.',
+  'Guidelines:',
+  '- ALWAYS populate video_metadata from the transcript chunk — parties, areas, grades, commodities, and timestamped mentions for cards.',
+  '- fruit: English commodity (garlic, onion, mango, potato). fruit_hindi: Hindi when spoken.',
   '- One row per distinct commodity + quality/grade + party + price (or quality discussion) mention.',
   '- quality_grade: A grade, B grade, C grade, super, medium, ordinary, premium, second, third, or exact Hindi phrase.',
-  '- party_name: trader/party/seller names (पार्टी, व्यापारी names) when spoken.',
+  '- party_name: trader/party/seller names (पार्टी, व्यापारी) when spoken.',
   '- area_name / mandi_name: Azadpur, yards, blocks, localities, godowns.',
   '- min_price_inr/max_price_inr: use null if no price stated but commodity+quality+party still useful.',
   '- timestamp_seconds MUST match the [seconds] bracket on the source segment line.',
-  '- Extract every commodity covered in the chunk; separate rows when grades or parties differ.',
+  '- rows and video_metadata must stay consistent; video_metadata is the structured rollup saved separately from flat rows.',
+  '- Extract every commodity covered in the chunk; separate rows/fruit blocks when grades or parties differ.',
 ].join('\n');
 
 function mergeAnalysisSummaries(existing, chunkSummary) {
@@ -2032,7 +2242,16 @@ function normalizeAiPriceRow(raw, item, fallbackTimestamp) {
 async function extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall) {
   const rows = [];
   let summary = { fruits: [], parties: [], areas: [], qualities: [], notes: '' };
+  let aiVideoMetadata = null;
   const chunks = chunkSegments(item.segments || [], maxCharsPerCall);
+  const resolvedKey = await resolveOpenAiKey(apiKey);
+  if (!resolvedKey) throw new Error('OpenAI API key required for AI analysis.');
+
+  await appendAiBatchJobLog(`Calling OpenAI (${model}) with extraction guidelines...`, 'info', {
+    videoId: item.id,
+    title: item.title || item.id,
+  });
+
   for (let i = 0; i < chunks.length; i++) {
     await touchAiBatchHeartbeat(item.id, item.title, `Analyzing chunk ${i + 1}/${chunks.length}...`);
     const segmentText = chunks[i].map(seg => `[${Math.floor(Number(seg.start) || 0)}s | ${secondsToClock(seg.start)}] ${safeText(seg.text)}`).join('\n');
@@ -2043,11 +2262,18 @@ async function extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall) {
       `Market day label: ${parseMarketDate(item.title, item.upload_date).label}`,
       `Chunk ${i + 1} of ${chunks.length}`,
       '',
+      'Read the transcript below and return rows plus video_metadata for this chunk.',
       'Transcript segments (use bracket seconds for timestamp_seconds):',
       segmentText,
     ].join('\n');
-    const json = await callOpenAIWithTimeout({ apiKey, model, prompt, system: PRICE_EXTRACTION_SYSTEM });
+    const json = await callOpenAIWithTimeout({
+      apiKey: resolvedKey,
+      model,
+      prompt,
+      system: PRICE_EXTRACTION_SYSTEM,
+    });
     summary = mergeAnalysisSummaries(summary, json.chunk_summary);
+    aiVideoMetadata = mergeAiVideoMetadata(aiVideoMetadata, json.video_metadata, item);
     let chunkCount = 0;
     for (const raw of Array.isArray(json.rows) ? json.rows : []) {
       const row = normalizeAiPriceRow(raw, item, raw.timestamp_seconds);
@@ -2056,27 +2282,36 @@ async function extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall) {
         chunkCount += 1;
       }
     }
-    await appendAiBatchJobLog(`Chunk ${i + 1}/${chunks.length}: ${chunkCount} row(s)`, 'info', {
-      videoId: item.id,
-      title: item.title || item.id,
-    });
+    const metaFruits = Array.isArray(json.video_metadata?.fruits) ? json.video_metadata.fruits.length : 0;
+    await appendAiBatchJobLog(
+      `Chunk ${i + 1}/${chunks.length}: ${chunkCount} row(s)${metaFruits ? ` · ${metaFruits} metadata fruit block(s)` : ''}`,
+      'info',
+      { videoId: item.id, title: item.title || item.id },
+    );
   }
-  return { rows: dedupeRows(rows), summary };
+  return { rows: dedupeRows(rows), summary, aiVideoMetadata };
 }
 
 async function extractPricesAiForVideo(body) {
   const item = body.item;
-  const apiKey = safeText(body.apiKey);
+  const apiKey = await resolveOpenAiKey(body.apiKey);
   const model = safeText(body.model || 'gpt-4o-mini');
   const maxCharsPerCall = Math.max(2500, Math.min(Number(body.maxCharsPerCall || 10000), 20000));
   if (!item?.id) return { ok: false, error: 'Missing video item.' };
-  if (!apiKey) return { ok: false, error: 'OpenAI API key required in extension mode.' };
+  if (!apiKey) return { ok: false, error: 'OpenAI API key required. Add it in Settings and save, then retry.' };
   if (!Array.isArray(item.segments) || !item.segments.length) {
     return { ok: false, error: 'Video has no transcript segments.' };
   }
 
   const result = await extractPriceRowsForItem(item, apiKey, model, maxCharsPerCall);
-  return { ok: true, count: result.rows.length, rows: result.rows, summary: result.summary, videoId: item.id };
+  return {
+    ok: true,
+    count: result.rows.length,
+    rows: result.rows,
+    summary: result.summary,
+    aiVideoMetadata: result.aiVideoMetadata,
+    videoId: item.id,
+  };
 }
 
 async function extractPricesAi(body) {

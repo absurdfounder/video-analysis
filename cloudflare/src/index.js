@@ -1,5 +1,11 @@
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 
+import {
+  chatWithVectorData,
+  getVectorStatus,
+  indexVectorDatabase,
+} from './vectors.js';
+
 function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '*';
   return {
@@ -485,7 +491,14 @@ export default {
     try {
       if (path === '/api/health' && request.method === 'GET') {
         const counts = await getCounts(env.DB);
-        return jsonResponse({ ok: true, service: 'fruit-mandi-api', storage: 'cloudflare-d1', counts }, 200, request);
+        const vectors = await getVectorStatus(env.DB, env).catch(() => null);
+        return jsonResponse({
+          ok: true,
+          service: 'fruit-mandi-api',
+          storage: 'cloudflare-d1',
+          counts,
+          vectors,
+        }, 200, request);
       }
 
       if (path === '/api/data' && request.method === 'GET') {
@@ -537,6 +550,23 @@ export default {
         const item = await getAnalysis(env.DB, analysisMatch[1]);
         if (!item) return jsonResponse({ ok: false, error: 'Analysis not found.' }, 404, request);
         return jsonResponse({ ok: true, item }, 200, request);
+      }
+
+      if (path === '/api/vectors/status' && request.method === 'GET') {
+        const status = await getVectorStatus(env.DB, env);
+        return jsonResponse({ ok: true, ...status }, 200, request);
+      }
+
+      if (path === '/api/vectors/index' && request.method === 'POST') {
+        const body = await request.json();
+        const result = await indexVectorDatabase(env.DB, env, body);
+        return jsonResponse(result, 200, request);
+      }
+
+      if (path === '/api/vectors/chat' && request.method === 'POST') {
+        const body = await request.json();
+        const result = await chatWithVectorData(env.DB, env, body);
+        return jsonResponse(result, 200, request);
       }
 
       return jsonResponse({ ok: false, error: `Not found: ${path}` }, 404, request);
