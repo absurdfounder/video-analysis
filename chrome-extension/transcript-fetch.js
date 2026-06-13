@@ -149,17 +149,37 @@ function fetchTranscriptInPage(languages) {
   function extractSegmentsFromPanel() {
     const panel = transcriptPanelRoot();
     const scope = panel || document;
-    const nodes = scope.querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model, [class*="transcript-segment"]');
+    const nodes = scope.querySelectorAll([
+      'ytd-transcript-segment-renderer',
+      'transcript-segment-view-model',
+      'macro-markers-panel-item-view-model',
+      '[class*="TranscriptSegment"]',
+      '[class*="transcriptSegment"]',
+      '[class*="transcript-segment"]',
+    ].join(','));
     if (!nodes.length) return [];
+
+    const firstDescendantByClass = (node, needle) => {
+      const wanted = String(needle).toLowerCase();
+      return [...node.querySelectorAll('*')].find((child) => String(child.className || '').toLowerCase().includes(wanted)) || null;
+    };
 
     const segments = [];
     for (const node of nodes) {
-      const timestampEl = node.querySelector('.segment-timestamp, .segment-start-offset, [class*="timestamp"]');
-      const textEl = node.querySelector('.segment-text, yt-formatted-string.segment-text, [class*="segment-text"], yt-formatted-string, span.yt-core-attributed-string');
-      const rawText = stripHtml(textEl?.textContent || node.textContent || '');
+      const segmentNode = node.matches?.('transcript-segment-view-model, ytd-transcript-segment-renderer')
+        ? node
+        : node.querySelector('transcript-segment-view-model, ytd-transcript-segment-renderer') || node;
+      const timestampEl = segmentNode.querySelector('.segment-timestamp, .segment-start-offset')
+        || firstDescendantByClass(segmentNode, 'timestamp');
+      const textEl = segmentNode.querySelector('.segment-text, yt-formatted-string.segment-text, yt-formatted-string, span.yt-core-attributed-string')
+        || firstDescendantByClass(segmentNode, 'segmenttext')
+        || [...segmentNode.querySelectorAll('span, yt-formatted-string, div')]
+          .find((child) => child !== timestampEl && stripHtml(child.textContent || '') && !/^\s*(?:(\d{1,2}:)?\d{1,2}:\d{2})\s*$/.test(child.textContent || ''));
+      const rawText = stripHtml(textEl?.textContent || segmentNode.textContent || '');
       const timeMatch = rawText.match(/\b(?:(\d{1,2}:)?\d{1,2}:\d{2})\b/);
-      const text = stripHtml(rawText.replace(timeMatch?.[0] || '', ''));
-      const start = parseClockLabel(timestampEl?.textContent || timeMatch?.[0] || '');
+      const timestampText = stripHtml(timestampEl?.textContent || timeMatch?.[0] || '');
+      const text = stripHtml(rawText.replace(timestampText, '').replace(timeMatch?.[0] || '', ''));
+      const start = parseClockLabel(timestampText);
       if (!text) continue;
       segments.push({
         start: Number(start.toFixed(3)),
@@ -266,7 +286,12 @@ function fetchTranscriptInPage(languages) {
       await sleep(400);
     }
 
-    return { ok: false, error: 'Transcript panel opened but segments did not load.' };
+    const visibleRows = document.querySelectorAll('transcript-segment-view-model, ytd-transcript-segment-renderer, macro-markers-panel-item-view-model').length;
+    const panel = transcriptPanelRoot();
+    return {
+      ok: false,
+      error: `Transcript panel opened but parsed 0 lines. Visible transcript row nodes: ${visibleRows}. Panel found: ${Boolean(panel)}.`,
+    };
   }
 
   return (async () => {

@@ -805,7 +805,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.3 — YouTube worker tab stays visible';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.4 — modern transcript panel parser';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
