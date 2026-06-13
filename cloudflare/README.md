@@ -1,8 +1,35 @@
 # Fruit Mandi API — Cloudflare D1 + Workers
 
-SQL database with CRUD for Delhi Fruit Market Miner. Replaces the single JSON blob with queryable tables.
+SQL database with CRUD for Delhi Fruit Market Miner.
 
-## One-time setup (~10 minutes)
+## Quick setup (recommended)
+
+From repo root, with [Node.js](https://nodejs.org/) installed:
+
+```bash
+chmod +x cloudflare/setup.sh
+./cloudflare/setup.sh
+```
+
+This will: install deps → `wrangler login` → create D1 → migrate schema → deploy → print your Worker URL.
+
+Paste that URL into the extension **Settings → API URL**.
+
+---
+
+## GitHub Actions deploy (no local Node)
+
+1. [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens) → **Create Token** → template **Edit Cloudflare Workers**
+2. GitHub repo → **Settings → Secrets → Actions**:
+   - `CLOUDFLARE_API_TOKEN` — your token
+   - `CLOUDFLARE_ACCOUNT_ID` — from Cloudflare dashboard URL (right sidebar on any zone)
+3. **Actions → Deploy Cloudflare Worker → Run workflow**
+
+After deploy, your URL is `https://fruit-mandi-api.<account-subdomain>.workers.dev` (shown in workflow logs).
+
+---
+
+## Manual setup
 
 ### 1. Install Wrangler and log in
 
