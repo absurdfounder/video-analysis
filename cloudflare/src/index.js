@@ -845,7 +845,17 @@ async function fetchExternalYouTubeTranscript(env, options) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) {
-    throw httpError(`External YouTube extractor failed: ${data.error || response.statusText}`, 502);
+    const stage = safeText(data.stage) || 'unknown';
+    throw httpError(
+      `External YouTube extractor failed at ${stage}: ${data.error || response.statusText}`,
+      502,
+      {
+        extractorStage: stage,
+        extractorSource: safeText(data.source),
+        extractorVersion: safeText(data.version),
+        extractorStatus: response.status,
+      },
+    );
   }
 
   const segments = normalizeExternalTranscriptSegments(data.segments);

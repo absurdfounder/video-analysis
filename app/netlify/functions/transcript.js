@@ -2,6 +2,8 @@ const { fs, os, path, crypto, json, parseBody, safeText, runYtdlp } = require('.
 
 const OPENAI_TRANSCRIPTION_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const OPENAI_FILE_LIMIT_BYTES = 24 * 1024 * 1024;
+const EXTRACTOR_VERSION = 'youtube-audio-openai-v2';
+const EXTRACTOR_SOURCE = 'youtube-audio-openai-whisper';
 
 function secondsToClock(seconds) {
   const s = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -45,25 +47,34 @@ async function downloadYoutubeAudio(videoUrl, tempRoot, body) {
     'worstaudio',
   ].join('/');
 
-  await runYtdlp(videoUrl, {
-    format,
-    output: outTemplate,
-    noPlaylist: true,
-    noWarnings: true,
-  }, {
-    timeout: Number(body.downloadTimeoutMs) || 90000,
-    cwd: tempRoot,
-    maxBuffer: 1024 * 1024 * 120,
-  });
+  try {
+    await runYtdlp(videoUrl, {
+      format,
+      output: outTemplate,
+      noPlaylist: true,
+      noWarnings: true,
+    }, {
+      timeout: Number(body.downloadTimeoutMs) || 90000,
+      cwd: tempRoot,
+      maxBuffer: 1024 * 1024 * 120,
+    });
+  } catch (error) {
+    error.stage = 'download_audio';
+    throw error;
+  }
 
   const audioPath = pickAudioFile(tempRoot);
   if (!audioPath) {
-    throw new Error('yt-dlp did not produce an audio file.');
+    const error = new Error('yt-dlp did not produce an audio file.');
+    error.stage = 'download_audio';
+    throw error;
   }
 
   const size = fs.statSync(audioPath).size;
   if (size > OPENAI_FILE_LIMIT_BYTES) {
-    throw new Error(`Downloaded audio is ${(size / 1024 / 1024).toFixed(1)} MB. OpenAI transcription accepts files under 24 MB; use a shorter video or add chunking.`);
+    const error = new Error(`Downloaded audio is ${(size / 1024 / 1024).toFixed(1)} MB. OpenAI transcription accepts files under 24 MB; use a shorter video or add chunking.`);
+    error.stage = 'download_audio';
+    throw error;
   }
 
   return audioPath;
@@ -109,7 +120,9 @@ function normalizeSegments(data) {
 async function transcribeWithOpenAI(audioPath, body) {
   const apiKey = safeText(process.env.OPENAI_API_KEY || body.openAiApiKey || body.openaiApiKey);
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not set on the extractor server or request.');
+    const error = new Error('OPENAI_API_KEY is not set on the extractor server or request.');
+    error.stage = 'openai_transcription';
+    throw error;
   }
 
   const model = safeText(body.model || process.env.OPENAI_TRANSCRIBE_MODEL) || 'whisper-1';
@@ -137,7 +150,9 @@ async function transcribeWithOpenAI(audioPath, body) {
   let data = {};
   try { data = JSON.parse(text); } catch {}
   if (!response.ok) {
-    throw new Error(data?.error?.message || `OpenAI transcription failed: ${response.status} ${text.slice(0, 300)}`);
+    const error = new Error(data?.error?.message || `OpenAI transcription failed: ${response.status} ${text.slice(0, 300)}`);
+    error.stage = 'openai_transcription';
+    throw error;
   }
 
   const segments = normalizeSegments(data);
@@ -171,7 +186,8 @@ exports.handler = async (event) => {
     return json(200, {
       ok: true,
       id,
-      source: 'youtube-audio-openai-whisper',
+      source: EXTRACTOR_SOURCE,
+      version: EXTRACTOR_VERSION,
       model: transcription.model,
       language: transcription.language,
       fileName: path.basename(audioPath),
@@ -181,7 +197,13 @@ exports.handler = async (event) => {
       segments: transcription.segments,
     });
   } catch (error) {
-    return json(500, { ok: false, error: error.stderr || error.message });
+    return json(500, {
+      ok: false,
+      source: EXTRACTOR_SOURCE,
+      version: EXTRACTOR_VERSION,
+      stage: error.stage || 'unknown',
+      error: error.stderr || error.message,
+    });
   } finally {
     try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
   }

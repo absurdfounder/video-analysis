@@ -199,15 +199,15 @@ function cleanYtdlpError(errorText) {
   const text = safeText(errorText);
   if (/sign in to confirm.*not a bot/i.test(text)) {
     return [
-      'YouTube blocked this Netlify server as bot-like traffic.',
-      'Add YouTube cookies in Netlify as YOUTUBE_COOKIES or YOUTUBE_COOKIES_BASE64, redeploy, then retry Pull transcripts.',
+      'YouTube blocked this Netlify extractor server before the audio could be downloaded.',
+      'Add YouTube cookies in Netlify as YOUTUBE_COOKIES or YOUTUBE_COOKIES_BASE64, redeploy, then retry audio transcription.',
       'Use a dedicated/throwaway YouTube account for cookies.',
     ].join(' ');
   }
   if (/cookies.*authentication|cookies-from-browser|exporting-youtube-cookies/i.test(text)) {
     return [
-      'YouTube needs login cookies for this video.',
-      'Add YouTube cookies in Netlify as YOUTUBE_COOKIES or YOUTUBE_COOKIES_BASE64, redeploy, then retry.',
+      'YouTube needs login cookies before this server can download the video audio.',
+      'Add YouTube cookies in Netlify as YOUTUBE_COOKIES or YOUTUBE_COOKIES_BASE64, redeploy, then retry audio transcription.',
     ].join(' ');
   }
   return text || 'yt-dlp failed';
