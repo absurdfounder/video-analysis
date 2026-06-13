@@ -1,4 +1,4 @@
-importScripts('classify.js');
+importScripts('classify.js', 'transcript-fetch.js');
 
 const STORAGE_DEFAULTS = {
   channelUrl: 'https://www.youtube.com/@delhifruitmarket/videos',
@@ -407,6 +407,9 @@ async function processNextTranscriptInBatch() {
 
   try {
     const result = await transcript({ id: video.id, videoUrl: video.url, languages: job.languages });
+    if (!result.segments?.length) {
+      throw new Error('Transcript returned zero caption lines.');
+    }
     Object.assign(video, {
       status: 'ok',
       language: result.language,
@@ -567,6 +570,10 @@ async function transcript(body) {
   }
 
   const segments = result.segments || [];
+  if (!segments.length) {
+    return { ok: false, id, error: result?.error || 'Transcript returned zero caption lines.' };
+  }
+
   const transcriptText = segments.map(segment => segment.text).join(' ');
 
   return {
@@ -582,24 +589,11 @@ async function transcript(body) {
 }
 
 async function fetchTranscriptFromHtml(videoUrl, id, languages) {
+  const tabId = await ensureYouTubeTab();
   const html = await fetchText(videoUrl);
-  const player = extractJsonObject(html, 'ytInitialPlayerResponse');
-  const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-  if (!tracks.length) throw new Error('No caption tracks in page HTML.');
-
-  const selected = chooseCaptionTrack(tracks, languages);
-  const captionUrl = withCaptionFormat(selected.baseUrl);
-  const vtt = await fetchText(captionUrl);
-  const segments = parseVtt(vtt);
-  if (!segments.length) throw new Error('Caption file was empty or unreadable.');
-
-  return {
-    ok: true,
-    language: selected.languageCode || 'unknown',
-    fileName: selected.name?.simpleText || selected.languageCode || 'caption',
-    segments,
-    method: 'html-fallback',
-  };
+  const result = await buildTranscriptFromPlayerHtml(html, id, languages, tabId, 'html-fallback');
+  if (!result?.segments?.length) throw new Error('No captions found in page HTML.');
+  return { ...result, ok: true };
 }
 
 function extractPrices(body) {
@@ -843,29 +837,49 @@ async function fetchTextViaYouTubeTab(url) {
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
   await prepareWorkerTab(tabId);
-
-  try {
-    const html = await fetchTextViaYouTubeTab(videoUrl);
-    const apiResult = await buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, 'fetch-html');
-    if (apiResult?.ok) return apiResult;
-  } catch {
-    // Fall through to navigated page context.
-  }
-
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
 
+  let lastHtml = '';
   try {
-    const html = await fetchTextViaYouTubeTab(videoUrl);
-    const apiResult = await buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, 'navigated-html');
-    if (apiResult?.ok) return apiResult;
+    lastHtml = await fetchTextViaYouTubeTab(videoUrl);
+    const apiResult = await buildTranscriptFromPlayerHtml(lastHtml, videoId, languages, tabId, 'page-html');
+    if (apiResult?.ok && apiResult.segments?.length) return apiResult;
   } catch {
-    // Fall through to innerTube in page.
+    // Fall through to panel scrape.
   }
 
-  const innerTubeResult = await runInYouTubeTab(fetchInnerTubeTranscriptInPage, [videoId, languages], tabId);
-  if (innerTubeResult?.ok) return innerTubeResult;
+  const panelResult = await withBriefTabFocus(tabId, async () => {
+    return runInYouTubeTab(fetchTranscriptFromPanelInPage, [], tabId);
+  });
 
-  throw new Error(innerTubeResult?.error || 'Could not download captions. Stay signed in at youtube.com and retry.');
+  if (panelResult?.ok && panelResult.segments?.length) {
+    return {
+      ok: true,
+      language: 'unknown',
+      fileName: 'youtube-transcript-panel',
+      segments: panelResult.segments,
+      method: `panel-${panelResult.format || 'dom'}`,
+    };
+  }
+
+  throw new Error(panelResult?.error || 'Could not download captions. Stay signed in at youtube.com and retry.');
+}
+
+async function withBriefTabFocus(tabId, fn) {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  try {
+    await chrome.tabs.update(tabId, { active: true });
+    await sleep(400);
+    return await fn();
+  } finally {
+    if (activeTab?.id && activeTab.id !== tabId) {
+      try {
+        await chrome.tabs.update(activeTab.id, { active: true });
+      } catch {
+        // Previous tab may have closed.
+      }
+    }
+  }
 }
 
 async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, methodPrefix) {
@@ -877,177 +891,33 @@ async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, me
   const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
   if (tracks.length) {
     const selected = chooseCaptionTrack(tracks, languages);
-    const captionUrl = withCaptionFormat(selected.baseUrl);
-    const captionText = await fetchTextViaYouTubeTab(captionUrl);
-    let segments = parseVtt(captionText);
-    if (!segments.length) segments = parseXmlCaptions(captionText);
-    if (segments.length) {
+    const captionResult = await runInYouTubeTab(fetchCaptionTrackInPage, [selected.baseUrl], tabId);
+    if (captionResult?.segments?.length) {
       return {
         ok: true,
         language: selected.languageCode || 'unknown',
         fileName: selected.name?.simpleText || selected.languageCode || 'caption',
-        segments,
-        method: `${methodPrefix}-caption`,
+        segments: captionResult.segments,
+        method: `${methodPrefix}-${captionResult.format}`,
       };
     }
   }
 
-  const innerTubeResult = await runInYouTubeTab(fetchInnerTubeTranscriptInPage, [videoId, languages, player], tabId);
-  if (innerTubeResult?.ok) return innerTubeResult;
-
-  throw new Error('No captions found in player HTML.');
-}
-
-function parseXmlCaptions(xmlText) {
-  const segments = [];
-  const blocks = [...String(xmlText || '').matchAll(/<text\b([^>]*)>([\s\S]*?)<\/text>/gi)];
-  for (const block of blocks) {
-    const attrs = block[1] || '';
-    const start = Number((attrs.match(/\bstart="([^"]+)"/) || [])[1] || 0);
-    const duration = Number((attrs.match(/\bdur="([^"]+)"/) || [])[1] || 0);
-    const text = stripHtml(block[2] || '');
-    if (!text) continue;
-    const end = start + duration;
-    segments.push({
-      start: Number(start.toFixed(3)),
-      end: Number(end.toFixed(3)),
-      duration: Number(Math.max(0, duration).toFixed(3)),
-      timestamp_label: secondsToClock(start),
-      text,
-    });
-  }
-  return segments;
-}
-
-function fetchInnerTubeTranscriptInPage(expectedVideoId, languages, playerFromHtml) {
-  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-  function stripHtml(text) {
-    return String(text || '')
-      .replace(/<[^>]*>/g, '')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&#39;/g, "'")
-      .replace(/&quot;/g, '"')
-      .replace(/\s+/g, ' ')
-      .trim();
+  const params = extractTranscriptParams(player, html);
+  if (params) {
+    const innerTubeResult = await runInYouTubeTab(fetchInnerTubeTranscriptInPage, [params], tabId);
+    if (innerTubeResult?.ok && innerTubeResult.segments?.length) {
+      return {
+        ok: true,
+        language: chooseCaptionTrack(tracks, languages)?.languageCode || 'unknown',
+        fileName: 'innertube-transcript',
+        segments: innerTubeResult.segments,
+        method: `${methodPrefix}-innertube`,
+      };
+    }
   }
 
-  function secondsToClock(seconds) {
-    const s = Math.max(0, Math.floor(Number(seconds) || 0));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-    return `${m}:${String(sec).padStart(2, '0')}`;
-  }
-
-  function cuesToSegments(cues) {
-    const segments = [];
-    for (const group of cues || []) {
-      for (const cue of group?.transcriptCueGroupRenderer?.cues || []) {
-        const renderer = cue?.transcriptCueRenderer;
-        const text = stripHtml(renderer?.cue?.simpleText || renderer?.cue?.runs?.map(run => run.text).join('') || '');
-        const startMs = Number(renderer?.startOffsetMs || renderer?.startMs || 0);
-        if (!text) continue;
-        const start = startMs / 1000;
-        const duration = Number(renderer?.durationMs || 0) / 1000;
-        const end = start + duration;
-        segments.push({
-          start: Number(start.toFixed(3)),
-          end: Number(end.toFixed(3)),
-          duration: Number(Math.max(0, duration).toFixed(3)),
-          timestamp_label: secondsToClock(start),
-          text,
-        });
-      }
-    }
-    return segments;
-  }
-
-  function getTranscriptParams(player) {
-    const fromCaptions = player?.captions?.playerCaptionsTracklistRenderer?.openTranscriptParams;
-    if (fromCaptions) return fromCaptions;
-
-    const panelLists = [
-      player?.engagementPanels,
-      window.ytInitialData?.engagementPanels,
-      window.ytInitialData?.contents?.twoColumnWatchNextResults?.results?.results?.contents,
-    ];
-
-    for (const panels of panelLists) {
-      if (!Array.isArray(panels)) continue;
-      for (const panel of panels) {
-        const params = panel?.engagementPanelSectionListRenderer?.content?.continuationItemRenderer
-          ?.continuationEndpoint?.getTranscriptEndpoint?.params;
-        if (params) return params;
-      }
-    }
-    return '';
-  }
-
-  function parseInnerTubeResponse(data) {
-    const cuePaths = [
-      data?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer?.body?.transcriptBodyRenderer?.cueGroups,
-      data?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer?.content?.transcriptSearchPanelRenderer?.body?.transcriptBodyRenderer?.cueGroups,
-      data?.actions?.[0]?.appendContinuationItemsAction?.continuationItems?.[0]?.transcriptSectionHeaderRenderer?.transcript?.body?.transcriptBodyRenderer?.cueGroups,
-    ];
-    for (const cues of cuePaths) {
-      const segments = cuesToSegments(cues);
-      if (segments.length) return segments;
-    }
-    return [];
-  }
-
-  return (async () => {
-    const video = document.querySelector('video');
-    if (video) {
-      video.muted = true;
-      video.volume = 0;
-      try { video.pause(); } catch { /* ignore */ }
-    }
-
-    let player = playerFromHtml || window.ytInitialPlayerResponse || null;
-    for (let attempt = 0; attempt < 20 && (!player || player?.videoDetails?.videoId !== expectedVideoId); attempt++) {
-      if (window.ytInitialPlayerResponse?.videoDetails?.videoId === expectedVideoId) {
-        player = window.ytInitialPlayerResponse;
-        break;
-      }
-      await sleep(500);
-    }
-
-    const params = getTranscriptParams(player);
-    if (!params) return { ok: false, error: 'No innerTube transcript params in player data.' };
-
-    const apiKey = window.ytcfg?.data_?.INNERTUBE_API_KEY || window.ytcfg?.get?.('INNERTUBE_API_KEY') || '';
-    const clientVersion = window.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION || window.ytcfg?.get?.('INNERTUBE_CLIENT_VERSION') || '2.20260101.00.00';
-    if (!apiKey) return { ok: false, error: 'YouTube API key missing in page context.' };
-
-    const response = await fetch(`https://www.youtube.com/youtubei/v1/get_transcript?key=${encodeURIComponent(apiKey)}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        context: { client: { clientName: 'WEB', clientVersion } },
-        params,
-      }),
-    });
-
-    const data = await response.json().catch(() => null);
-    const segments = parseInnerTubeResponse(data);
-    if (!segments.length) {
-      return { ok: false, error: `innerTube transcript empty (HTTP ${response.status}).` };
-    }
-
-    return {
-      ok: true,
-      language: String(languages || '').split(',')[0] || 'unknown',
-      fileName: 'innertube-transcript',
-      segments,
-      method: 'innertube-api',
-    };
-  })();
+  throw new Error(tracks.length ? 'Caption track download returned empty.' : 'No caption tracks on this video.');
 }
 
 async function fetchText(url) {

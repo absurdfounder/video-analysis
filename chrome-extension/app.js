@@ -208,6 +208,7 @@ async function fetchTranscriptForVideo(video) {
   renderVideos();
   try {
     const data = await api('/api/transcript', { id: video.id, videoUrl: video.url, languages });
+    if (!data.segments?.length) throw new Error('Transcript returned zero caption lines.');
     Object.assign(video, {
       status: 'ok',
       language: data.language,

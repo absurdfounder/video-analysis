@@ -58,7 +58,7 @@
 
     <section class="step-panel" id="panel-2">
       <p class="step-desc" id="stepDesc2">Download Hindi captions for relevant videos only. This is the slow step.</p>
-      <p class="hint youtube-hint">Fetches captions via YouTube's API (no Show transcript clicks). Runs in background — switch tabs freely. One muted worker tab reused for all videos.</p>
+      <p class="hint youtube-hint">Tries caption API first, then briefly opens Show transcript if needed. Runs in a background worker tab — you can switch tabs freely.</p>
       <button id="stepBtn2" class="btn-primary btn-large" type="button">Fetch transcripts</button>
       <div id="transcriptList" class="date-groups"></div>
     </section>
