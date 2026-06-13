@@ -24,6 +24,8 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const recentLogEntries = new Map();
+const LOG_DEDUPE_WINDOW_MS = 2500;
 
 function getOpenAiKey() {
   const fromInput = ($('openaiKey')?.value || '').trim();
@@ -61,6 +63,11 @@ function log(message, { level = 'info' } = {}) {
   const box = $('log');
   if (!box) return;
   const now = new Date().toLocaleTimeString();
+  const key = `${level}:${message}`;
+  const lastSeen = recentLogEntries.get(key) || 0;
+  const time = Date.now();
+  if (time - lastSeen < LOG_DEDUPE_WINDOW_MS) return;
+  recentLogEntries.set(key, time);
   const entry = document.createElement('div');
   entry.className = `log-entry log-${level}`;
   entry.innerHTML = `
@@ -663,7 +670,8 @@ function renderAnalysisCard(video) {
   const queuePos = state.aiBatchRunning && Array.isArray(state.aiBatchJob?.queue)
     ? state.aiBatchJob.queue.indexOf(video.id)
     : -1;
-  const isCurrent = state.aiBatchRunning && state.aiBatchJob?.currentId === video.id;
+  const isSingleRunning = state.runningTask === `analysis:${video.id}`;
+  const isCurrent = isSingleRunning || (state.aiBatchRunning && state.aiBatchJob?.currentId === video.id);
   const canAnalyzeOne = (priceStatus === 'pending' || priceStatus === 'failed') && !state.aiBatchRunning && !state.runningTask;
 
   return `
@@ -683,7 +691,7 @@ function renderAnalysisCard(video) {
           ${partyCount ? tag(`${partyCount} part${partyCount === 1 ? 'y' : 'ies'}`, 'relevance-relevant') : ''}
           ${areaCount ? tag(`${areaCount} area${areaCount === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
           ${queuePos >= 0 && state.aiBatchRunning ? tag(`queue #${queuePos + 1}`, isCurrent ? 'running' : 'relevance-relevant') : ''}
-          ${isCurrent ? tag('processing now', 'running') : ''}
+          ${isCurrent ? tag(isSingleRunning ? 'OpenAI running' : 'processing now', 'running') : ''}
         </div>
         ${fruitList.length && !analysisBody ? `<div class="analysis-summary-line">${fruitList.slice(0, 8).map((fruit) => tag(fruit, 'relevance-relevant')).join('')}</div>` : ''}
         ${analysisBody}
@@ -1124,7 +1132,8 @@ async function saveLocal() {
   }
 }
 
-async function loadLocal() {
+async function loadLocal({ navigate = true } = {}) {
+  const visibleStep = state.currentStep;
   let saved = null;
 
   if (chrome.storage?.local) {
@@ -1156,7 +1165,8 @@ async function loadLocal() {
     }
   }
   if (saved.lastSync) state.lastSync = saved.lastSync;
-  if (saved.currentStep) state.currentStep = saved.currentStep;
+  if (saved.currentStep && navigate) state.currentStep = saved.currentStep;
+  if (!navigate && visibleStep) state.currentStep = visibleStep;
 
   normalizeVideos();
 
@@ -1164,7 +1174,8 @@ async function loadLocal() {
   renderVideos();
   renderAnalysisList();
   renderPrices();
-  goToStep(state.currentStep || suggestedStep());
+  if (navigate) goToStep(state.currentStep || suggestedStep());
+  else updateUI();
 }
 
 async function markVideosProcessed(videoIds) {
@@ -1266,8 +1277,9 @@ async function stopTranscriptsStep() {
   }
 }
 
-function applySavedProject(saved, { keepRunning = false, keepAiRunning = false } = {}) {
+function applySavedProject(saved, { keepRunning = false, keepAiRunning = false, preserveStep = false } = {}) {
   if (!saved) return;
+  const visibleStep = state.currentStep;
   if (Array.isArray(saved.videos)) state.videos = saved.videos;
   if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
   if (saved.videoAnalysis && typeof saved.videoAnalysis === 'object') {
@@ -1284,7 +1296,8 @@ function applySavedProject(saved, { keepRunning = false, keepAiRunning = false }
     }
   }
   if (saved.lastSync) state.lastSync = saved.lastSync;
-  if (saved.currentStep) state.currentStep = saved.currentStep;
+  if (saved.currentStep && !preserveStep) state.currentStep = saved.currentStep;
+  if (preserveStep && visibleStep) state.currentStep = visibleStep;
   normalizeVideos({ keepRunning, keepAiRunning });
   renderVideos();
   renderAnalysisList();
@@ -1316,6 +1329,7 @@ function syncFromStorageChanges(changes) {
       applySavedProject(next, {
         keepRunning: state.batchRunning || batchRunning,
         keepAiRunning: state.aiBatchRunning || aiBatchRunning,
+        preserveStep: true,
       });
       if (state.currentStep) goToStep(state.currentStep);
     } else {
@@ -1354,15 +1368,18 @@ async function analyzeOneVideo(videoId) {
     throw new Error('Video not ready for analysis.');
   }
 
-  setBusy(true);
+  state.runningTask = `analysis:${videoId}`;
+  goToStep(3);
   video.priceStatus = 'running';
   video.priceError = '';
   renderAnalysisList();
+  updateUI();
   const apiKey = getOpenAiKey();
   if (!apiKey) throw new Error('Add your OpenAI API key in Settings first.');
   await persistOpenAiKey();
   const model = ($('openaiModel')?.value || 'gpt-4o-mini').trim();
   log(`Analyzing ${video.title || videoId} with OpenAI (${model}) from the extension background worker...`);
+  log('Waiting for OpenAI response. This can take up to 3 minutes for long Hindi transcripts.');
 
   try {
     const data = await api('/api/analyze-single-video', {
@@ -1384,13 +1401,15 @@ async function analyzeOneVideo(videoId) {
         transcriptText: video.transcriptText,
       },
     });
-    await loadLocal();
+    await loadLocal({ navigate: false });
     renderAll();
+    goToStep(3);
     log(data.count
       ? `OK ${video.title || videoId} (${data.count} mention${data.count === 1 ? '' : 's'})`
       : `OpenAI returned no price rows for ${video.title || videoId}.`, { level: data.count ? 'info' : 'warn' });
   } finally {
-    setBusy(false);
+    state.runningTask = '';
+    updateUI();
   }
 }
 
@@ -1824,8 +1843,9 @@ $('analysisList')?.addEventListener('click', async (event) => {
     await analyzeOneVideo(videoId);
   } catch (error) {
     log(`Analyze failed: ${error.message}`, { level: 'error' });
-    await loadLocal();
+    await loadLocal({ navigate: false });
     renderAll();
+    goToStep(3);
   }
 });
 
@@ -1937,7 +1957,7 @@ chrome.runtime.onMessage.addListener((message) => {
       state.aiBatchRunning = false;
       state.aiBatchJob = { ...state.aiBatchJob, running: false, finishedAt: new Date().toISOString(), failed: message.failed || 0 };
       updateAnalysisStatusUI(state.aiBatchJob);
-      loadLocal().then(() => {
+      loadLocal({ navigate: false }).then(() => {
         renderAll();
         if (!pendingAnalysis().length) goToStep(4);
         updateUI();
@@ -1958,15 +1978,17 @@ chrome.runtime.onMessage.addListener((message) => {
           currentTitle: message.title || message.videoId,
         });
       } else if (message.status === 'ok') {
-        loadLocal().then(() => {
+        loadLocal({ navigate: false }).then(() => {
           normalizeVideos({ keepAiRunning: true });
           renderAll();
+          goToStep(3);
           updateUI();
         }).catch(() => {});
       } else if (message.status === 'failed') {
-        loadLocal().then(() => {
+        loadLocal({ navigate: false }).then(() => {
           normalizeVideos({ keepAiRunning: true });
           renderAnalysisList();
+          goToStep(3);
           updateUI();
         }).catch(() => {});
         updateAnalysisStatusUI({
@@ -2016,7 +2038,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.5 — popup, thumbnails, logs';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.6 — fixed analysis loading';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

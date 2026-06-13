@@ -309,6 +309,23 @@ h1 {
 
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 
+.btn-primary:disabled {
+  position: relative;
+}
+
+.btn-primary:disabled::after {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-left: 8px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  vertical-align: -2px;
+  animation: spin 0.8s linear infinite;
+}
+
 .panel-tools {
   margin-bottom: 12px;
 }
@@ -415,6 +432,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .video-card.is-running {
   border-left-color: #d78a00;
   background: #fffaf0;
+  animation: runningPulse 1.7s ease-in-out infinite;
 }
 
 .video-card.status-failed,
@@ -471,6 +489,15 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .video-card.is-running { outline: 1px solid #f59e0b; }
 .badge.failed { background: #ffe8e8; color: var(--danger); }
 .badge.running { background: #fff4d6; color: var(--warn); }
+.badge.running::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: dotPulse 1s ease-in-out infinite;
+}
 .badge.pending, .badge.no-transcript { background: #eef1ed; color: var(--muted); }
 .badge.skipped, .badge.relevance-irrelevant { background: #f1f1f1; color: #666; }
 .badge.relevance-uncertain { background: #fff4d6; color: var(--warn); }
@@ -999,6 +1026,20 @@ input {
 
 .log-error .log-message { color: #fecaca; }
 .log-warn .log-message { color: #fde68a; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes dotPulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes runningPulse {
+  0%, 100% { box-shadow: 0 0 0 rgba(215, 138, 0, 0); }
+  50% { box-shadow: 0 0 0 3px rgba(215, 138, 0, 0.12); }
+}
 
 @media (max-width: 700px) {
   .video-card {

@@ -262,6 +262,7 @@ async function classifyCallOpenAI({ apiKey, model, system, prompt }) {
     body: JSON.stringify({
       model,
       temperature: 0.1,
+      max_tokens: 6000,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: system },
@@ -366,8 +367,8 @@ const TRANSCRIPT_BATCH_KEY = 'transcriptBatchJob';
 const BATCH_LOG_LIMIT = 80;
 const BATCH_LOCK_STALE_MS = 90000;
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 45000;
-const AI_OPENAI_TIMEOUT_MS = 90000;
-const AI_BATCH_STALE_MS = 120000;
+const AI_OPENAI_TIMEOUT_MS = 180000;
+const AI_BATCH_STALE_MS = 240000;
 let batchProcessing = false;
 let batchProcessingStartedAt = 0;
 
@@ -3267,6 +3268,7 @@ async function callOpenAI({ apiKey, model, prompt, system }) {
     body: JSON.stringify({
       model,
       temperature: 0.1,
+      max_tokens: 6000,
       response_format: { type: 'json_object' },
       messages: [
         {
