@@ -92,3 +92,40 @@ CREATE TABLE IF NOT EXISTS vector_chunks (
 
 CREATE INDEX IF NOT EXISTS idx_vector_chunks_video_id ON vector_chunks(video_id);
 CREATE INDEX IF NOT EXISTS idx_vector_chunks_market_date ON vector_chunks(market_date);
+
+CREATE TABLE IF NOT EXISTS transcript_jobs (
+  id TEXT PRIMARY KEY,
+  video_id TEXT,
+  video_url TEXT,
+  audio_url TEXT,
+  status TEXT NOT NULL,
+  language TEXT,
+  model TEXT,
+  source TEXT,
+  error TEXT,
+  transcript_text TEXT,
+  segment_count INTEGER DEFAULT 0,
+  payload_json TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS transcript_segments (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  video_id TEXT,
+  segment_index INTEGER,
+  start_seconds REAL,
+  end_seconds REAL,
+  timestamp_label TEXT,
+  text TEXT NOT NULL,
+  language TEXT,
+  source TEXT,
+  payload_json TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcript_jobs_video_id ON transcript_jobs(video_id);
+CREATE INDEX IF NOT EXISTS idx_transcript_jobs_status ON transcript_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_transcript_segments_job_id ON transcript_segments(job_id);
+CREATE INDEX IF NOT EXISTS idx_transcript_segments_video_id ON transcript_segments(video_id);

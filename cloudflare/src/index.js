@@ -6,6 +6,10 @@ import {
   indexVectorDatabase,
 } from './vectors.js';
 
+const WHISPER_MODEL = '@cf/openai/whisper-large-v3-turbo';
+const AUDIO_LIMIT_BYTES = 24 * 1024 * 1024;
+const MAX_TRANSCRIPT_CHUNKS = 12;
+
 function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '*';
   return {
@@ -32,6 +36,59 @@ function authorize(request, env) {
 
 function safeText(value) {
   return String(value ?? '').trim();
+}
+
+function httpError(message, status = 500, extra = {}) {
+  const error = new Error(message);
+  error.status = status;
+  error.extra = extra;
+  return error;
+}
+
+function shortId(prefix) {
+  return `${prefix}_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function extractYouTubeId(value) {
+  const raw = safeText(value);
+  if (!raw) return '';
+  if (/^[\w-]{11}$/.test(raw)) return raw;
+  try {
+    const url = new URL(raw);
+    if (url.hostname.includes('youtu.be')) return safeText(url.pathname.split('/').filter(Boolean)[0]);
+    if (url.searchParams.get('v')) return safeText(url.searchParams.get('v'));
+    const parts = url.pathname.split('/').filter(Boolean);
+    const markerIndex = parts.findIndex((part) => ['embed', 'shorts', 'live'].includes(part));
+    if (markerIndex >= 0) return safeText(parts[markerIndex + 1]);
+  } catch {}
+  const match = raw.match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([\w-]{11})/);
+  return match ? match[1] : '';
+}
+
+function secondsToClock(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function cleanBase64(value) {
+  const raw = safeText(value);
+  if (!raw) return '';
+  const commaIndex = raw.indexOf(',');
+  return raw.startsWith('data:') && commaIndex >= 0 ? raw.slice(commaIndex + 1) : raw;
 }
 
 function rowHash(row) {
@@ -479,6 +536,341 @@ async function listAnalysis(db, url) {
   };
 }
 
+async function parseTranscriptRequest(request) {
+  const type = request.headers.get('content-type') || '';
+  if (type.includes('multipart/form-data')) {
+    const form = await request.formData();
+    const audio = form.get('audio');
+    const fileBuffer = audio && typeof audio.arrayBuffer === 'function'
+      ? await audio.arrayBuffer()
+      : null;
+    if (fileBuffer && fileBuffer.byteLength > AUDIO_LIMIT_BYTES) {
+      throw httpError(`Audio upload is ${(fileBuffer.byteLength / 1024 / 1024).toFixed(1)} MB. Send chunks under 24 MB each.`, 413);
+    }
+    return {
+      videoId: safeText(form.get('videoId') || form.get('video_id')),
+      videoUrl: safeText(form.get('videoUrl') || form.get('video_url')),
+      audioUrl: safeText(form.get('audioUrl') || form.get('audio_url')),
+      language: safeText(form.get('language')) || 'hi',
+      model: safeText(form.get('model')) || WHISPER_MODEL,
+      initialPrompt: safeText(form.get('initialPrompt') || form.get('initial_prompt')),
+      chunks: fileBuffer ? [{
+        audioBase64: arrayBufferToBase64(fileBuffer),
+        offsetSeconds: Number(form.get('offsetSeconds') || form.get('offset_seconds')) || 0,
+        name: safeText(audio?.name),
+      }] : undefined,
+    };
+  }
+
+  return request.json();
+}
+
+async function fetchAudioAsBase64(audioUrl) {
+  const url = safeText(audioUrl);
+  if (!url) return '';
+  const response = await fetch(url, {
+    headers: {
+      'user-agent': 'fruit-mandi-worker/1.0',
+      accept: 'audio/*,*/*;q=0.8',
+    },
+  });
+  if (!response.ok) {
+    throw httpError(`Audio URL failed: ${response.status} ${response.statusText}`, 400);
+  }
+  const size = Number(response.headers.get('content-length')) || 0;
+  if (size > AUDIO_LIMIT_BYTES) {
+    throw httpError(`Audio URL is ${(size / 1024 / 1024).toFixed(1)} MB. Send chunks under 24 MB each.`, 413);
+  }
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > AUDIO_LIMIT_BYTES) {
+    throw httpError(`Audio download is ${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB. Send chunks under 24 MB each.`, 413);
+  }
+  return arrayBufferToBase64(buffer);
+}
+
+async function normalizeAudioChunks(body) {
+  const rawChunks = Array.isArray(body?.chunks) && body.chunks.length
+    ? body.chunks
+    : [{
+        audioUrl: body?.audioUrl || body?.audio_url,
+        audioBase64: body?.audioBase64 || body?.audio_base64,
+        offsetSeconds: body?.offsetSeconds || body?.offset_seconds || 0,
+        name: body?.name || 'audio',
+      }];
+
+  if (rawChunks.length > MAX_TRANSCRIPT_CHUNKS) {
+    throw httpError(`Too many chunks. Send ${MAX_TRANSCRIPT_CHUNKS} or fewer chunks per request.`, 413);
+  }
+
+  const chunks = [];
+  for (let index = 0; index < rawChunks.length; index += 1) {
+    const raw = rawChunks[index] || {};
+    const audioBase64 = cleanBase64(raw.audioBase64 || raw.audio_base64)
+      || await fetchAudioAsBase64(raw.audioUrl || raw.audio_url);
+    if (!audioBase64) {
+      continue;
+    }
+    chunks.push({
+      audioBase64,
+      offsetSeconds: Number(raw.offsetSeconds || raw.offset_seconds) || 0,
+      audioUrl: safeText(raw.audioUrl || raw.audio_url),
+      name: safeText(raw.name) || `chunk ${index + 1}`,
+    });
+  }
+
+  if (!chunks.length) {
+    const videoUrl = safeText(body?.videoUrl || body?.video_url || body?.youtubeUrl || body?.youtube_url);
+    if (videoUrl) {
+      throw httpError(
+        'Cloudflare Worker cannot extract audio directly from a YouTube watch URL. Send audioUrl, audioBase64, or pre-split chunks from a downloader service/R2/Cloudflare Stream.',
+        422,
+        { videoUrl },
+      );
+    }
+    throw httpError('Send audioUrl, audioBase64, multipart audio, or chunks[].', 400);
+  }
+
+  return chunks;
+}
+
+function getWhisperSegments(result, offsetSeconds = 0) {
+  const items = Array.isArray(result?.segments)
+    ? result.segments
+    : Array.isArray(result?.chunks)
+      ? result.chunks
+      : [];
+
+  const segments = items.map((item, index) => {
+    const timestamp = Array.isArray(item?.timestamp) ? item.timestamp : Array.isArray(item?.timestamps) ? item.timestamps : [];
+    const start = Number(item?.start ?? item?.start_seconds ?? timestamp[0] ?? 0) + offsetSeconds;
+    const endValue = item?.end ?? item?.end_seconds ?? timestamp[1];
+    const end = endValue == null ? null : Number(endValue) + offsetSeconds;
+    return {
+      segment_index: index,
+      start_seconds: Number.isFinite(start) ? start : offsetSeconds,
+      end_seconds: Number.isFinite(end) ? end : null,
+      timestamp_label: secondsToClock(start),
+      text: safeText(item?.text || item?.sentence || item?.caption),
+      raw: item,
+    };
+  }).filter((segment) => segment.text);
+
+  if (!segments.length && safeText(result?.text)) {
+    segments.push({
+      segment_index: 0,
+      start_seconds: offsetSeconds,
+      end_seconds: null,
+      timestamp_label: secondsToClock(offsetSeconds),
+      text: safeText(result.text),
+      raw: result,
+    });
+  }
+
+  return segments;
+}
+
+function transcriptTextFromSegments(segments) {
+  return segments.map((segment) => `[${segment.timestamp_label}] ${segment.text}`).join('\n');
+}
+
+async function insertTranscriptJob(db, job) {
+  await db.prepare(
+    `INSERT INTO transcript_jobs (
+      id, video_id, video_url, audio_url, status, language, model, source, error,
+      transcript_text, segment_count, payload_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET
+      video_id = excluded.video_id,
+      video_url = excluded.video_url,
+      audio_url = excluded.audio_url,
+      status = excluded.status,
+      language = excluded.language,
+      model = excluded.model,
+      source = excluded.source,
+      error = excluded.error,
+      transcript_text = excluded.transcript_text,
+      segment_count = excluded.segment_count,
+      payload_json = excluded.payload_json,
+      updated_at = datetime('now')`,
+  ).bind(
+    job.id,
+    job.video_id,
+    job.video_url,
+    job.audio_url,
+    job.status,
+    job.language,
+    job.model,
+    job.source,
+    job.error || '',
+    job.transcript_text || '',
+    Number(job.segment_count) || 0,
+    job.payload_json || '{}',
+  ).run();
+}
+
+async function updateTranscriptJob(db, jobId, fields) {
+  await db.prepare(
+    `UPDATE transcript_jobs
+     SET status = ?, error = ?, transcript_text = ?, segment_count = ?, payload_json = ?, updated_at = datetime('now')
+     WHERE id = ?`,
+  ).bind(
+    fields.status,
+    fields.error || '',
+    fields.transcript_text || '',
+    Number(fields.segment_count) || 0,
+    fields.payload_json || '{}',
+    jobId,
+  ).run();
+}
+
+async function replaceTranscriptSegments(db, jobId, videoId, segments, language, source) {
+  await db.prepare('DELETE FROM transcript_segments WHERE job_id = ?').bind(jobId).run();
+  for (const segment of segments) {
+    await db.prepare(
+      `INSERT INTO transcript_segments (
+        id, job_id, video_id, segment_index, start_seconds, end_seconds, timestamp_label,
+        text, language, source, payload_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    ).bind(
+      shortId('seg'),
+      jobId,
+      videoId,
+      Number(segment.segment_index) || 0,
+      segment.start_seconds,
+      segment.end_seconds,
+      segment.timestamp_label,
+      segment.text,
+      language,
+      source,
+      JSON.stringify(segment.raw || {}),
+    ).run();
+  }
+}
+
+async function transcribeWithWorkersAI(db, env, request) {
+  if (!env.AI) {
+    throw httpError('Workers AI binding is missing. Deploy with [ai] binding = "AI" in wrangler.toml.', 500);
+  }
+  const body = await parseTranscriptRequest(request);
+  const videoUrl = safeText(body.videoUrl || body.video_url || body.youtubeUrl || body.youtube_url);
+  const videoId = safeText(body.videoId || body.video_id) || extractYouTubeId(videoUrl);
+  const language = safeText(body.language) || 'hi';
+  const model = safeText(body.model) || WHISPER_MODEL;
+  const audioUrl = safeText(body.audioUrl || body.audio_url);
+  const source = 'workers-ai-whisper';
+  const jobId = safeText(body.jobId || body.job_id) || shortId('tx');
+  const chunks = await normalizeAudioChunks(body);
+  const initialPrompt = safeText(body.initialPrompt || body.initial_prompt)
+    || 'Hindi and Hinglish Delhi fruit mandi market-price conversation. Preserve spoken Hindi words, Hinglish produce names, rupee prices, quantities, quality grades, areas, parties, and timestamps.';
+
+  await insertTranscriptJob(db, {
+    id: jobId,
+    video_id: videoId,
+    video_url: videoUrl,
+    audio_url: audioUrl || chunks.map((chunk) => chunk.audioUrl).filter(Boolean).join(', '),
+    status: 'running',
+    language,
+    model,
+    source,
+    payload_json: JSON.stringify({ chunkCount: chunks.length, createdBy: 'api' }),
+  });
+
+  const allSegments = [];
+  const rawResults = [];
+  try {
+    for (const chunk of chunks) {
+      const result = await env.AI.run(model, {
+        audio: chunk.audioBase64,
+        task: 'transcribe',
+        language,
+        vad_filter: true,
+        initial_prompt: initialPrompt,
+      });
+      rawResults.push({
+        name: chunk.name,
+        offsetSeconds: chunk.offsetSeconds,
+        audioUrl: chunk.audioUrl,
+        result,
+      });
+      const chunkSegments = getWhisperSegments(result, chunk.offsetSeconds);
+      allSegments.push(...chunkSegments);
+    }
+
+    allSegments.sort((a, b) => (a.start_seconds || 0) - (b.start_seconds || 0));
+    allSegments.forEach((segment, index) => { segment.segment_index = index; });
+    const transcriptText = transcriptTextFromSegments(allSegments);
+
+    await replaceTranscriptSegments(db, jobId, videoId, allSegments, language, source);
+    await updateTranscriptJob(db, jobId, {
+      status: allSegments.length ? 'complete' : 'empty',
+      transcript_text: transcriptText,
+      segment_count: allSegments.length,
+      payload_json: JSON.stringify({
+        chunkCount: chunks.length,
+        model,
+        rawResults,
+      }),
+    });
+
+    return {
+      job: {
+        id: jobId,
+        video_id: videoId,
+        video_url: videoUrl,
+        status: allSegments.length ? 'complete' : 'empty',
+        language,
+        model,
+        source,
+        segment_count: allSegments.length,
+      },
+      transcriptText,
+      segments: allSegments.map(({ raw, ...segment }) => segment),
+    };
+  } catch (error) {
+    await updateTranscriptJob(db, jobId, {
+      status: 'failed',
+      error: error?.message || 'Transcription failed.',
+      payload_json: JSON.stringify({ chunkCount: chunks.length, model, rawResults }),
+    });
+    throw error;
+  }
+}
+
+async function getTranscriptByVideo(db, videoId) {
+  const job = await db.prepare(
+    `SELECT * FROM transcript_jobs
+     WHERE video_id = ?
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+  ).bind(videoId).first();
+  if (!job) return null;
+  const segmentRows = await db.prepare(
+    `SELECT segment_index, start_seconds, end_seconds, timestamp_label, text, language, source
+     FROM transcript_segments
+     WHERE job_id = ?
+     ORDER BY segment_index ASC, start_seconds ASC`,
+  ).bind(job.id).all();
+  return {
+    job,
+    segments: segmentRows.results || [],
+  };
+}
+
+async function getTranscriptJob(db, jobId) {
+  const job = await db.prepare('SELECT * FROM transcript_jobs WHERE id = ?').bind(jobId).first();
+  if (!job) return null;
+  const segmentRows = await db.prepare(
+    `SELECT segment_index, start_seconds, end_seconds, timestamp_label, text, language, source
+     FROM transcript_segments
+     WHERE job_id = ?
+     ORDER BY segment_index ASC, start_seconds ASC`,
+  ).bind(job.id).all();
+  return {
+    job,
+    segments: segmentRows.results || [],
+  };
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') {
@@ -496,6 +888,10 @@ export default {
           ok: true,
           service: 'fruit-mandi-api',
           storage: 'cloudflare-d1',
+          features: {
+            transcription: Boolean(env.AI),
+            whisperModel: WHISPER_MODEL,
+          },
           counts,
           vectors,
         }, 200, request);
@@ -552,6 +948,28 @@ export default {
         return jsonResponse({ ok: true, item }, 200, request);
       }
 
+      if (path === '/api/transcripts/transcribe' && request.method === 'POST') {
+        if (!authorize(request, env)) {
+          return jsonResponse({ ok: false, error: 'Unauthorized. Set Authorization: Bearer <SYNC_TOKEN>.' }, 401, request);
+        }
+        const result = await transcribeWithWorkersAI(env.DB, env, request);
+        return jsonResponse({ ok: true, ...result }, 200, request);
+      }
+
+      const transcriptMatch = path.match(/^\/api\/transcripts\/([^/]+)$/);
+      if (transcriptMatch && request.method === 'GET') {
+        const item = await getTranscriptByVideo(env.DB, transcriptMatch[1]);
+        if (!item) return jsonResponse({ ok: false, error: 'Transcript not found.' }, 404, request);
+        return jsonResponse({ ok: true, ...item }, 200, request);
+      }
+
+      const transcriptJobMatch = path.match(/^\/api\/transcript-jobs\/([^/]+)$/);
+      if (transcriptJobMatch && request.method === 'GET') {
+        const item = await getTranscriptJob(env.DB, transcriptJobMatch[1]);
+        if (!item) return jsonResponse({ ok: false, error: 'Transcript job not found.' }, 404, request);
+        return jsonResponse({ ok: true, ...item }, 200, request);
+      }
+
       if (path === '/api/vectors/status' && request.method === 'GET') {
         const status = await getVectorStatus(env.DB, env);
         return jsonResponse({ ok: true, ...status }, 200, request);
@@ -571,7 +989,7 @@ export default {
 
       return jsonResponse({ ok: false, error: `Not found: ${path}` }, 404, request);
     } catch (error) {
-      return jsonResponse({ ok: false, error: error?.message || 'Worker failed.' }, 500, request);
+      return jsonResponse({ ok: false, error: error?.message || 'Worker failed.', ...(error?.extra || {}) }, error?.status || 500, request);
     }
   },
 };

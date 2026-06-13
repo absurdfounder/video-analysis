@@ -2369,7 +2369,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.9 — price trends';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.7.0 — compact UI + worker transcript API';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

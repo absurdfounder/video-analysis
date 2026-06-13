@@ -2,6 +2,9 @@ name = "fruit-mandi-api"
 main = "src/index.js"
 compatibility_date = "2024-11-01"
 
+[ai]
+binding = "AI"
+
 # After `npm run db:create`, paste the database_id below.
 [[d1_databases]]
 binding = "DB"

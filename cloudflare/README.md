@@ -111,6 +111,60 @@ npm run deploy
 
 ---
 
+## Server-side transcription
+
+The Worker now has a Cloudflare Workers AI Whisper route for Hindi/Hinglish transcripts with timestamps.
+
+What it can do:
+
+- Transcribe an uploaded audio file, a direct `audioUrl`, `audioBase64`, or pre-split `chunks[]`
+- Store transcript jobs and timestamped segments in D1
+- Return normalized `[time] caption` lines for downstream price extraction
+
+What it cannot do inside a Worker:
+
+- Run `yt-dlp`, Chrome, or ffmpeg
+- Reliably extract private YouTube audio streams from a normal `youtube.com/watch` URL
+
+For fully automatic YouTube videos, add a small downloader/splitter outside Workers, store/send audio chunks, then call this route. Workers AI handles the transcription step.
+
+### Transcribe one audio URL
+
+```bash
+curl -X POST "https://fruit-mandi-api.YOUR.workers.dev/api/transcripts/transcribe" \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer YOUR_SYNC_TOKEN" \
+  --data '{
+    "videoUrl": "https://www.youtube.com/watch?v=VIDEO_ID",
+    "audioUrl": "https://example.com/audio.mp3",
+    "language": "hi"
+  }'
+```
+
+### Transcribe pre-split chunks
+
+```bash
+curl -X POST "https://fruit-mandi-api.YOUR.workers.dev/api/transcripts/transcribe" \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer YOUR_SYNC_TOKEN" \
+  --data '{
+    "videoId": "VIDEO_ID",
+    "language": "hi",
+    "chunks": [
+      { "audioUrl": "https://example.com/video-part-1.mp3", "offsetSeconds": 0 },
+      { "audioUrl": "https://example.com/video-part-2.mp3", "offsetSeconds": 300 }
+    ]
+  }'
+```
+
+Fetch stored transcript:
+
+```bash
+curl "https://fruit-mandi-api.YOUR.workers.dev/api/transcripts/VIDEO_ID"
+```
+
+---
+
 ## API endpoints
 
 | Method | Path | Auth | Description |
@@ -124,6 +178,9 @@ npm run deploy
 | GET | `/api/prices` | — | Query prices (`?fruit=onion&market_date=2026-06-13&party=&video_id=`) |
 | GET | `/api/analysis` | — | List analysis (`?market_date=`) |
 | GET | `/api/analysis/:videoId` | — | Per-video structured analysis |
+| POST | `/api/transcripts/transcribe` | Bearer* | Transcribe Hindi/Hinglish audio through Workers AI Whisper |
+| GET | `/api/transcripts/:videoId` | — | Latest stored transcript for a video |
+| GET | `/api/transcript-jobs/:jobId` | — | One transcript job + timestamp segments |
 | GET | `/api/vectors/status` | — | Vector index status |
 | POST | `/api/vectors/index` | — | Build/rebuild embeddings index (`apiKey` in body) |
 | POST | `/api/vectors/chat` | — | RAG chat over indexed data (`apiKey`, `message`, optional `history`) |
@@ -152,6 +209,8 @@ curl "https://fruit-mandi-api.YOUR.workers.dev/api/analysis?market_date=2026-06-
 - **videos** — metadata, price status, analysis summary (no full transcript segments — keeps DB small)
 - **price_rows** — flat timestamped price mentions (CRUD + dedupe by `row_hash`)
 - **video_analysis** — structured per-video rollup (`videoAnalysis` from extension)
+- **transcript_jobs** — Workers AI transcript runs and raw normalized text
+- **transcript_segments** — timestamped transcript lines by job/video
 - **settings** — channel URL, last sync time
 
 ---
