@@ -323,6 +323,9 @@ async function fetchTranscriptsBatch(body) {
     return { ok: true, started: false, alreadyRunning: true, total: existing[TRANSCRIPT_BATCH_KEY].total || 0 };
   }
 
+  cachedYouTubeTabId = null;
+  await setStoredWorkerTabId(null);
+
   await chrome.storage.local.set({
     [TRANSCRIPT_BATCH_KEY]: {
       running: true,
@@ -752,10 +755,23 @@ async function prepareWorkerTab(tabId) {
   await muteWorkerTab(tabId);
 }
 
+async function activateWorkerTab(tabId) {
+  const tab = await chrome.tabs.update(tabId, { active: true, muted: true, autoDiscardable: false });
+  if (tab?.windowId) {
+    try {
+      await chrome.windows.update(tab.windowId, { focused: true });
+    } catch {
+      // Some browsers do not allow window focus from a service worker.
+    }
+  }
+  return tab;
+}
+
 async function ensureYouTubeTab() {
   if (cachedYouTubeTabId) {
     try {
       await chrome.tabs.get(cachedYouTubeTabId);
+      await activateWorkerTab(cachedYouTubeTabId);
       await prepareWorkerTab(cachedYouTubeTabId);
       return cachedYouTubeTabId;
     } catch {
@@ -769,6 +785,7 @@ async function ensureYouTubeTab() {
     try {
       await chrome.tabs.get(storedId);
       cachedYouTubeTabId = storedId;
+      await activateWorkerTab(storedId);
       await prepareWorkerTab(storedId);
       return storedId;
     } catch {
@@ -783,17 +800,14 @@ async function ensureYouTubeTab() {
   cachedYouTubeTabId = tab.id;
   await setStoredWorkerTabId(tab.id);
   await waitForTabComplete(cachedYouTubeTabId, 25000);
+  await activateWorkerTab(cachedYouTubeTabId);
   await prepareWorkerTab(cachedYouTubeTabId);
-  try {
-    await chrome.tabs.move(cachedYouTubeTabId, { index: -1 });
-  } catch {
-    // ignore
-  }
   await installMuteHook(cachedYouTubeTabId);
   return cachedYouTubeTabId;
 }
 
 async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
+  await activateWorkerTab(tabId);
   await prepareWorkerTab(tabId);
   const tab = await chrome.tabs.get(tabId);
   const currentUrl = String(tab.url || '');
@@ -851,6 +865,7 @@ async function waitForYouTubePageReady(tabId, videoId) {
 
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
+  await activateWorkerTab(tabId);
   await prepareWorkerTab(tabId);
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
   await waitForYouTubePageReady(tabId, videoId);
@@ -883,20 +898,9 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
 }
 
 async function withBriefTabFocus(tabId, fn) {
-  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  try {
-    await chrome.tabs.update(tabId, { active: true, autoDiscardable: false });
-    await sleep(1200);
-    return await fn();
-  } finally {
-    if (activeTab?.id && activeTab.id !== tabId) {
-      try {
-        await chrome.tabs.update(activeTab.id, { active: true });
-      } catch {
-        // Previous tab may have closed.
-      }
-    }
-  }
+  await activateWorkerTab(tabId);
+  await sleep(1800);
+  return fn();
 }
 
 async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, methodPrefix) {

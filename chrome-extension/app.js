@@ -527,7 +527,7 @@ async function fetchTranscriptsStep() {
   }
 
   await saveLocal();
-  log(`Fetching ${pending.length} transcript(s) in background — you can switch tabs freely.`);
+  log(`Fetching ${pending.length} transcript(s). A YouTube worker tab should open and stay visible while transcripts are read.`);
 
   const data = await api('/api/fetch-transcripts-batch', {
     delayMs,
@@ -805,7 +805,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.2 — visible worker tab + transcript params fallback';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.3 — YouTube worker tab stays visible';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
