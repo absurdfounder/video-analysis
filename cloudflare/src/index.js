@@ -845,9 +845,10 @@ async function fetchExternalYouTubeTranscript(env, options) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) {
-    const stage = safeText(data.stage) || 'unknown';
+    const message = data.error || response.statusText;
+    const stage = inferExternalExtractorStage(data, message);
     throw httpError(
-      `External YouTube extractor failed at ${stage}: ${data.error || response.statusText}`,
+      `External YouTube extractor failed at ${stage}: ${message}`,
       502,
       {
         extractorStage: stage,
@@ -875,6 +876,15 @@ async function fetchExternalYouTubeTranscript(env, options) {
       segmentCount: segments.length,
     },
   };
+}
+
+function inferExternalExtractorStage(data, message) {
+  const explicit = safeText(data?.stage);
+  if (explicit) return explicit;
+  const text = `${safeText(message)} ${safeText(data?.source)} ${safeText(data?.version)}`;
+  if (/openai|api key|model|transcription|transcribe/i.test(text)) return 'openai_transcription';
+  if (/youtube|yt-dlp|blocked|cookies|bot-like|429|download|audio/i.test(text)) return 'download_audio';
+  return 'unknown';
 }
 
 async function transcribeWithWorkersAI(db, env, request) {
