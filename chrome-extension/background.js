@@ -548,10 +548,11 @@ async function listVideos(body) {
 }
 
 async function transcript(body) {
-  const videoUrl = safeText(body.videoUrl || body.url);
-  const id = safeText(body.id || getVideoId(videoUrl));
+  const rawVideoUrl = safeText(body.videoUrl || body.url);
+  const id = safeText(body.id || getVideoId(rawVideoUrl));
+  const videoUrl = normalizeWatchUrl(rawVideoUrl, id);
   const languages = safeText(body.languages || 'hi.*,hi,en.*');
-  if (!/^https?:\/\//i.test(videoUrl)) return { ok: false, error: 'Invalid video URL.' };
+  if (!/^https?:\/\//i.test(videoUrl) || !id) return { ok: false, error: 'Invalid YouTube video URL.' };
 
   let result = null;
   try {
@@ -755,23 +756,10 @@ async function prepareWorkerTab(tabId) {
   await muteWorkerTab(tabId);
 }
 
-async function activateWorkerTab(tabId) {
-  const tab = await chrome.tabs.update(tabId, { active: true, muted: true, autoDiscardable: false });
-  if (tab?.windowId) {
-    try {
-      await chrome.windows.update(tab.windowId, { focused: true });
-    } catch {
-      // Some browsers do not allow window focus from a service worker.
-    }
-  }
-  return tab;
-}
-
 async function ensureYouTubeTab() {
   if (cachedYouTubeTabId) {
     try {
       await chrome.tabs.get(cachedYouTubeTabId);
-      await activateWorkerTab(cachedYouTubeTabId);
       await prepareWorkerTab(cachedYouTubeTabId);
       return cachedYouTubeTabId;
     } catch {
@@ -785,7 +773,6 @@ async function ensureYouTubeTab() {
     try {
       await chrome.tabs.get(storedId);
       cachedYouTubeTabId = storedId;
-      await activateWorkerTab(storedId);
       await prepareWorkerTab(storedId);
       return storedId;
     } catch {
@@ -795,24 +782,22 @@ async function ensureYouTubeTab() {
 
   const tab = await chrome.tabs.create({
     url: WORKER_TAB_URL,
-    active: true,
+    active: false,
   });
   cachedYouTubeTabId = tab.id;
   await setStoredWorkerTabId(tab.id);
   await waitForTabComplete(cachedYouTubeTabId, 25000);
-  await activateWorkerTab(cachedYouTubeTabId);
   await prepareWorkerTab(cachedYouTubeTabId);
   await installMuteHook(cachedYouTubeTabId);
   return cachedYouTubeTabId;
 }
 
 async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
-  await activateWorkerTab(tabId);
   await prepareWorkerTab(tabId);
   const tab = await chrome.tabs.get(tabId);
   const currentUrl = String(tab.url || '');
   if (!currentUrl.includes(videoId)) {
-    await chrome.tabs.update(tabId, { url: videoUrl, active: true, autoDiscardable: false });
+    await chrome.tabs.update(tabId, { url: videoUrl, active: false, autoDiscardable: false });
     await waitForTabComplete(tabId, 45000, videoId);
   }
   await prepareWorkerTab(tabId);
@@ -865,7 +850,6 @@ async function waitForYouTubePageReady(tabId, videoId) {
 
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
-  await activateWorkerTab(tabId);
   await prepareWorkerTab(tabId);
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
   await waitForYouTubePageReady(tabId, videoId);
@@ -898,8 +882,8 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
 }
 
 async function withBriefTabFocus(tabId, fn) {
-  await activateWorkerTab(tabId);
-  await sleep(1800);
+  await prepareWorkerTab(tabId);
+  await sleep(800);
   return fn();
 }
 
@@ -1115,10 +1099,20 @@ function getVideoId(url) {
   try {
     const parsed = new URL(url);
     if (parsed.hostname === 'youtu.be') return parsed.pathname.replace('/', '');
-    return parsed.searchParams.get('v') || '';
+    const fromQuery = parsed.searchParams.get('v');
+    if (fromQuery) return fromQuery;
+    const pathMatch = parsed.pathname.match(/\/(?:embed|shorts|live)\/([^/?#]+)/);
+    if (pathMatch?.[1]) return pathMatch[1];
+    return '';
   } catch {
     return '';
   }
+}
+
+function normalizeWatchUrl(url, id = '') {
+  const videoId = id || getVideoId(url);
+  if (!videoId) return url;
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 }
 
 function chooseCaptionTrack(tracks, languages) {

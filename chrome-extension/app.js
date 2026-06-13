@@ -527,7 +527,7 @@ async function fetchTranscriptsStep() {
   }
 
   await saveLocal();
-  log(`Fetching ${pending.length} transcript(s). A YouTube worker tab should open and stay visible while transcripts are read.`);
+  log(`Fetching ${pending.length} transcript(s). A muted YouTube worker tab will run in the background so you can keep working.`);
 
   const data = await api('/api/fetch-transcripts-batch', {
     delayMs,
@@ -805,7 +805,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.4 — modern transcript panel parser';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.5 — background worker tab, embed URL support';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
