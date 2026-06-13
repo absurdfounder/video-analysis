@@ -125,16 +125,35 @@ Open `/` or `/dashboard` on the Worker to test transcription and price charts in
 
 What it can do:
 
+- Extract a timestamped YouTube transcript directly from a pasted YouTube URL when YouTube exposes a caption/transcript track
 - Transcribe an uploaded audio file, a direct `audioUrl`, `audioBase64`, or pre-split `chunks[]`
 - Store transcript jobs and timestamped segments in D1
 - Return normalized `[time] caption` lines for downstream price extraction
 
-What it cannot do inside a Worker:
+Fallbacks/limits:
 
 - Run `yt-dlp`, Chrome, or ffmpeg
-- Reliably extract private YouTube audio streams from a normal `youtube.com/watch` URL
+- Reliably extract private YouTube audio streams from a normal `youtube.com/watch` URL when YouTube exposes no caption track
 
-For fully automatic YouTube videos, add a small downloader/splitter outside Workers, store/send audio chunks, then call this route. Workers AI handles the transcription step.
+If Cloudflare is rate-limited by YouTube or a video has no public transcript track, configure one of these:
+
+- `YOUTUBE_COOKIES_BASE64` or `YOUTUBE_COOKIES` — exported YouTube cookies for the Worker caption fetch
+- `YOUTUBE_EXTRACTOR_URL` — a POST endpoint that runs `yt-dlp` and returns `{ ok, id, language, segments }`, such as the Netlify `/api/transcript` function in this repo
+- `YOUTUBE_EXTRACTOR_TOKEN` — optional bearer token sent to that extractor
+
+For videos without any YouTube transcript/caption track, use a downloader/splitter outside Workers to extract audio chunks, then call this route. Workers AI handles the transcription step.
+
+### Extract a YouTube transcript directly
+
+```bash
+curl -X POST "https://fruit-mandi-api.YOUR.workers.dev/api/transcripts/transcribe" \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer YOUR_SYNC_TOKEN" \
+  --data '{
+    "videoUrl": "https://www.youtube.com/watch?v=VIDEO_ID",
+    "language": "hi"
+  }'
+```
 
 ### Transcribe one audio URL
 

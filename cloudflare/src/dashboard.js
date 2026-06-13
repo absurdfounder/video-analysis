@@ -1129,15 +1129,15 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <div class="modal-head">
         <div>
           <h2 id="modalTitle">Test transcript worker</h2>
-          <p style="margin-top:5px;color:#666;font-size:13px;">Paste a YouTube URL, then provide audio as a URL or upload. The Worker stores timestamped Hindi/Hinglish transcript lines.</p>
+          <p style="margin-top:5px;color:#666;font-size:13px;">Paste a YouTube URL and run it. The Worker extracts the available timestamped transcript automatically; audio URL/upload is only a fallback.</p>
         </div>
         <button class="modal-close" id="closeTesterBtn">×</button>
       </div>
       <div class="modal-body">
         <div class="modal-grid">
           <label class="span-2">YouTube video URL<input id="videoUrl" placeholder="https://www.youtube.com/watch?v=..." /></label>
-          <label class="span-2">Direct audio URL<input id="audioUrl" placeholder="https://.../audio.mp3 or .wav" /></label>
-          <label>Audio upload<input id="audioFile" type="file" accept="audio/*,video/mp4,video/webm" /></label>
+          <label class="span-2">Optional direct audio/video URL<input id="audioUrl" placeholder="https://.../audio.mp3, .wav, .m4a, .mp4" /></label>
+          <label>Optional audio/video upload<input id="audioFile" type="file" accept="audio/*,video/*" /></label>
           <label>Language<select id="language"><option value="hi">Hindi / Hinglish</option><option value="en">English</option></select></label>
           <label class="span-2">Sync token, if your Worker has one<input id="syncToken" type="password" placeholder="optional" autocomplete="off" /></label>
         </div>
@@ -1640,7 +1640,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('videoThumb').src = 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/hqdefault.jpg';
       el('videoIdLabel').textContent = 'Video ID: ' + id;
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
-      el('videoHint').textContent = 'Server transcription needs an audio URL or upload. A plain YouTube URL will return the setup guidance.';
+      el('videoHint').textContent = 'The Worker will fetch the YouTube transcript from this video URL. Use audio URL/upload only when YouTube has no transcript track.';
     }
 
     function runTranscript() {
@@ -1649,8 +1649,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var file = el('audioFile').files[0];
       var language = el('language').value;
       el('runTranscriptBtn').disabled = true;
-      setTranscriptStatus('Starting transcription...', '');
-      log('Starting transcript request.');
+      setTranscriptStatus(file || audioUrl ? 'Starting transcription...' : 'Extracting YouTube transcript...', '');
+      log(file || audioUrl ? 'Starting transcript request.' : 'Extracting transcript from YouTube URL.');
       var request;
       if (file) {
         var form = new FormData();

@@ -596,6 +596,300 @@ async function fetchAudioAsBase64(audioUrl) {
   return arrayBufferToBase64(buffer);
 }
 
+function hasAudioInput(body) {
+  if (safeText(body?.audioUrl || body?.audio_url)) return true;
+  if (safeText(body?.audioBase64 || body?.audio_base64)) return true;
+  if (!Array.isArray(body?.chunks)) return false;
+  return body.chunks.some((chunk) => safeText(chunk?.audioUrl || chunk?.audio_url || chunk?.audioBase64 || chunk?.audio_base64));
+}
+
+function decodeHtmlEntities(text) {
+  return String(text || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
+}
+
+function cleanCaptionText(text) {
+  return decodeHtmlEntities(text)
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function vttTimeToSeconds(value) {
+  const parts = String(value || '').replace(',', '.').split(':').map(Number);
+  if (parts.length === 3) return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+  if (parts.length === 2) return (parts[0] * 60) + parts[1];
+  return Number(value) || 0;
+}
+
+function dedupeCaptionSegments(segments) {
+  const deduped = [];
+  let previous = '';
+  for (const segment of segments) {
+    if (!segment.text || segment.text === previous) continue;
+    segment.segment_index = deduped.length;
+    deduped.push(segment);
+    previous = segment.text;
+  }
+  return deduped;
+}
+
+function parseVttCaptions(vttText) {
+  const lines = String(vttText || '').replace(/\r/g, '').split('\n');
+  const segments = [];
+  let current = null;
+
+  function flush() {
+    if (!current || !current.textParts.length) return;
+    const text = cleanCaptionText(current.textParts.join(' '));
+    if (!text) return;
+    segments.push({
+      segment_index: segments.length,
+      start_seconds: Number(current.start.toFixed(3)),
+      end_seconds: Number(current.end.toFixed(3)),
+      timestamp_label: secondsToClock(current.start),
+      text,
+      raw: { source: 'vtt' },
+    });
+  }
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line === 'WEBVTT' || line.startsWith('Kind:') || line.startsWith('Language:')) continue;
+    if (/^(NOTE|STYLE|REGION)\b/.test(line)) continue;
+    const match = line.match(/(\d{1,2}:\d{2}:\d{2}[.,]\d{3}|\d{1,2}:\d{2}[.,]\d{3})\s+-->\s+(\d{1,2}:\d{2}:\d{2}[.,]\d{3}|\d{1,2}:\d{2}[.,]\d{3})/);
+    if (match) {
+      flush();
+      current = { start: vttTimeToSeconds(match[1]), end: vttTimeToSeconds(match[2]), textParts: [] };
+      continue;
+    }
+    if (current && !/^\d+$/.test(line)) current.textParts.push(line);
+  }
+  flush();
+
+  return dedupeCaptionSegments(segments);
+}
+
+function parseJson3Captions(jsonText) {
+  const payload = typeof jsonText === 'string' ? JSON.parse(jsonText) : jsonText;
+  const events = Array.isArray(payload?.events) ? payload.events : [];
+  const segments = [];
+
+  for (const event of events) {
+    const text = cleanCaptionText((event.segs || []).map((seg) => seg.utf8 || '').join(''));
+    if (!text) continue;
+    const start = Number(event.tStartMs || 0) / 1000;
+    const duration = Number(event.dDurationMs || 0) / 1000;
+    segments.push({
+      segment_index: segments.length,
+      start_seconds: Number(start.toFixed(3)),
+      end_seconds: duration ? Number((start + duration).toFixed(3)) : null,
+      timestamp_label: secondsToClock(start),
+      text,
+      raw: event,
+    });
+  }
+
+  return dedupeCaptionSegments(segments);
+}
+
+function extractJsonObjectAfter(text, marker) {
+  const markerIndex = text.indexOf(marker);
+  if (markerIndex < 0) return null;
+  const start = text.indexOf('{', markerIndex);
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let quote = '';
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      inString = true;
+      quote = char;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+  return null;
+}
+
+function youtubeCookieHeader(env) {
+  const base64 = String(env?.YOUTUBE_COOKIES_BASE64 || '').trim();
+  let text = '';
+  if (base64) {
+    try { text = atob(base64); } catch {}
+  }
+  if (!text) text = String(env?.YOUTUBE_COOKIES || '').trim().replace(/\\n/g, '\n');
+  if (!text.trim()) return '';
+
+  const pairs = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const tabParts = line.split('\t');
+    if (tabParts.length >= 7) {
+      pairs.push(`${tabParts[5]}=${tabParts.slice(6).join('\t')}`);
+      continue;
+    }
+    if (line.includes('=')) pairs.push(line.replace(/;\s*$/, ''));
+  }
+  return pairs.join('; ');
+}
+
+function youtubeHeaders(env) {
+  const headers = {
+    'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    'accept-language': 'hi-IN,hi;q=0.9,en-US;q=0.8,en;q=0.7',
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    referer: 'https://m.youtube.com/',
+  };
+  const cookie = youtubeCookieHeader(env);
+  if (cookie) headers.cookie = cookie;
+  return headers;
+}
+
+function captionTrackName(track) {
+  if (track?.name?.simpleText) return track.name.simpleText;
+  if (Array.isArray(track?.name?.runs)) return track.name.runs.map((run) => run.text).join('');
+  return '';
+}
+
+function chooseCaptionTrack(tracks, requestedLanguage, translationLanguages = []) {
+  const preferred = safeText(requestedLanguage || 'hi').toLowerCase().split(/[,\s]+/).filter(Boolean);
+  const wantsHindi = preferred.some((item) => item === 'hi' || item.startsWith('hi-') || item.startsWith('hi.'));
+  const scored = tracks.map((track, index) => {
+    const code = safeText(track.languageCode).toLowerCase();
+    const name = captionTrackName(track).toLowerCase();
+    let score = 50 + index;
+    if (preferred.some((item) => code === item || code.startsWith(item.replace(/\*$/, '')))) score -= 40;
+    if (wantsHindi && (code === 'hi' || code.startsWith('hi-') || name.includes('hindi') || name.includes('हिन्दी') || name.includes('हिंदी'))) score -= 35;
+    if (track.kind === 'asr') score += 3;
+    if (code === 'en') score += 6;
+    return { track, score };
+  }).sort((a, b) => a.score - b.score);
+
+  const selected = scored[0]?.track || tracks[0];
+  if (!selected) return null;
+  const code = safeText(selected.languageCode).toLowerCase();
+  const canTranslate = selected.isTranslatable && translationLanguages.some((language) => safeText(language.languageCode).toLowerCase() === 'hi');
+  return {
+    track: selected,
+    translateTo: wantsHindi && code !== 'hi' && canTranslate ? 'hi' : '',
+  };
+}
+
+async function fetchYouTubeWatchInfo(videoId, env) {
+  const id = encodeURIComponent(videoId);
+  const watchUrls = [
+    `https://m.youtube.com/watch?v=${id}&hl=hi&gl=IN&app=m`,
+    `https://www.youtube.com/watch?v=${id}&hl=hi&gl=IN&app=desktop&persist_app=1&has_verified=1`,
+    `https://www.youtube.com/watch?v=${id}&hl=hi&gl=IN&has_verified=1`,
+  ];
+
+  let lastError = '';
+  for (const watchUrl of watchUrls) {
+    const response = await fetch(watchUrl, { headers: youtubeHeaders(env) });
+    if (!response.ok) {
+      lastError = `YouTube watch page failed: ${response.status} ${response.statusText}`;
+      continue;
+    }
+    const html = await response.text();
+    const playerText = extractJsonObjectAfter(html, 'ytInitialPlayerResponse');
+    if (!playerText) {
+      lastError = 'YouTube did not return player metadata for this video.';
+      continue;
+    }
+    try {
+      return { html, player: JSON.parse(playerText), watchUrl };
+    } catch (error) {
+      lastError = 'Could not parse YouTube player metadata.';
+    }
+  }
+  throw httpError(lastError || 'YouTube did not return player metadata for this video.', 502);
+}
+
+async function fetchYouTubeCaptionSegments(videoUrl, env, language = 'hi') {
+  const videoId = extractYouTubeId(videoUrl);
+  if (!videoId) throw httpError('Paste a valid YouTube video URL.', 400);
+
+  const { player } = await fetchYouTubeWatchInfo(videoId, env);
+  const list = player?.captions?.playerCaptionsTracklistRenderer;
+  const tracks = Array.isArray(list?.captionTracks) ? list.captionTracks : [];
+  if (!tracks.length) {
+    throw httpError('This YouTube video does not expose a caption/transcript track to the Worker.', 404, { videoId });
+  }
+
+  const selection = chooseCaptionTrack(tracks, language, list.translationLanguages || []);
+  if (!selection?.track?.baseUrl) {
+    throw httpError('YouTube caption track is missing a download URL.', 502, { videoId });
+  }
+
+  const captionUrl = new URL(selection.track.baseUrl);
+  captionUrl.searchParams.set('fmt', 'json3');
+  if (selection.translateTo) captionUrl.searchParams.set('tlang', selection.translateTo);
+
+  const response = await fetch(captionUrl.toString(), { headers: youtubeHeaders(env) });
+  if (!response.ok) {
+    throw httpError(`YouTube caption download failed: ${response.status} ${response.statusText}`, 502, { videoId });
+  }
+
+  const captionText = await response.text();
+  let segments = [];
+  try {
+    segments = parseJson3Captions(captionText);
+  } catch {
+    segments = parseVttCaptions(captionText);
+  }
+
+  if (!segments.length) {
+    const vttUrl = new URL(selection.track.baseUrl);
+    vttUrl.searchParams.set('fmt', 'vtt');
+    if (selection.translateTo) vttUrl.searchParams.set('tlang', selection.translateTo);
+    const vttResponse = await fetch(vttUrl.toString(), { headers: youtubeHeaders(env) });
+    const vtt = await vttResponse.text();
+    segments = parseVttCaptions(vtt);
+  }
+
+  if (!segments.length) {
+    throw httpError('YouTube returned a caption track, but it contained zero usable lines.', 502, { videoId });
+  }
+
+  return {
+    videoId,
+    source: selection.translateTo ? 'youtube-captions-translated' : 'youtube-captions',
+    language: selection.translateTo || selection.track.languageCode || language,
+    track: {
+      languageCode: selection.track.languageCode,
+      name: captionTrackName(selection.track),
+      kind: selection.track.kind || '',
+      translatedTo: selection.translateTo,
+    },
+    segments,
+  };
+}
+
 async function normalizeAudioChunks(body) {
   const rawChunks = Array.isArray(body?.chunks) && body.chunks.length
     ? body.chunks
@@ -630,7 +924,7 @@ async function normalizeAudioChunks(body) {
     const videoUrl = safeText(body?.videoUrl || body?.video_url || body?.youtubeUrl || body?.youtube_url);
     if (videoUrl) {
       throw httpError(
-        'Cloudflare Worker cannot extract audio directly from a YouTube watch URL. Send audioUrl, audioBase64, or pre-split chunks from a downloader service/R2/Cloudflare Stream.',
+        'No audio payload was provided and YouTube did not expose a usable transcript track. Send audioUrl, audioBase64, upload audio/video, or configure an external downloader for videos without captions.',
         422,
         { videoUrl },
       );
@@ -755,6 +1049,130 @@ async function replaceTranscriptSegments(db, jobId, videoId, segments, language,
   }
 }
 
+async function saveTranscriptResult(db, options) {
+  const jobId = safeText(options.jobId) || shortId('tx');
+  const videoId = safeText(options.videoId);
+  const videoUrl = safeText(options.videoUrl);
+  const language = safeText(options.language) || 'hi';
+  const model = safeText(options.model) || 'transcript-extractor';
+  const source = safeText(options.source) || 'transcript-extractor';
+  const segments = Array.isArray(options.segments) ? options.segments : [];
+  const transcriptText = transcriptTextFromSegments(segments);
+  await insertTranscriptJob(db, {
+    id: jobId,
+    video_id: videoId,
+    video_url: videoUrl,
+    audio_url: '',
+    status: 'running',
+    language,
+    model,
+    source,
+    payload_json: JSON.stringify(options.payload || {}),
+  });
+
+  await replaceTranscriptSegments(db, jobId, videoId, segments, language, source);
+  await updateTranscriptJob(db, jobId, {
+    status: segments.length ? 'complete' : 'empty',
+    transcript_text: transcriptText,
+    segment_count: segments.length,
+    payload_json: JSON.stringify(options.payload || {}),
+  });
+
+  return {
+    job: {
+      id: jobId,
+      video_id: videoId,
+      video_url: videoUrl,
+      status: segments.length ? 'complete' : 'empty',
+      language,
+      model,
+      source,
+      segment_count: segments.length,
+    },
+    transcriptText,
+    segments: segments.map(({ raw, ...segment }) => segment),
+  };
+}
+
+async function saveYouTubeCaptionTranscript(db, env, options) {
+  const videoUrl = safeText(options.videoUrl);
+  const language = safeText(options.language) || 'hi';
+  const captionResult = await fetchYouTubeCaptionSegments(videoUrl, env, language);
+  return saveTranscriptResult(db, {
+    jobId: options.jobId,
+    videoId: safeText(options.videoId) || captionResult.videoId,
+    videoUrl,
+    language: captionResult.language,
+    model: 'youtube-captions',
+    source: captionResult.source,
+    segments: captionResult.segments,
+    payload: {
+      createdBy: 'api',
+      extraction: 'youtube-caption-track',
+      track: captionResult.track,
+    },
+  });
+}
+
+function normalizeExternalTranscriptSegments(rawSegments) {
+  return (Array.isArray(rawSegments) ? rawSegments : []).map((segment, index) => {
+    const start = Number(segment?.start_seconds ?? segment?.start ?? segment?.offsetSeconds ?? segment?.offset_seconds ?? 0);
+    const endValue = segment?.end_seconds ?? segment?.end;
+    const end = endValue == null ? null : Number(endValue);
+    return {
+      segment_index: index,
+      start_seconds: Number.isFinite(start) ? start : 0,
+      end_seconds: Number.isFinite(end) ? end : null,
+      timestamp_label: safeText(segment?.timestamp_label) || secondsToClock(start),
+      text: safeText(segment?.text || segment?.caption || segment?.line),
+      raw: segment,
+    };
+  }).filter((segment) => segment.text);
+}
+
+async function fetchExternalYouTubeTranscript(env, options) {
+  const endpoint = safeText(env?.YOUTUBE_EXTRACTOR_URL || env?.YOUTUBE_TRANSCRIPT_PROXY_URL);
+  if (!endpoint) return null;
+
+  const headers = { 'content-type': 'application/json' };
+  const token = safeText(env?.YOUTUBE_EXTRACTOR_TOKEN);
+  if (token) headers.authorization = `Bearer ${token}`;
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      videoUrl: options.videoUrl,
+      id: options.videoId,
+      language: options.language || 'hi',
+      languages: 'hi.*,hi',
+      preferAudio: true,
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    throw httpError(`External YouTube extractor failed: ${data.error || response.statusText}`, 502);
+  }
+
+  const segments = normalizeExternalTranscriptSegments(data.segments);
+  if (!segments.length) {
+    throw httpError('External YouTube extractor returned zero transcript lines.', 502);
+  }
+
+  return {
+    videoId: safeText(data.id || data.videoId || options.videoId) || extractYouTubeId(options.videoUrl),
+    language: safeText(data.language || options.language) || 'hi',
+    source: safeText(data.source) || 'external-youtube-extractor',
+    model: safeText(data.model) || 'yt-dlp-extractor',
+    segments,
+    payload: {
+      extraction: 'external-youtube-extractor',
+      fileName: data.fileName || '',
+      segmentCount: segments.length,
+    },
+  };
+}
+
 async function transcribeWithWorkersAI(db, env, request) {
   if (!env.AI) {
     throw httpError('Workers AI binding is missing. Deploy with [ai] binding = "AI" in wrangler.toml.', 500);
@@ -767,6 +1185,36 @@ async function transcribeWithWorkersAI(db, env, request) {
   const audioUrl = safeText(body.audioUrl || body.audio_url);
   const source = 'workers-ai-whisper';
   const jobId = safeText(body.jobId || body.job_id) || shortId('tx');
+  if (videoUrl && !hasAudioInput(body)) {
+    try {
+      return await saveYouTubeCaptionTranscript(db, env, { videoUrl, videoId, language, jobId });
+    } catch (youtubeError) {
+      const external = await fetchExternalYouTubeTranscript(env, { videoUrl, videoId, language }).catch((externalError) => {
+        externalError.message = `${youtubeError.message} External fallback also failed: ${externalError.message}`;
+        throw externalError;
+      });
+      if (external) {
+        return saveTranscriptResult(db, {
+          jobId,
+          videoId: external.videoId,
+          videoUrl,
+          language: external.language,
+          model: external.model,
+          source: external.source,
+          segments: external.segments,
+          payload: {
+            ...external.payload,
+            youtubeWorkerError: youtubeError.message,
+          },
+        });
+      }
+      throw httpError(
+        `${youtubeError.message} Configure YOUTUBE_COOKIES_BASE64 or YOUTUBE_EXTRACTOR_URL for server-side YouTube extraction from Cloudflare.`,
+        youtubeError.status || 502,
+        youtubeError.extra || {},
+      );
+    }
+  }
   const chunks = await normalizeAudioChunks(body);
   const initialPrompt = safeText(body.initialPrompt || body.initial_prompt)
     || 'Hindi and Hinglish Delhi fruit mandi market-price conversation. Preserve spoken Hindi words, Hinglish produce names, rupee prices, quantities, quality grades, areas, parties, and timestamps.';

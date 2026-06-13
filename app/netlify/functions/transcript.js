@@ -9,29 +9,34 @@ exports.handler = async (event) => {
     const body = parseBody(event);
     const videoUrl = safeText(body.videoUrl || body.url);
     const id = safeText(body.id || crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, '');
-    const languages = safeText(body.languages || 'hi.*,hi,en.*');
+    const languages = safeText(body.languages || 'hi.*,hi');
 
     if (!/^https?:\/\//i.test(videoUrl)) {
       return json(400, { ok: false, error: 'Invalid video URL.' });
     }
 
     const outTemplate = path.join(tempRoot, '%(id)s.%(ext)s');
-    await runYtdlp(videoUrl, {
-      skipDownload: true,
-      writeSubs: true,
-      writeAutoSubs: true,
-      subLangs: languages,
-      subFormat: 'vtt',
-      output: outTemplate,
-      noWarnings: true,
-    }, { timeout: 25000, cwd: tempRoot });
+    let ytdlpWarning = '';
+    try {
+      await runYtdlp(videoUrl, {
+        skipDownload: true,
+        writeSubs: true,
+        writeAutoSubs: true,
+        subLangs: languages,
+        subFormat: 'vtt',
+        output: outTemplate,
+        noWarnings: true,
+      }, { timeout: 25000, cwd: tempRoot });
+    } catch (error) {
+      ytdlpWarning = error.stderr || error.message;
+    }
 
     const files = fs.readdirSync(tempRoot)
       .filter(file => file.toLowerCase().endsWith('.vtt'))
       .sort((a, b) => languageScore(a) - languageScore(b));
 
     if (!files.length) {
-      return json(404, { ok: false, id, error: 'No transcript/caption file found for this video.' });
+      return json(404, { ok: false, id, error: ytdlpWarning || 'No transcript/caption file found for this video.' });
     }
 
     const selectedFile = files[0];
@@ -45,6 +50,7 @@ exports.handler = async (event) => {
       language: guessLanguage(selectedFile),
       fileName: selectedFile,
       segmentCount: segments.length,
+      warning: ytdlpWarning,
       transcriptText,
       segments,
     });
