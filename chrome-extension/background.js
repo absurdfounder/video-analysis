@@ -1,5 +1,21 @@
 importScripts('classify.js');
 
+// #region agent log
+async function debugLog(location, message, data, hypothesisId) {
+  const payload = { sessionId: '016b85', location, message, data, hypothesisId, timestamp: Date.now(), runId: 'pre-fix' };
+  try {
+    await fetch('http://127.0.0.1:7637/ingest/079449d1-fbfd-42c5-8d2f-f90f056ba0f5', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '016b85' },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // Debug server may be unavailable.
+  }
+  console.log('[debug]', location, message, data);
+}
+// #endregion
+
 const STORAGE_DEFAULTS = {
   channelUrl: 'https://www.youtube.com/@delhifruitmarket/videos',
   knownVideoIds: [],
@@ -428,6 +444,9 @@ async function processNextTranscriptInBatch() {
   } catch (error) {
     video.status = 'failed';
     video.error = safeText(error?.message || error).slice(0, 200);
+    // #region agent log
+    await debugLog('background.js:processNextTranscriptInBatch:fail', 'batch video failed', { videoId, error: video.error }, 'H5');
+    // #endregion
     broadcastTranscriptBatchEvent({
       event: 'progress',
       videoId,
@@ -590,21 +609,60 @@ async function fetchTranscriptFromHtml(videoUrl, id, languages) {
 
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
+  // #region agent log
+  await debugLog('background.js:fetchTranscriptInYouTubeTab:start', 'transcript fetch started', { videoId, tabId, videoUrl }, 'H1');
+  // #endregion
   await prepareWorkerTab(tabId);
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
 
+  let tabUrl = '';
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    tabUrl = tab?.url || '';
+  } catch {
+    tabUrl = 'tab-missing';
+  }
+  // #region agent log
+  await debugLog('background.js:fetchTranscriptInYouTubeTab:after-nav', 'worker tab after navigation', { videoId, tabId, tabUrl, urlHasVideoId: tabUrl.includes(videoId) }, 'H1');
+  // #endregion
+
   let lastHtml = '';
+  let apiErrorMsg = '';
   try {
     lastHtml = await fetchTextViaYouTubeTab(videoUrl);
+    // #region agent log
+    await debugLog('background.js:fetchTranscriptInYouTubeTab:html', 'fetched watch page html', { videoId, htmlLen: lastHtml.length, hasPlayerMarker: lastHtml.includes('ytInitialPlayerResponse') }, 'H2');
+    // #endregion
     const apiResult = await buildTranscriptFromPlayerHtml(lastHtml, videoId, languages, tabId, 'page-html');
-    if (apiResult?.ok) return apiResult;
-  } catch {
-    // Fall through to panel scrape.
+    if (apiResult?.ok) {
+      // #region agent log
+      await debugLog('background.js:fetchTranscriptInYouTubeTab:api-ok', 'API path succeeded', { videoId, method: apiResult.method, segmentCount: apiResult.segments?.length || 0 }, 'H2');
+      // #endregion
+      return apiResult;
+    }
+  } catch (apiError) {
+    apiErrorMsg = String(apiError?.message || apiError);
+    // #region agent log
+    await debugLog('background.js:fetchTranscriptInYouTubeTab:api-catch', 'API path threw', { videoId, error: apiErrorMsg }, 'H3');
+    // #endregion
   }
 
+  // #region agent log
+  await debugLog('background.js:fetchTranscriptInYouTubeTab:panel-start', 'starting panel fallback', { videoId, tabId, priorApiError: apiErrorMsg }, 'H4');
+  // #endregion
   const panelResult = await withBriefTabFocus(tabId, async () => {
     return runInYouTubeTab(fetchTranscriptFromPanelInPage, [], tabId);
   });
+
+  // #region agent log
+  await debugLog('background.js:fetchTranscriptInYouTubeTab:panel-result', 'panel fallback finished', {
+    videoId,
+    ok: Boolean(panelResult?.ok),
+    error: panelResult?.error || '',
+    segmentCount: panelResult?.segments?.length || 0,
+    debug: panelResult?.debug || null,
+  }, 'H4');
+  // #endregion
 
   if (panelResult?.ok && panelResult.segments?.length) {
     return {
@@ -616,7 +674,7 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
     };
   }
 
-  throw new Error(panelResult?.error || 'Could not download captions. Stay signed in at youtube.com and retry.');
+  throw new Error(panelResult?.error || apiErrorMsg || 'Could not download captions. Stay signed in at youtube.com and retry.');
 }
 
 async function withBriefTabFocus(tabId, fn) {
@@ -876,15 +934,20 @@ async function fetchTextViaYouTubeTab(url) {
 
 async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, methodPrefix) {
   const player = extractJsonObject(html, 'ytInitialPlayerResponse');
-  if (player?.videoDetails?.videoId !== videoId) {
-    throw new Error('Player HTML did not match requested video.');
+  const playerVideoId = player?.videoDetails?.videoId || '';
+  if (playerVideoId !== videoId) {
+    throw new Error(`Player HTML did not match requested video (${playerVideoId || 'missing'}).`);
   }
 
   const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+  let captionSegCount = 0;
+  let captionFormat = '';
   if (tracks.length) {
     const selected = chooseCaptionTrack(tracks, languages);
     const captionResult = await runInYouTubeTab(fetchCaptionTrackInPage, [selected.baseUrl], tabId);
-    if (captionResult?.segments?.length) {
+    captionSegCount = captionResult?.segments?.length || 0;
+    captionFormat = captionResult?.format || captionResult?.error || 'none';
+    if (captionSegCount) {
       return {
         ok: true,
         language: selected.languageCode || 'unknown',
@@ -896,9 +959,13 @@ async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, me
   }
 
   const params = extractTranscriptParams(player, html);
+  let innerTubeOk = false;
+  let innerTubeError = '';
   if (params) {
     const innerTubeResult = await runInYouTubeTab(fetchInnerTubeTranscriptInPage, [params], tabId);
-    if (innerTubeResult?.ok) {
+    innerTubeOk = Boolean(innerTubeResult?.ok);
+    innerTubeError = innerTubeResult?.error || '';
+    if (innerTubeOk) {
       return {
         ok: true,
         language: chooseCaptionTrack(tracks, languages)?.languageCode || 'unknown',
@@ -908,6 +975,18 @@ async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, me
       };
     }
   }
+
+  // #region agent log
+  await debugLog('background.js:buildTranscriptFromPlayerHtml:fail', 'API build failed', {
+    videoId,
+    trackCount: tracks.length,
+    captionSegCount,
+    captionFormat,
+    hasParams: Boolean(params),
+    innerTubeOk,
+    innerTubeError,
+  }, 'H2');
+  // #endregion
 
   throw new Error(tracks.length ? 'Caption track download returned empty.' : 'No caption tracks on this video.');
 }
@@ -1010,8 +1089,14 @@ function fetchTranscriptFromPanelInPage() {
     }
 
     const transcriptButton = findShowTranscriptButton();
+    const pageUrl = window.location.href;
+    const debugBase = {
+      pageUrl,
+      hasMoreButton: Boolean(moreButton),
+      hasTranscriptButton: Boolean(transcriptButton),
+    };
     if (!transcriptButton) {
-      return { ok: false, error: 'Show transcript button not found on this video.' };
+      return { ok: false, error: 'Show transcript button not found on this video.', debug: { ...debugBase, nodeCount: 0, panelFound: false } };
     }
 
     transcriptButton.click();
@@ -1019,12 +1104,27 @@ function fetchTranscriptFromPanelInPage() {
 
     for (let attempt = 0; attempt < 40; attempt++) {
       mutePlayer();
+      const panel = transcriptPanelRoot();
+      const nodes = (panel || document).querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model');
       const segments = extractSegmentsFromPanel();
-      if (segments.length) return { ok: true, segments, format: 'dom' };
+      if (segments.length) {
+        return {
+          ok: true,
+          segments,
+          format: 'dom',
+          debug: { ...debugBase, panelFound: Boolean(panel), nodeCount: nodes.length, attempts: attempt + 1 },
+        };
+      }
       await sleep(500);
     }
 
-    return { ok: false, error: 'Transcript panel opened but segments did not load.' };
+    const panel = transcriptPanelRoot();
+    const nodes = (panel || document).querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model');
+    return {
+      ok: false,
+      error: 'Transcript panel opened but segments did not load.',
+      debug: { ...debugBase, panelFound: Boolean(panel), nodeCount: nodes.length, attempts: 40 },
+    };
   })();
 }
 
