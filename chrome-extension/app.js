@@ -562,9 +562,6 @@ function applySavedProject(saved, { keepRunning } = {}) {
 }
 
 function syncFromStorageChanges(changes) {
-  const jobRunning = changes.transcriptBatchJob?.newValue?.running
-    || (changes.transcriptBatchJob === undefined && state.runningTask);
-
   if (changes.fruitTranscriptMinerStateV2?.newValue) {
     applySavedProject(changes.fruitTranscriptMinerStateV2.newValue, {
       keepRunning: Boolean(changes.transcriptBatchJob?.newValue?.running),
