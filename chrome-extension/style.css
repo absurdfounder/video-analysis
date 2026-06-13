@@ -199,6 +199,17 @@ h1 {
   margin-bottom: 16px;
 }
 
+.batch-controls {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.batch-controls .btn-large {
+  margin-bottom: 16px;
+}
+
 .btn-secondary { background: var(--soft-green); color: var(--green-dark); }
 .btn-ghost { background: #eceee9; color: var(--muted); }
 
@@ -584,4 +595,5 @@ input {
   .step { grid-template-columns: auto 1fr; justify-items: start; text-align: left; }
   .step-num { grid-row: span 2; }
   .card-actions { grid-template-columns: 1fr; }
+  .batch-controls { grid-template-columns: 1fr; }
 }

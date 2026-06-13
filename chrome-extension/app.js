@@ -481,14 +481,15 @@ function updateUI() {
 
   const busy = Boolean(state.runningTask);
   for (let i = 1; i <= 4; i++) setDisabled(`stepBtn${i}`, busy);
+  setDisabled('stopTranscriptBatchBtn', !busy);
   if ($('stepBtn2')) {
     $('stepBtn2').textContent = transcriptStats.failed && transcriptStats.waiting
-      ? `Try ${transcriptStats.waiting} + retry ${transcriptStats.failed}`
+      ? `Start ${transcriptStats.waiting} + retry ${transcriptStats.failed}`
       : transcriptStats.failed
-        ? `Retry ${transcriptStats.failed} failed transcript${transcriptStats.failed === 1 ? '' : 's'}`
+        ? `Start retry for ${transcriptStats.failed} failed transcript${transcriptStats.failed === 1 ? '' : 's'}`
         : transcriptStats.waiting
-          ? `Try ${transcriptStats.waiting} transcript${transcriptStats.waiting === 1 ? '' : 's'}`
-          : 'Try automatic transcript fetch';
+          ? `Start ${transcriptStats.waiting} transcript${transcriptStats.waiting === 1 ? '' : 's'}`
+          : 'Start missing-gap fill';
   }
 
   document.querySelectorAll('.step').forEach(el => {
@@ -611,7 +612,7 @@ async function fetchTranscriptsStep() {
   }
 
   await saveLocal();
-  log(`Trying ${pending.length} transcript(s). Reliable capture needs each YouTube page open with its transcript panel visible; hidden-tab background fetch is best-effort.`);
+  log(`Started missing-gap fill for ${pending.length} transcript(s). Use Stop to pause the batch.`);
 
   const data = await api('/api/fetch-transcripts-batch', {
     delayMs,
@@ -619,7 +620,7 @@ async function fetchTranscriptsStep() {
   });
 
   if (data.alreadyRunning) {
-    log('Transcript batch already running.');
+    log('Transcript batch already running. Use Stop to pause it.');
     setBusy(true);
     return;
   }
@@ -631,6 +632,16 @@ async function fetchTranscriptsStep() {
 
   setBusy(true);
   goToStep(2);
+}
+
+async function stopTranscriptsStep() {
+  const data = await api('/api/stop-transcripts-batch', { reason: 'Stopped by user.' });
+  if (data.stopped) {
+    setBusy(false);
+    normalizeVideos();
+    renderVideos();
+    log('Transcript batch stopped.');
+  }
 }
 
 function applySavedProject(saved, { keepRunning } = {}) {
@@ -657,6 +668,10 @@ function syncFromStorageChanges(changes) {
   if (changes.transcriptBatchJob?.newValue) {
     const job = changes.transcriptBatchJob.newValue;
     setBusy(Boolean(job?.running));
+    if (!job?.running && job?.stoppedAt) {
+      log('Transcript batch stopped.');
+      return;
+    }
     if (!job?.running && job?.finishedAt) {
       log(`Background transcript batch finished (${job.done || 0}/${job.total || 0}).`);
       goToStep(3);
@@ -751,6 +766,11 @@ $('stepBtn1')?.addEventListener('click', async () => {
 $('stepBtn2')?.addEventListener('click', async () => {
   try { await fetchTranscriptsStep(); }
   catch (e) { log(`Step 2 failed: ${e.message}`); setBusy(false); }
+});
+
+$('stopTranscriptBatchBtn')?.addEventListener('click', async () => {
+  try { await stopTranscriptsStep(); }
+  catch (e) { log(`Stop failed: ${e.message}`); }
 });
 
 $('stepBtn3')?.addEventListener('click', async () => {
@@ -895,7 +915,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.15 — manual capture modal';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.16 — manual start stop';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

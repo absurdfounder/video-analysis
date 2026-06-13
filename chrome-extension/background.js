@@ -12,7 +12,7 @@ const STORAGE_DEFAULTS = {
 chrome.runtime.onInstalled.addListener(async () => {
   const settings = await loadChannelSettings();
   await schedulePoll(settings.pollIntervalMinutes);
-  await resumeTranscriptBatchIfNeeded();
+  await stopTranscriptBatch({ reason: 'Extension loaded. Batch jobs now start only from the Start button.' });
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -72,6 +72,7 @@ async function handleApi(path, body) {
   if (path === '/api/channel-settings') return channelSettings(body);
   if (path === '/api/mark-processed') return markProcessed(body);
   if (path === '/api/fetch-transcripts-batch') return fetchTranscriptsBatch(body);
+  if (path === '/api/stop-transcripts-batch') return stopTranscriptBatch(body);
   if (path === '/api/transcript-batch-status') return transcriptBatchStatus();
   return { ok: false, error: `Unknown extension API route: ${path}` };
 }
@@ -346,14 +347,6 @@ async function fetchTranscriptsBatch(body) {
   return { ok: true, started: true, total: pending.length };
 }
 
-async function resumeTranscriptBatchIfNeeded() {
-  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
-  const job = stored[TRANSCRIPT_BATCH_KEY];
-  if (job?.running && job.queue?.length) {
-    processNextTranscriptInBatch().catch(error => console.warn('Transcript batch resume failed:', error));
-  }
-}
-
 async function finishTranscriptBatch(job, doneCount) {
   await chrome.storage.local.set({
     [TRANSCRIPT_BATCH_KEY]: {
@@ -367,6 +360,34 @@ async function finishTranscriptBatch(job, doneCount) {
   });
   await saveProjectState({ currentStep: 3 });
   broadcastTranscriptBatchEvent({ event: 'complete', done: doneCount, total: job.total || doneCount });
+}
+
+async function stopTranscriptBatch(body = {}) {
+  await chrome.alarms.clear('processNextTranscript');
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  const job = stored[TRANSCRIPT_BATCH_KEY] || {};
+  const project = await loadProjectState();
+  const videos = (project.videos || []).map(video => (
+    video.status === 'running'
+      ? { ...video, status: 'pending', error: '' }
+      : video
+  ));
+
+  await saveProjectState({ videos, currentStep: 2 });
+  await chrome.storage.local.set({
+    [TRANSCRIPT_BATCH_KEY]: {
+      ...job,
+      running: false,
+      queue: [],
+      currentId: null,
+      currentTitle: null,
+      stoppedAt: new Date().toISOString(),
+      stopReason: safeText(body.reason || 'Stopped by user.'),
+    },
+  });
+  batchProcessing = false;
+  broadcastTranscriptBatchEvent({ event: 'stopped', reason: safeText(body.reason || 'Stopped by user.') });
+  return { ok: true, stopped: true };
 }
 
 async function processNextTranscriptInBatch() {
@@ -411,6 +432,11 @@ async function processNextTranscriptInBatch() {
 
   try {
     const result = await transcript({ id: video.id, videoUrl: video.url, languages: job.languages });
+    const latest = (await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY))[TRANSCRIPT_BATCH_KEY];
+    if (!latest?.running || latest.currentId !== videoId) {
+      batchProcessing = false;
+      return;
+    }
     if (!result.segments?.length) {
       throw new Error(result.error || 'Transcript returned zero caption lines.');
     }
@@ -433,6 +459,11 @@ async function processNextTranscriptInBatch() {
       method: result.method || '',
     });
   } catch (error) {
+    const latest = (await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY))[TRANSCRIPT_BATCH_KEY];
+    if (!latest?.running || latest.currentId !== videoId) {
+      batchProcessing = false;
+      return;
+    }
     video.status = 'failed';
     video.error = safeText(error?.message || error).slice(0, 200);
     broadcastTranscriptBatchEvent({
@@ -467,7 +498,7 @@ async function processNextTranscriptInBatch() {
 }
 
 chrome.runtime.onStartup.addListener(() => {
-  resumeTranscriptBatchIfNeeded().catch(() => {});
+  stopTranscriptBatch({ reason: 'Browser restarted. Batch jobs now start only from the Start button.' }).catch(() => {});
 });
 
 async function listVideos(body) {
