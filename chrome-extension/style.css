@@ -460,6 +460,33 @@ body.modal-open { overflow: hidden; }
   font-size: 13px;
 }
 
+.batch-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--soft-green);
+  border: 1px solid var(--line);
+}
+
+.batch-controls.hidden { display: none; }
+
+.batch-progress {
+  margin: 0;
+  font-weight: 700;
+  color: var(--green-dark);
+  font-size: 14px;
+}
+
+.batch-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .sync-summary {
   padding: 14px;
   border-radius: 14px;

@@ -11,6 +11,7 @@ const state = {
   runningTask: '',
   currentStep: 1,
   lastSync: null,
+  batchJob: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -404,7 +405,10 @@ function updateUI() {
   if ($('statPrices')) $('statPrices').textContent = state.priceRows.length;
 
   const busy = Boolean(state.runningTask);
-  for (let i = 1; i <= 4; i++) setDisabled(`stepBtn${i}`, busy);
+  const batchRunning = Boolean(state.batchJob?.running && !state.batchJob?.paused);
+  for (let i = 1; i <= 4; i++) {
+    setDisabled(`stepBtn${i}`, busy || (i === 2 && batchRunning));
+  }
 
   document.querySelectorAll('.step').forEach(el => {
     const n = Number(el.dataset.step);
@@ -414,11 +418,53 @@ function updateUI() {
   if ($('syncSummary') && state.lastSync) {
     $('syncSummary').textContent = `Last dataset update: ${new Date(state.lastSync).toLocaleString()} · ${state.priceRows.length} price rows · ${state.videos.length} videos`;
   }
+
+  updateBatchControls();
+}
+
+function updateBatchControls() {
+  const controls = $('transcriptBatchControls');
+  const progress = $('batchProgress');
+  const pauseBtn = $('pauseTranscriptsBtn');
+  const stopBtn = $('stopTranscriptsBtn');
+  const job = state.batchJob;
+  const running = Boolean(job?.running);
+  const paused = Boolean(job?.paused);
+
+  if (controls) controls.classList.toggle('hidden', !running && !paused);
+  if (progress && job) {
+    const done = job.done || 0;
+    const total = job.total || 0;
+    const current = job.currentTitle || job.currentId || '';
+    if (paused) {
+      progress.textContent = `Paused · ${done}/${total} done${current ? ` · last: ${current}` : ''}`;
+    } else if (current) {
+      progress.textContent = `Fetching ${done + 1}/${total}: ${current}`;
+    } else {
+      progress.textContent = `Fetching transcripts · ${done}/${total} done`;
+    }
+  }
+  if (pauseBtn) {
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+    pauseBtn.disabled = !running;
+  }
+  if (stopBtn) stopBtn.disabled = !running && !paused;
 }
 
 function setBusy(busy) {
   state.runningTask = busy ? 'busy' : '';
   updateUI();
+  updateBatchControls();
+}
+
+async function refreshBatchJob() {
+  try {
+    const data = await api('/api/transcript-batch-status');
+    state.batchJob = data.job || null;
+  } catch {
+    state.batchJob = null;
+  }
+  updateBatchControls();
 }
 
 async function saveLocal() {
@@ -535,7 +581,8 @@ async function fetchTranscriptsStep() {
 
   if (data.alreadyRunning) {
     log('Transcript batch already running in background.');
-    setBusy(true);
+    await refreshBatchJob();
+    updateBatchControls();
     return;
   }
 
@@ -544,8 +591,32 @@ async function fetchTranscriptsStep() {
     return;
   }
 
-  setBusy(true);
+  await refreshBatchJob();
+  updateBatchControls();
   goToStep(2);
+}
+
+async function pauseOrResumeTranscripts() {
+  const job = state.batchJob;
+  if (!job?.running) return;
+  if (job.paused) {
+    await api('/api/resume-transcripts-batch');
+    log('Resumed transcript batch.');
+  } else {
+    await api('/api/pause-transcripts-batch');
+    log('Paused transcript batch.');
+  }
+  await refreshBatchJob();
+}
+
+async function stopTranscripts() {
+  const job = state.batchJob;
+  if (!job?.running && !job?.paused) return;
+  await api('/api/cancel-transcripts-batch');
+  await refreshBatchJob();
+  normalizeVideos();
+  renderVideos();
+  log('Stopped transcript batch.');
 }
 
 function applySavedProject(saved, { keepRunning } = {}) {
@@ -564,17 +635,21 @@ function applySavedProject(saved, { keepRunning } = {}) {
 function syncFromStorageChanges(changes) {
   if (changes.fruitTranscriptMinerStateV2?.newValue) {
     applySavedProject(changes.fruitTranscriptMinerStateV2.newValue, {
-      keepRunning: Boolean(changes.transcriptBatchJob?.newValue?.running),
+      keepRunning: Boolean(changes.transcriptBatchJob?.newValue?.running || state.batchJob?.running),
     });
     if (state.currentStep) goToStep(state.currentStep);
+    renderVideos();
   }
 
   if (changes.transcriptBatchJob?.newValue) {
-    const job = changes.transcriptBatchJob.newValue;
-    setBusy(Boolean(job?.running));
-    if (!job?.running && job?.finishedAt) {
-      log(`Background transcript batch finished (${job.done || 0}/${job.total || 0}).`);
+    state.batchJob = changes.transcriptBatchJob.newValue;
+    updateBatchControls();
+    if (!state.batchJob?.running && state.batchJob?.finishedAt) {
+      log(`Background transcript batch finished (${state.batchJob.done || 0}/${state.batchJob.total || 0}).`);
       goToStep(3);
+    }
+    if (state.batchJob?.cancelledAt) {
+      log(`Transcript batch stopped (${state.batchJob.done || 0}/${state.batchJob.total || 0} completed).`);
     }
   }
 }
@@ -666,6 +741,16 @@ $('stepBtn1')?.addEventListener('click', async () => {
 $('stepBtn2')?.addEventListener('click', async () => {
   try { await fetchTranscriptsStep(); }
   catch (e) { log(`Step 2 failed: ${e.message}`); setBusy(false); }
+});
+
+$('pauseTranscriptsBtn')?.addEventListener('click', async () => {
+  try { await pauseOrResumeTranscripts(); }
+  catch (e) { log(`Pause/resume failed: ${e.message}`); }
+});
+
+$('stopTranscriptsBtn')?.addEventListener('click', async () => {
+  try { await stopTranscripts(); }
+  catch (e) { log(`Stop failed: ${e.message}`); }
 });
 
 $('stepBtn3')?.addEventListener('click', async () => {
@@ -769,31 +854,40 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type !== 'transcript-batch-event') return;
   if (message.event === 'complete') {
-    setBusy(false);
     goToStep(3);
     log(`Transcript batch complete (${message.done || 0} videos).`);
+    refreshBatchJob().then(() => renderVideos());
+    return;
+  }
+  if (message.event === 'cancelled') {
+    refreshBatchJob().then(() => {
+      normalizeVideos();
+      renderVideos();
+    });
+    return;
+  }
+  if (message.event === 'paused' || message.event === 'resumed') {
+    refreshBatchJob();
     return;
   }
   if (message.event === 'progress') {
     if (message.status === 'running') {
       log(`Fetching transcript: ${message.title || message.videoId}...`);
-      return;
-    }
-    if (message.status === 'ok') {
+    } else if (message.status === 'ok') {
       log(`Transcript loaded: ${message.title || message.videoId} (${message.segmentCount || 0} lines${message.method ? ` · ${message.method}` : ''})`);
-      return;
-    }
-    if (message.status === 'failed') {
+    } else if (message.status === 'failed') {
       log(`Transcript failed: ${message.title || message.videoId}: ${message.error || 'unknown error'}`);
     }
+    refreshBatchJob().then(() => renderVideos());
   }
 });
 
-api('/api/transcript-batch-status').then((data) => {
-  if (data?.job?.running) {
-    setBusy(true);
+api('/api/transcript-batch-status').then(async (data) => {
+  state.batchJob = data?.job || null;
+  if (state.batchJob?.running) {
     normalizeVideos({ keepRunning: true });
     renderVideos();
+    updateBatchControls();
   } else {
     normalizeVideos();
     renderVideos();
@@ -804,7 +898,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'API first, then one Show transcript click if needed — brief tab focus only as fallback';
+    if ($('statusText')) $('statusText').textContent = 'Minimized background window — no tab switching. Pause/Stop available during batch.';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

@@ -58,7 +58,14 @@
 
     <section class="step-panel" id="panel-2">
       <p class="step-desc" id="stepDesc2">Download Hindi captions for relevant videos only. This is the slow step.</p>
-      <p class="hint youtube-hint">Tries caption API first, then clicks <strong>Show transcript</strong> once if needed. Briefly focuses the worker tab only for that fallback, then returns you to your previous tab.</p>
+      <p class="hint youtube-hint">Runs in a <strong>minimized background window</strong> — your current tab is never switched. Caption API is tried first; Show transcript is clicked only if needed.</p>
+      <div class="batch-controls hidden" id="transcriptBatchControls">
+        <p class="batch-progress" id="batchProgress">Preparing batch...</p>
+        <div class="batch-actions">
+          <button id="pauseTranscriptsBtn" class="btn-secondary" type="button">Pause</button>
+          <button id="stopTranscriptsBtn" class="btn-ghost" type="button">Stop</button>
+        </div>
+      </div>
       <button id="stepBtn2" class="btn-primary btn-large" type="button">Fetch transcripts</button>
       <div id="transcriptList" class="date-groups"></div>
     </section>

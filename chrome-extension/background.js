@@ -1,21 +1,5 @@
 importScripts('classify.js');
 
-// #region agent log
-async function debugLog(location, message, data, hypothesisId) {
-  const payload = { sessionId: '016b85', location, message, data, hypothesisId, timestamp: Date.now(), runId: 'pre-fix' };
-  try {
-    await fetch('http://127.0.0.1:7637/ingest/079449d1-fbfd-42c5-8d2f-f90f056ba0f5', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '016b85' },
-      body: JSON.stringify(payload),
-    });
-  } catch {
-    // Debug server may be unavailable.
-  }
-  console.log('[debug]', location, message, data);
-}
-// #endregion
-
 const STORAGE_DEFAULTS = {
   channelUrl: 'https://www.youtube.com/@delhifruitmarket/videos',
   knownVideoIds: [],
@@ -36,6 +20,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   if (tabId === cachedYouTubeTabId || tabId === storedId) {
     cachedYouTubeTabId = null;
     await setStoredWorkerTabId(null);
+    await setStoredWorkerWindowId(null);
   }
 });
 
@@ -88,6 +73,9 @@ async function handleApi(path, body) {
   if (path === '/api/mark-processed') return markProcessed(body);
   if (path === '/api/fetch-transcripts-batch') return fetchTranscriptsBatch(body);
   if (path === '/api/transcript-batch-status') return transcriptBatchStatus();
+  if (path === '/api/pause-transcripts-batch') return pauseTranscriptBatch();
+  if (path === '/api/resume-transcripts-batch') return resumeTranscriptBatch();
+  if (path === '/api/cancel-transcripts-batch') return cancelTranscriptBatch();
   return { ok: false, error: `Unknown extension API route: ${path}` };
 }
 
@@ -342,6 +330,7 @@ async function fetchTranscriptsBatch(body) {
   await chrome.storage.local.set({
     [TRANSCRIPT_BATCH_KEY]: {
       running: true,
+      paused: false,
       queue: pending.map(video => video.id),
       delayMs,
       languages,
@@ -361,7 +350,7 @@ async function fetchTranscriptsBatch(body) {
 async function resumeTranscriptBatchIfNeeded() {
   const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
   const job = stored[TRANSCRIPT_BATCH_KEY];
-  if (job?.running && job.queue?.length) {
+  if (job?.running && !job.paused && job.queue?.length) {
     processNextTranscriptInBatch().catch(error => console.warn('Transcript batch resume failed:', error));
   }
 }
@@ -386,6 +375,7 @@ async function processNextTranscriptInBatch() {
 
   const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
   const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (job?.paused) return;
   if (!job?.running || !job.queue?.length) {
     if (job?.running) await finishTranscriptBatch(job, job.done || 0);
     return;
@@ -444,9 +434,6 @@ async function processNextTranscriptInBatch() {
   } catch (error) {
     video.status = 'failed';
     video.error = safeText(error?.message || error).slice(0, 200);
-    // #region agent log
-    await debugLog('background.js:processNextTranscriptInBatch:fail', 'batch video failed', { videoId, error: video.error }, 'H5');
-    // #endregion
     broadcastTranscriptBatchEvent({
       event: 'progress',
       videoId,
@@ -472,10 +459,67 @@ async function processNextTranscriptInBatch() {
   batchProcessing = false;
 
   if (nextQueue.length) {
+    const latest = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+    if (latest[TRANSCRIPT_BATCH_KEY]?.paused) return;
     chrome.alarms.create('processNextTranscript', { when: Date.now() + job.delayMs });
   } else {
     await finishTranscriptBatch(nextJob, nextJob.done);
   }
+}
+
+async function pauseTranscriptBatch() {
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (!job?.running) return { ok: true, paused: false, message: 'No batch running.' };
+
+  await chrome.alarms.clear('processNextTranscript');
+  await chrome.storage.local.set({
+    [TRANSCRIPT_BATCH_KEY]: { ...job, paused: true, currentId: job.currentId, currentTitle: job.currentTitle },
+  });
+  batchProcessing = false;
+  broadcastTranscriptBatchEvent({ event: 'paused', done: job.done || 0, total: job.total || 0 });
+  return { ok: true, paused: true };
+}
+
+async function resumeTranscriptBatch() {
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (!job?.running || !job.paused) return { ok: true, resumed: false, message: 'Batch is not paused.' };
+
+  await chrome.storage.local.set({
+    [TRANSCRIPT_BATCH_KEY]: { ...job, paused: false },
+  });
+  broadcastTranscriptBatchEvent({ event: 'resumed', done: job.done || 0, total: job.total || 0 });
+  processNextTranscriptInBatch().catch(error => console.warn('Transcript batch resume failed:', error));
+  return { ok: true, resumed: true };
+}
+
+async function cancelTranscriptBatch() {
+  await chrome.alarms.clear('processNextTranscript');
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (!job?.running) return { ok: true, cancelled: false, message: 'No batch running.' };
+
+  const project = await loadProjectState();
+  const videos = (project.videos || []).map(video => (
+    video.status === 'running' ? { ...video, status: 'pending', error: '' } : video
+  ));
+  await saveProjectState({ videos, currentStep: 2 });
+
+  await chrome.storage.local.set({
+    [TRANSCRIPT_BATCH_KEY]: {
+      ...job,
+      running: false,
+      paused: false,
+      queue: [],
+      currentId: null,
+      currentTitle: null,
+      cancelledAt: new Date().toISOString(),
+    },
+  });
+  batchProcessing = false;
+  broadcastTranscriptBatchEvent({ event: 'cancelled', done: job.done || 0, total: job.total || 0 });
+  return { ok: true, cancelled: true };
 }
 
 chrome.runtime.onStartup.addListener(() => {
@@ -609,60 +653,29 @@ async function fetchTranscriptFromHtml(videoUrl, id, languages) {
 
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
-  // #region agent log
-  await debugLog('background.js:fetchTranscriptInYouTubeTab:start', 'transcript fetch started', { videoId, tabId, videoUrl }, 'H1');
-  // #endregion
   await prepareWorkerTab(tabId);
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
-
-  let tabUrl = '';
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    tabUrl = tab?.url || '';
-  } catch {
-    tabUrl = 'tab-missing';
-  }
-  // #region agent log
-  await debugLog('background.js:fetchTranscriptInYouTubeTab:after-nav', 'worker tab after navigation', { videoId, tabId, tabUrl, urlHasVideoId: tabUrl.includes(videoId) }, 'H1');
-  // #endregion
+  await waitForVideoPageReady(tabId, videoId);
 
   let lastHtml = '';
   let apiErrorMsg = '';
   try {
-    lastHtml = await fetchTextViaYouTubeTab(videoUrl);
-    // #region agent log
-    await debugLog('background.js:fetchTranscriptInYouTubeTab:html', 'fetched watch page html', { videoId, htmlLen: lastHtml.length, hasPlayerMarker: lastHtml.includes('ytInitialPlayerResponse') }, 'H2');
-    // #endregion
-    const apiResult = await buildTranscriptFromPlayerHtml(lastHtml, videoId, languages, tabId, 'page-html');
-    if (apiResult?.ok) {
-      // #region agent log
-      await debugLog('background.js:fetchTranscriptInYouTubeTab:api-ok', 'API path succeeded', { videoId, method: apiResult.method, segmentCount: apiResult.segments?.length || 0 }, 'H2');
-      // #endregion
-      return apiResult;
+    const pageData = await runInYouTubeTab(() => ({
+      html: document.documentElement.innerHTML,
+      player: window.ytInitialPlayerResponse || null,
+    }), [], tabId);
+    lastHtml = pageData?.html || '';
+    if (pageData?.player?.videoDetails?.videoId === videoId) {
+      const apiResult = await buildTranscriptFromPlayerObject(pageData.player, lastHtml, videoId, languages, tabId, 'page-live');
+      if (apiResult?.ok) return apiResult;
     }
+    const apiResult = await buildTranscriptFromPlayerHtml(lastHtml, videoId, languages, tabId, 'page-html');
+    if (apiResult?.ok) return apiResult;
   } catch (apiError) {
     apiErrorMsg = String(apiError?.message || apiError);
-    // #region agent log
-    await debugLog('background.js:fetchTranscriptInYouTubeTab:api-catch', 'API path threw', { videoId, error: apiErrorMsg }, 'H3');
-    // #endregion
   }
 
-  // #region agent log
-  await debugLog('background.js:fetchTranscriptInYouTubeTab:panel-start', 'starting panel fallback', { videoId, tabId, priorApiError: apiErrorMsg }, 'H4');
-  // #endregion
-  const panelResult = await withBriefTabFocus(tabId, async () => {
-    return runInYouTubeTab(fetchTranscriptFromPanelInPage, [], tabId);
-  });
-
-  // #region agent log
-  await debugLog('background.js:fetchTranscriptInYouTubeTab:panel-result', 'panel fallback finished', {
-    videoId,
-    ok: Boolean(panelResult?.ok),
-    error: panelResult?.error || '',
-    segmentCount: panelResult?.segments?.length || 0,
-    debug: panelResult?.debug || null,
-  }, 'H4');
-  // #endregion
+  const panelResult = await runInYouTubeTab(fetchTranscriptFromPanelInPage, [], tabId);
 
   if (panelResult?.ok && panelResult.segments?.length) {
     return {
@@ -675,23 +688,6 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   }
 
   throw new Error(panelResult?.error || apiErrorMsg || 'Could not download captions. Stay signed in at youtube.com and retry.');
-}
-
-async function withBriefTabFocus(tabId, fn) {
-  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  try {
-    await chrome.tabs.update(tabId, { active: true });
-    await sleep(400);
-    return await fn();
-  } finally {
-    if (activeTab?.id && activeTab.id !== tabId) {
-      try {
-        await chrome.tabs.update(activeTab.id, { active: true });
-      } catch {
-        // Previous tab may have closed.
-      }
-    }
-  }
 }
 
 function extractPrices(body) {
@@ -752,7 +748,27 @@ async function extractPricesAi(body) {
 
 let cachedYouTubeTabId = null;
 const WORKER_TAB_KEY = 'youtubeWorkerTabId';
+const WORKER_WINDOW_KEY = 'youtubeWorkerWindowId';
 const WORKER_TAB_URL = 'https://www.youtube.com/?fruit_miner=worker';
+
+async function getStoredWorkerWindowId() {
+  const data = await chrome.storage.local.get(WORKER_WINDOW_KEY);
+  return data[WORKER_WINDOW_KEY] || null;
+}
+
+async function setStoredWorkerWindowId(windowId) {
+  if (windowId) await chrome.storage.local.set({ [WORKER_WINDOW_KEY]: windowId });
+  else await chrome.storage.local.remove(WORKER_WINDOW_KEY);
+}
+
+async function keepWorkerWindowHidden(windowId) {
+  if (!windowId) return;
+  try {
+    await chrome.windows.update(windowId, { focused: false, state: 'minimized' });
+  } catch {
+    // Window may have been closed.
+  }
+}
 
 async function getStoredWorkerTabId() {
   const data = await chrome.storage.local.get(WORKER_TAB_KEY);
@@ -850,50 +866,84 @@ async function prepareWorkerTab(tabId) {
   await muteWorkerTab(tabId);
 }
 
+async function waitForVideoPageReady(tabId, videoId, timeoutMs = 35000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const result = await runInYouTubeTab(() => {
+      const player = window.ytInitialPlayerResponse;
+      const id = player?.videoDetails?.videoId || '';
+      const hasConfig = Boolean(window.ytcfg?.data_?.INNERTUBE_API_KEY || window.ytcfg?.get?.('INNERTUBE_API_KEY'));
+      const hasTracks = Boolean(player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length);
+      const hasTranscriptParams = Boolean(player?.captions?.playerCaptionsTracklistRenderer?.openTranscriptParams);
+      return {
+        id,
+        ready: id && hasConfig,
+        hasTracks,
+        hasTranscriptParams,
+        title: player?.videoDetails?.title || '',
+      };
+    }, [], tabId);
+
+    if (result?.id === videoId && result?.ready) return result;
+    await sleep(500);
+  }
+  throw new Error(`YouTube page did not finish loading video ${videoId}.`);
+}
+
+
 async function ensureYouTubeTab() {
   if (cachedYouTubeTabId) {
     try {
-      await chrome.tabs.get(cachedYouTubeTabId);
+      const tab = await chrome.tabs.get(cachedYouTubeTabId);
       await prepareWorkerTab(cachedYouTubeTabId);
+      await keepWorkerWindowHidden(tab.windowId);
       return cachedYouTubeTabId;
     } catch {
       cachedYouTubeTabId = null;
       await setStoredWorkerTabId(null);
+      await setStoredWorkerWindowId(null);
     }
   }
 
   const storedId = await getStoredWorkerTabId();
+  const storedWindowId = await getStoredWorkerWindowId();
   if (storedId) {
     try {
-      await chrome.tabs.get(storedId);
+      const tab = await chrome.tabs.get(storedId);
       cachedYouTubeTabId = storedId;
       await prepareWorkerTab(storedId);
+      await keepWorkerWindowHidden(tab.windowId || storedWindowId);
+      if (tab.windowId) await setStoredWorkerWindowId(tab.windowId);
       return storedId;
     } catch {
       await setStoredWorkerTabId(null);
+      await setStoredWorkerWindowId(null);
     }
   }
 
-  const tab = await chrome.tabs.create({
+  const win = await chrome.windows.create({
     url: WORKER_TAB_URL,
-    active: false,
+    focused: false,
+    state: 'minimized',
+    type: 'normal',
   });
-  cachedYouTubeTabId = tab.id;
-  await setStoredWorkerTabId(tab.id);
-  await waitForTabComplete(cachedYouTubeTabId, 25000);
-  await prepareWorkerTab(cachedYouTubeTabId);
-  try {
-    await chrome.tabs.move(cachedYouTubeTabId, { index: -1 });
-  } catch {
-    // ignore
-  }
-  await installMuteHook(cachedYouTubeTabId);
-  return cachedYouTubeTabId;
+  const tabId = win.tabs?.[0]?.id;
+  if (!tabId) throw new Error('Could not create YouTube worker tab.');
+
+  cachedYouTubeTabId = tabId;
+  await setStoredWorkerTabId(tabId);
+  await setStoredWorkerWindowId(win.id);
+  await waitForTabComplete(tabId, 25000);
+  await prepareWorkerTab(tabId);
+  await keepWorkerWindowHidden(win.id);
+  await installMuteHook(tabId);
+  return tabId;
 }
 
 async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
   await prepareWorkerTab(tabId);
   const tab = await chrome.tabs.get(tabId);
+  await keepWorkerWindowHidden(tab.windowId);
   const currentUrl = String(tab.url || '');
   if (!currentUrl.includes(videoId)) {
     await chrome.tabs.update(tabId, { url: videoUrl, active: false, autoDiscardable: false });
@@ -901,6 +951,8 @@ async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
   }
   await prepareWorkerTab(tabId);
   await installMuteHook(tabId);
+  const refreshed = await chrome.tabs.get(tabId);
+  await keepWorkerWindowHidden(refreshed.windowId);
 }
 
 async function runInYouTubeTab(func, args = [], tabId = null) {
@@ -932,12 +984,28 @@ async function fetchTextViaYouTubeTab(url) {
   return result.text;
 }
 
+async function buildTranscriptFromPlayerObject(player, html, videoId, languages, tabId, methodPrefix) {
+  if (!player) throw new Error('YouTube player data missing on page.');
+
+  const playerVideoId = player?.videoDetails?.videoId || '';
+  if (playerVideoId && playerVideoId !== videoId) {
+    throw new Error(`Live player did not match requested video (${playerVideoId}).`);
+  }
+
+  return buildTranscriptFromTracks(player, html, languages, tabId, methodPrefix);
+}
+
 async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, methodPrefix) {
   const player = extractJsonObject(html, 'ytInitialPlayerResponse');
   const playerVideoId = player?.videoDetails?.videoId || '';
-  if (playerVideoId !== videoId) {
-    throw new Error(`Player HTML did not match requested video (${playerVideoId || 'missing'}).`);
+  if (playerVideoId && playerVideoId !== videoId) {
+    throw new Error(`Player HTML did not match requested video (${playerVideoId}).`);
   }
+
+  return buildTranscriptFromTracks(player, html, languages, tabId, methodPrefix);
+}
+
+async function buildTranscriptFromTracks(player, html, videoId, languages, tabId, methodPrefix) {
 
   const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
   let captionSegCount = 0;
@@ -975,18 +1043,6 @@ async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, me
       };
     }
   }
-
-  // #region agent log
-  await debugLog('background.js:buildTranscriptFromPlayerHtml:fail', 'API build failed', {
-    videoId,
-    trackCount: tracks.length,
-    captionSegCount,
-    captionFormat,
-    hasParams: Boolean(params),
-    innerTubeOk,
-    innerTubeError,
-  }, 'H2');
-  // #endregion
 
   throw new Error(tracks.length ? 'Caption track download returned empty.' : 'No caption tracks on this video.');
 }
@@ -1046,6 +1102,14 @@ function fetchTranscriptFromPanelInPage() {
       || document.querySelector('ytd-engagement-panel-section-list-renderer[target-id*="transcript"]');
   }
 
+  function scrollTranscriptPanel() {
+    const panel = transcriptPanelRoot();
+    const scrollTarget = panel?.querySelector('#segments-container, ytd-transcript-segment-list-renderer, #body')
+      || panel;
+    if (!scrollTarget) return;
+    scrollTarget.scrollTop = scrollTarget.scrollHeight;
+  }
+
   function extractSegmentsFromPanel() {
     const panel = transcriptPanelRoot();
     const scope = panel || document;
@@ -1082,6 +1146,11 @@ function fetchTranscriptFromPanelInPage() {
   return (async () => {
     mutePlayer();
 
+    const existing = extractSegmentsFromPanel();
+    if (existing.length) {
+      return { ok: true, segments: existing, format: 'dom-existing', debug: { reusedOpenPanel: true } };
+    }
+
     const moreButton = document.querySelector('#expand, ytd-text-inline-expander #expand, tp-yt-paper-button#expand');
     if (moreButton) {
       moreButton.click();
@@ -1100,10 +1169,11 @@ function fetchTranscriptFromPanelInPage() {
     }
 
     transcriptButton.click();
-    await sleep(1200);
+    await sleep(1500);
 
-    for (let attempt = 0; attempt < 40; attempt++) {
+    for (let attempt = 0; attempt < 50; attempt++) {
       mutePlayer();
+      scrollTranscriptPanel();
       const panel = transcriptPanelRoot();
       const nodes = (panel || document).querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model');
       const segments = extractSegmentsFromPanel();
@@ -1123,7 +1193,7 @@ function fetchTranscriptFromPanelInPage() {
     return {
       ok: false,
       error: 'Transcript panel opened but segments did not load.',
-      debug: { ...debugBase, panelFound: Boolean(panel), nodeCount: nodes.length, attempts: 40 },
+      debug: { ...debugBase, panelFound: Boolean(panel), nodeCount: nodes.length, attempts: 50 },
     };
   })();
 }
@@ -1383,25 +1453,26 @@ function fetchInnerTubeTranscriptInPage(params) {
     };
     if (visitorData) headers['X-Goog-Visitor-Id'] = visitorData;
 
-    const response = await fetch(`https://www.youtube.com/youtubei/v1/get_transcript?key=${encodeURIComponent(apiKey)}`, {
+    const context = {
+      client: {
+        clientName: 'WEB',
+        clientVersion,
+        hl,
+        gl,
+        userAgent: navigator.userAgent,
+        originalUrl: window.location.href,
+        clientFormFactor: 'UNKNOWN_FORM_FACTOR',
+        browserName: 'Chrome',
+      },
+      user: { lockedSafetyMode: false },
+      request: { useSsl: true },
+    };
+
+    const response = await fetch(`https://www.youtube.com/youtubei/v1/get_transcript?prettyPrint=false&key=${encodeURIComponent(apiKey)}`, {
       method: 'POST',
       credentials: 'include',
       headers,
-      body: JSON.stringify({
-        context: {
-          client: {
-            clientName: 'WEB',
-            clientVersion,
-            hl,
-            gl,
-            userAgent: navigator.userAgent,
-            originalUrl: window.location.href,
-          },
-          user: {},
-          request: { useSsl: true },
-        },
-        params,
-      }),
+      body: JSON.stringify({ context, params }),
     });
 
     const raw = await response.text();
