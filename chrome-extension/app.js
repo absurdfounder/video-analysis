@@ -229,11 +229,10 @@ function timestampUrl(videoUrl, seconds) {
 let modalVideoId = '';
 
 async function fetchTranscriptForVideo(video) {
-  const languages = ($('languages')?.value || 'hi.*,hi,en.*').trim();
   video.status = 'running';
   renderVideos();
   try {
-    const data = await api('/api/transcript', { id: video.id, videoUrl: video.url, languages });
+    const data = await api('/api/capture-visible-transcript', { id: video.id, videoUrl: video.url });
     if (!data.segments?.length) throw new Error('Transcript returned zero caption lines.');
     Object.assign(video, {
       status: 'ok',
@@ -245,11 +244,11 @@ async function fetchTranscriptForVideo(video) {
       needsWork: false,
     });
     if (hasTranscriptData(video)) await markVideosProcessed([video.id]);
-    log(`Transcript loaded: ${video.title} (${segmentCount(video)} lines${data.method ? ` · ${data.method}` : ''})`);
+    log(`Transcript captured: ${video.title} (${segmentCount(video)} lines${data.method ? ` · ${data.method}` : ''})`);
   } catch (error) {
     video.status = 'failed';
     video.error = error.message.slice(0, 200);
-    log(`Transcript failed: ${video.title}: ${error.message}`);
+    log(`Visible transcript capture failed: ${video.title}: ${error.message}`);
     throw error;
   } finally {
     renderVideos();
@@ -858,7 +857,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.11 — visible YouTube tab required';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.12 — direct capture API';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

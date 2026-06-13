@@ -64,6 +64,7 @@ async function handleApi(path, body) {
   if (path === '/api/status') return status();
   if (path === '/api/list-videos') return listVideos(body);
   if (path === '/api/transcript') return transcript(body);
+  if (path === '/api/capture-visible-transcript') return captureVisibleTranscript(body);
   if (path === '/api/extract-prices') return extractPrices(body);
   if (path === '/api/extract-prices-ai') return extractPricesAi(body);
   if (path === '/api/classify-videos') return classifyVideos(body);
@@ -578,17 +579,39 @@ async function transcript(body) {
     return { ok: false, id, error: result?.error || 'Transcript returned zero caption lines.' };
   }
 
-  const transcriptText = segments.map(segment => segment.text).join(' ');
+  return transcriptResponse(id, result);
+}
 
+async function captureVisibleTranscript(body) {
+  const rawVideoUrl = safeText(body.videoUrl || body.url);
+  const id = safeText(body.id || getVideoId(rawVideoUrl));
+  if (!id) return { ok: false, error: 'Missing YouTube video ID.' };
+
+  const result = await fetchTranscriptFromAnyOpenWatchTab(id);
+  if (!result?.ok || !result.segments?.length) {
+    return {
+      ok: false,
+      id,
+      error: result?.error || 'No open YouTube tab had a visible transcript panel.',
+      diagnostics: result?.diagnostics || [],
+    };
+  }
+
+  return transcriptResponse(id, result);
+}
+
+function transcriptResponse(id, result) {
+  const segments = result.segments || [];
   return {
     ok: true,
     id,
     language: result.language || 'unknown',
     fileName: result.fileName || 'caption',
     segmentCount: segments.length,
-    transcriptText,
+    transcriptText: segments.map(segment => segment.text).join(' '),
     segments,
     method: result.method || 'youtube-tab',
+    sourceUrl: result.sourceUrl || '',
   };
 }
 
@@ -848,7 +871,7 @@ async function waitForYouTubePageReady(tabId, videoId) {
   if (!ready?.ok) throw new Error(ready?.error || 'YouTube watch page did not finish loading.');
 }
 
-async function findOpenWatchTab(videoId, excludeTabId = null) {
+async function listOpenWatchTabs(excludeTabId = null) {
   const tabs = await chrome.tabs.query({
     url: [
       'https://www.youtube.com/watch*',
@@ -856,8 +879,13 @@ async function findOpenWatchTab(videoId, excludeTabId = null) {
       'https://m.youtube.com/watch*',
     ],
   });
+  return tabs.filter(tab => tab.id !== excludeTabId);
+}
+
+async function findOpenWatchTab(videoId, excludeTabId = null) {
+  const tabs = await listOpenWatchTabs(excludeTabId);
   return tabs
-    .filter(tab => tab.id !== excludeTabId && String(tab.url || '').includes(videoId))
+    .filter(tab => getVideoId(tab.url || '') === videoId || String(tab.url || '').includes(videoId))
     .sort((a, b) => Number(b.active) - Number(a.active))[0] || null;
 }
 
@@ -865,14 +893,63 @@ async function fetchTranscriptFromOpenWatchTab(videoId, excludeTabId = null) {
   const openTab = await findOpenWatchTab(videoId, excludeTabId);
   if (!openTab?.id) return null;
 
-  const visibleResult = await runInYouTubeTab('fetchTranscriptFromPanelInPage', [], openTab.id);
+  return fetchVisibleTranscriptFromTab(openTab, videoId, true);
+}
+
+async function fetchTranscriptFromAnyOpenWatchTab(videoId, excludeTabId = null) {
+  const tabs = await listOpenWatchTabs(excludeTabId);
+  if (!tabs.length) {
+    return { ok: false, error: 'No YouTube watch tabs are open.', diagnostics: [] };
+  }
+
+  const rankedTabs = tabs.sort((a, b) => {
+    const aExact = getVideoId(a.url || '') === videoId || String(a.url || '').includes(videoId);
+    const bExact = getVideoId(b.url || '') === videoId || String(b.url || '').includes(videoId);
+    return Number(bExact) - Number(aExact) || Number(b.active) - Number(a.active);
+  });
+  const diagnostics = [];
+
+  for (const tab of rankedTabs) {
+    const exact = getVideoId(tab.url || '') === videoId || String(tab.url || '').includes(videoId);
+    try {
+      const result = await fetchVisibleTranscriptFromTab(tab, videoId, exact);
+      if (result?.ok && result.segments?.length) {
+        return { ...result, diagnostics };
+      }
+      diagnostics.push({
+        url: tab.url || '',
+        exact,
+        error: result?.error || 'No transcript rows returned.',
+      });
+    } catch (error) {
+      diagnostics.push({
+        url: tab.url || '',
+        exact,
+        error: cleanError(error),
+      });
+    }
+  }
+
+  const summary = diagnostics
+    .map(item => `${item.exact ? 'matching' : 'other'} tab: ${item.error}`)
+    .join(' | ');
+  return {
+    ok: false,
+    error: summary || 'Open YouTube tabs did not expose transcript lines.',
+    diagnostics,
+  };
+}
+
+async function fetchVisibleTranscriptFromTab(tab, videoId, exact) {
+  const visibleResult = await runInYouTubeTab('fetchTranscriptFromPanelInPage', [], tab.id);
   if (visibleResult?.ok && visibleResult.segments?.length) {
     return {
       ok: true,
       language: visibleResult.language || 'unknown',
       fileName: visibleResult.fileName || 'youtube-visible-panel',
       segments: visibleResult.segments,
-      method: visibleResult.format || 'open-tab-panel',
+      method: exact ? (visibleResult.format || 'open-tab-panel') : `${visibleResult.format || 'open-tab-panel'}-other-open-tab`,
+      sourceUrl: tab.url || visibleResult.url || '',
     };
   }
 
