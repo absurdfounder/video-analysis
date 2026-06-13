@@ -463,23 +463,36 @@ async function waitForTabComplete(tabId, timeoutMs = 20000, expectedVideoId = ''
 async function ensureYouTubeTab() {
   if (cachedYouTubeTabId) {
     try {
-      await chrome.tabs.get(cachedYouTubeTabId);
-      return cachedYouTubeTabId;
+      const tab = await chrome.tabs.get(cachedYouTubeTabId);
+      if (tab?.id) return cachedYouTubeTabId;
     } catch {
       cachedYouTubeTabId = null;
     }
   }
 
-  const tabs = await chrome.tabs.query({ url: ['https://www.youtube.com/*', 'https://youtu.be/*'] });
-  if (tabs.length && tabs[0].id) {
-    cachedYouTubeTabId = tabs[0].id;
-    return cachedYouTubeTabId;
-  }
-
-  const tab = await chrome.tabs.create({ url: 'https://www.youtube.com/', active: false });
+  const tab = await chrome.tabs.create({
+    url: 'https://www.youtube.com/',
+    active: false,
+    muted: true,
+  });
   cachedYouTubeTabId = tab.id;
   await waitForTabComplete(cachedYouTubeTabId, 25000);
+  try {
+    await chrome.tabs.update(cachedYouTubeTabId, { muted: true });
+  } catch {
+    cachedYouTubeTabId = null;
+  }
   return cachedYouTubeTabId;
+}
+
+async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
+  await chrome.tabs.update(tabId, { url: videoUrl, active: false, muted: true });
+  await waitForTabComplete(tabId, 30000, videoId);
+  try {
+    await chrome.tabs.update(tabId, { muted: true });
+  } catch {
+    // Tab may have closed; caller will handle fetch errors.
+  }
 }
 
 async function runInYouTubeTab(func, args = []) {
@@ -513,8 +526,7 @@ async function fetchTextViaYouTubeTab(url) {
 
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   const tabId = await ensureYouTubeTab();
-  await chrome.tabs.update(tabId, { url: videoUrl, active: true });
-  await waitForTabComplete(tabId, 30000, videoId);
+  await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
 
   const result = await runInYouTubeTab(fetchTranscriptInPageContext, [videoId, languages]);
   if (!result?.ok) {
@@ -525,6 +537,14 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
 
 function fetchTranscriptInPageContext(expectedVideoId, languages) {
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  function mutePlayer() {
+    const video = document.querySelector('video');
+    if (!video) return false;
+    video.muted = true;
+    video.volume = 0;
+    return true;
+  }
 
   function readBalancedJson(text, start) {
     let depth = 0;
@@ -751,6 +771,7 @@ function fetchTranscriptInPageContext(expectedVideoId, languages) {
   }
 
   async function openTranscriptPanel() {
+    mutePlayer();
     const moreButton = document.querySelector('#expand, ytd-text-inline-expander #expand, tp-yt-paper-button#expand')
       || findClickableByText([/^\.\.\.more$/i, /^…more$/i, /^show more$/i, /^और दिखाएं$/i]);
     if (moreButton) {
@@ -912,8 +933,11 @@ function fetchTranscriptInPageContext(expectedVideoId, languages) {
   }
 
   return (async () => {
+    mutePlayer();
+
     let playerResult = null;
     for (let attempt = 0; attempt < 30; attempt++) {
+      if (attempt % 3 === 0) mutePlayer();
       playerResult = parsePlayerFromScripts();
       if (playerResult?.player?.videoDetails?.videoId === expectedVideoId) break;
       await sleep(500);

@@ -725,7 +725,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Opens each video tab and clicks Show transcript — stay signed in at youtube.com';
+    if ($('statusText')) $('statusText').textContent = 'Uses a muted background YouTube tab — you stay on your current page';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
