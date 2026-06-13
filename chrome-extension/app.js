@@ -12,6 +12,8 @@ const state = {
   currentStep: 1,
   lastSync: null,
   batchRunning: false,
+  batchLogCursor: 0,
+  batchJob: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -21,12 +23,47 @@ function setDisabled(id, disabled) {
   if (el) el.disabled = disabled;
 }
 
-function log(message) {
+function log(message, { level = 'info' } = {}) {
   const box = $('log');
   if (!box) return;
   const now = new Date().toLocaleTimeString();
-  box.textContent += `[${now}] ${message}\n`;
+  const prefix = level === 'error' ? '✗ ' : level === 'warn' ? '⚠ ' : '';
+  box.textContent += `[${now}] ${prefix}${message}\n`;
   box.scrollTop = box.scrollHeight;
+}
+
+function syncBatchLogFromJob(job) {
+  if (!Array.isArray(job?.log)) return;
+  const cursor = state.batchLogCursor || 0;
+  for (const entry of job.log.slice(cursor)) {
+    log(entry.message, { level: entry.level || 'info' });
+  }
+  state.batchLogCursor = job.log.length;
+}
+
+function updateBatchStatusUI(job) {
+  const el = $('batchStatusText');
+  if (!el) return;
+  if (!job?.running) {
+    if (job?.finishedAt) {
+      const failed = job.failed || 0;
+      el.textContent = failed
+        ? `Batch finished with ${failed} failed item(s). Check Activity log and retry failed rows.`
+        : 'Batch finished.';
+    } else if (job?.stoppedAt) {
+      el.textContent = `Batch stopped${job.stopReason ? `: ${job.stopReason}` : '.'}`;
+    } else {
+      el.textContent = '';
+    }
+    return;
+  }
+
+  const done = job.done || 0;
+  const total = job.total || 0;
+  const remaining = Array.isArray(job.queue) ? job.queue.length : 0;
+  const current = job.currentTitle || job.currentId || 'next video';
+  const err = job.lastError ? ` Last error: ${job.lastError}` : '';
+  el.textContent = `Batch running ${done}/${total} done · ${remaining} left · now: ${current}.${err}`;
 }
 
 function sleep(ms) {
@@ -624,6 +661,8 @@ async function fetchTranscriptsStep() {
   }
 
   await saveLocal();
+  state.batchLogCursor = 0;
+  if ($('log')) $('log').textContent = '';
   log(`Fetching ${pending.length} transcript(s) in background — your current tab will not switch.`);
 
   const data = await api('/api/fetch-transcripts-batch', {
@@ -673,6 +712,9 @@ function syncFromStorageChanges(changes) {
   const batchRunning = Boolean(changes.transcriptBatchJob?.newValue?.running);
   if (changes.transcriptBatchJob?.newValue) {
     state.batchRunning = batchRunning;
+    state.batchJob = changes.transcriptBatchJob.newValue;
+    syncBatchLogFromJob(state.batchJob);
+    updateBatchStatusUI(state.batchJob);
   }
 
   if (changes.fruitTranscriptMinerStateV2?.newValue) {
@@ -686,11 +728,9 @@ function syncFromStorageChanges(changes) {
     const job = changes.transcriptBatchJob.newValue;
     setBusy(Boolean(job?.running));
     if (!job?.running && job?.stoppedAt) {
-      log('Transcript batch stopped.');
       return;
     }
     if (!job?.running && job?.finishedAt) {
-      log(`Background transcript batch finished (${job.done || 0}/${job.total || 0}).`);
       goToStep(3);
     }
   }
@@ -913,34 +953,48 @@ chrome.runtime.onMessage.addListener((message) => {
     return;
   }
   if (message?.type !== 'transcript-batch-event') return;
+  if (message.event === 'log') {
+    log(message.message, { level: message.level || 'info' });
+    return;
+  }
   if (message.event === 'complete') {
     setBusy(false);
+    state.batchJob = { ...state.batchJob, running: false, finishedAt: new Date().toISOString(), failed: message.failed || 0 };
+    updateBatchStatusUI(state.batchJob);
     goToStep(3);
-    log(`Transcript batch complete (${message.done || 0} videos).`);
     return;
   }
   if (message.event === 'next') {
     setBusy(true);
-    log(`Opened next missing video: ${message.title || message.videoId} (${message.done || 0}/${message.total || 0} done).`);
     return;
   }
   if (message.event === 'progress') {
     if (message.status === 'running') {
-      log(`Fetching transcript: ${message.title || message.videoId}...`);
-      return;
-    }
-    if (message.status === 'ok') {
-      log(`Transcript loaded: ${message.title || message.videoId} (${message.segmentCount || 0} lines${message.method ? ` · ${message.method}` : ''})`);
+      updateBatchStatusUI({
+        ...(state.batchJob || {}),
+        running: true,
+        currentId: message.videoId,
+        currentTitle: message.title || message.videoId,
+      });
       return;
     }
     if (message.status === 'failed') {
-      log(`Transcript failed: ${message.title || message.videoId}: ${message.error || 'unknown error'}`);
+      updateBatchStatusUI({
+        ...(state.batchJob || {}),
+        running: true,
+        lastError: message.error || 'unknown error',
+      });
     }
   }
 });
 
 api('/api/transcript-batch-status').then((data) => {
   state.batchRunning = Boolean(data?.job?.running);
+  state.batchJob = data?.job || null;
+  if (data?.job) {
+    syncBatchLogFromJob(data.job);
+    updateBatchStatusUI(data.job);
+  }
   if (data?.job?.running) {
     setBusy(true);
     normalizeVideos({ keepRunning: true });
@@ -955,7 +1009,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.26 — fast API path, 200ms batch gap';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.27 — batch errors + stall recovery';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

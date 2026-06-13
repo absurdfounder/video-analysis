@@ -279,7 +279,11 @@ async function markProcessed(body) {
 
 const PROJECT_STATE_KEY = 'fruitTranscriptMinerStateV2';
 const TRANSCRIPT_BATCH_KEY = 'transcriptBatchJob';
+const BATCH_LOG_LIMIT = 80;
+const BATCH_LOCK_STALE_MS = 90000;
+const TRANSCRIPT_FETCH_TIMEOUT_MS = 45000;
 let batchProcessing = false;
+let batchProcessingStartedAt = 0;
 
 function hasTranscriptSegments(video) {
   return Array.isArray(video?.segments) && video.segments.length > 0;
@@ -310,6 +314,68 @@ function broadcastTranscriptBatchEvent(payload) {
   chrome.runtime.sendMessage({ type: 'transcript-batch-event', ...payload }).catch(() => {});
 }
 
+async function getTranscriptBatchJob() {
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  return stored[TRANSCRIPT_BATCH_KEY] || null;
+}
+
+async function saveTranscriptBatchJob(patch) {
+  const current = await getTranscriptBatchJob();
+  const next = { ...(current || {}), ...patch };
+  await chrome.storage.local.set({ [TRANSCRIPT_BATCH_KEY]: next });
+  return next;
+}
+
+async function appendBatchJobLog(message, level = 'info', meta = {}) {
+  const job = await getTranscriptBatchJob();
+  if (!job) return null;
+
+  const entry = {
+    at: new Date().toISOString(),
+    level,
+    message: safeText(message),
+    videoId: safeText(meta.videoId || ''),
+    title: safeText(meta.title || ''),
+  };
+  const log = [...(job.log || []), entry].slice(-BATCH_LOG_LIMIT);
+  const nextJob = {
+    ...job,
+    log,
+    lastLogAt: entry.at,
+    lastError: level === 'error' ? entry.message : job.lastError || '',
+  };
+  await chrome.storage.local.set({ [TRANSCRIPT_BATCH_KEY]: nextJob });
+  broadcastTranscriptBatchEvent({ event: 'log', ...entry });
+  return nextJob;
+}
+
+function releaseBatchProcessingLock() {
+  batchProcessing = false;
+  batchProcessingStartedAt = 0;
+}
+
+function isBatchJobStopped(job) {
+  return !job?.running;
+}
+
+async function markVideoFailedInProject(videoId, videoIndex, video, errorMessage) {
+  if (!video || videoIndex < 0) return;
+  video.status = 'failed';
+  video.error = safeText(errorMessage).slice(0, 240);
+  const project = await loadProjectState();
+  const videos = [...(project.videos || [])];
+  if (videos[videoIndex]?.id === videoId) {
+    videos[videoIndex] = video;
+    await saveProjectState({ videos, currentStep: 2 });
+  }
+  broadcastTranscriptBatchEvent({
+    event: 'progress',
+    videoId,
+    status: 'failed',
+    title: video.title || videoId,
+    error: video.error,
+  });
+}
 async function transcriptBatchStatus() {
   const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
   return { ok: true, job: stored[TRANSCRIPT_BATCH_KEY] || null };
@@ -342,13 +408,23 @@ async function fetchTranscriptsBatch(body) {
       languages,
       total: pending.length,
       done: 0,
+      failed: 0,
       currentId: null,
       currentTitle: null,
       startedAt: new Date().toISOString(),
+      log: [{
+        at: new Date().toISOString(),
+        level: 'info',
+        message: `Started batch for ${pending.length} video(s).`,
+      }],
+      lastError: '',
     },
   });
 
-  processNextTranscriptInBatch().catch(error => console.warn('Transcript batch failed:', error));
+  processNextTranscriptInBatch().catch((error) => {
+    console.warn('Transcript batch failed:', error);
+    appendBatchJobLog(`Batch start failed: ${cleanError(error)}`, 'error').catch(() => {});
+  });
   await ensureBatchWatchdog();
 
   return { ok: true, started: true, total: pending.length };
@@ -491,17 +567,45 @@ async function clearBatchWatchdog() {
 }
 
 async function kickTranscriptBatchIfStalled() {
-  if (batchProcessing) return;
-  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
-  const job = stored[TRANSCRIPT_BATCH_KEY];
+  const job = await getTranscriptBatchJob();
   if (!job?.running || job.mode !== 'auto' || !job.queue?.length) {
     await clearBatchWatchdog();
     return;
   }
-  processNextTranscriptInBatch().catch(error => console.warn('Transcript batch watchdog kick failed:', error));
+
+  if (batchProcessing) {
+    if (batchProcessingStartedAt && Date.now() - batchProcessingStartedAt > BATCH_LOCK_STALE_MS) {
+      releaseBatchProcessingLock();
+      await appendBatchJobLog('Released stuck batch lock after timeout.', 'warn');
+    } else {
+      return;
+    }
+  }
+
+  const headId = job.queue[0];
+  const lastAttemptAt = job.lastAttemptAt ? new Date(job.lastAttemptAt).getTime() : 0;
+  const stalledOnHead = job.currentId === headId && lastAttemptAt && Date.now() - lastAttemptAt > BATCH_LOCK_STALE_MS;
+  if (stalledOnHead) {
+    const project = await loadProjectState();
+    const videoIndex = (project.videos || []).findIndex(item => item.id === headId);
+    const video = videoIndex >= 0 ? { ...(project.videos[videoIndex]) } : { id: headId, title: job.currentTitle || headId };
+    await markVideoFailedInProject(headId, videoIndex, video, 'Batch timed out on this video and moved to the next item.');
+    await appendBatchJobLog(`Skipping stalled video: ${job.currentTitle || headId}`, 'warn', {
+      videoId: headId,
+      title: job.currentTitle || headId,
+    });
+    await saveTranscriptBatchJob({ failed: (job.failed || 0) + 1 });
+    await advanceTranscriptBatchQueue({ reason: 'watchdog-skip' });
+    return;
+  }
+
+  processNextTranscriptInBatch().catch((error) => {
+    console.warn('Transcript batch watchdog kick failed:', error);
+    appendBatchJobLog(`Watchdog retry failed: ${cleanError(error)}`, 'error').catch(() => {});
+  });
 }
 
-function transcriptWithTimeout(body, timeoutMs = 120000) {
+function transcriptWithTimeout(body, timeoutMs = TRANSCRIPT_FETCH_TIMEOUT_MS) {
   return Promise.race([
     transcript(body),
     sleep(timeoutMs).then(() => {
@@ -510,11 +614,11 @@ function transcriptWithTimeout(body, timeoutMs = 120000) {
   ]);
 }
 
-async function advanceTranscriptBatchQueue() {
-  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
-  const job = stored[TRANSCRIPT_BATCH_KEY];
+async function advanceTranscriptBatchQueue(meta = {}) {
+  const job = await getTranscriptBatchJob();
   if (!job?.running || !job.queue?.length) return false;
 
+  const skippedId = job.queue[0];
   const nextQueue = job.queue.slice(1);
   const nextJob = {
     ...job,
@@ -523,6 +627,7 @@ async function advanceTranscriptBatchQueue() {
     currentId: null,
     currentTitle: null,
     lastFinishedAt: new Date().toISOString(),
+    lastFinishedId: skippedId,
     running: nextQueue.length > 0,
   };
 
@@ -534,14 +639,20 @@ async function advanceTranscriptBatchQueue() {
     return true;
   }
 
+  if (meta.reason) {
+    await appendBatchJobLog(`Advanced (${nextJob.done}/${nextJob.total || nextJob.done}) · ${meta.reason}`, 'info');
+  }
+
   await scheduleNextTranscriptInBatch(job.delayMs || 200);
-  setTimeout(() => {
-    processNextTranscriptInBatch().catch(error => console.warn('Transcript batch chain failed:', error));
-  }, Math.max(50, job.delayMs || 200));
   return true;
 }
 
 async function finishTranscriptBatch(job, doneCount) {
+  const failed = job.failed || 0;
+  await appendBatchJobLog(
+    `Batch finished: ${doneCount}/${job.total || doneCount} processed${failed ? `, ${failed} failed` : ''}.`,
+    failed ? 'warn' : 'info',
+  );
   await chrome.storage.local.set({
     [TRANSCRIPT_BATCH_KEY]: {
       ...job,
@@ -554,7 +665,14 @@ async function finishTranscriptBatch(job, doneCount) {
   });
   await saveProjectState({ currentStep: 3 });
   await clearBatchWatchdog();
-  broadcastTranscriptBatchEvent({ event: 'complete', done: doneCount, total: job.total || doneCount });
+  releaseBatchProcessingLock();
+  broadcastTranscriptBatchEvent({
+    event: 'complete',
+    done: doneCount,
+    total: job.total || doneCount,
+    failed,
+    lastError: job.lastError || '',
+  });
 }
 
 async function stopTranscriptBatch(body = {}) {
@@ -570,6 +688,7 @@ async function stopTranscriptBatch(body = {}) {
   ));
 
   await saveProjectState({ videos, currentStep: 2 });
+  await appendBatchJobLog(safeText(body.reason || 'Stopped by user.'), 'warn');
   await chrome.storage.local.set({
     [TRANSCRIPT_BATCH_KEY]: {
       ...job,
@@ -582,15 +701,22 @@ async function stopTranscriptBatch(body = {}) {
     },
   });
   batchProcessing = false;
+  releaseBatchProcessingLock();
   broadcastTranscriptBatchEvent({ event: 'stopped', reason: safeText(body.reason || 'Stopped by user.') });
   return { ok: true, stopped: true };
 }
 
 async function processNextTranscriptInBatch() {
-  if (batchProcessing) return;
+  if (batchProcessing) {
+    if (batchProcessingStartedAt && Date.now() - batchProcessingStartedAt > BATCH_LOCK_STALE_MS) {
+      releaseBatchProcessingLock();
+      await appendBatchJobLog('Recovered from stale in-flight batch item.', 'warn');
+    } else {
+      return;
+    }
+  }
 
-  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
-  const job = stored[TRANSCRIPT_BATCH_KEY];
+  const job = await getTranscriptBatchJob();
   if (job?.mode === 'guided') return;
   if (!job?.running || !job.queue?.length) {
     if (job?.running) await finishTranscriptBatch(job, job.done || 0);
@@ -599,10 +725,12 @@ async function processNextTranscriptInBatch() {
   }
 
   batchProcessing = true;
+  batchProcessingStartedAt = Date.now();
   const videoId = job.queue[0];
   let video = null;
   let videoIndex = -1;
   let shouldAdvance = false;
+  let stopped = false;
 
   try {
     const project = await loadProjectState();
@@ -610,28 +738,40 @@ async function processNextTranscriptInBatch() {
     videoIndex = videos.findIndex(item => item.id === videoId);
 
     if (videoIndex === -1) {
+      await appendBatchJobLog(`Removed missing video from queue: ${videoId}`, 'warn', { videoId });
       shouldAdvance = true;
       return;
     }
 
     video = { ...videos[videoIndex] };
+
+    if (video.relevance === 'irrelevant' || video.status === 'skipped' || hasTranscriptSegments(video)) {
+      await appendBatchJobLog(`Skipping ${video.title || videoId}: ${hasTranscriptSegments(video) ? 'already has transcript' : 'not processable'}.`, 'info', {
+        videoId,
+        title: video.title || videoId,
+      });
+      shouldAdvance = true;
+      return;
+    }
+
     video.status = 'running';
     video.error = '';
     videos[videoIndex] = video;
 
-    await chrome.storage.local.set({
-      [TRANSCRIPT_BATCH_KEY]: {
-        ...job,
-        currentId: videoId,
-        currentTitle: video.title || videoId,
-        lastAttemptAt: new Date().toISOString(),
-      },
+    await saveTranscriptBatchJob({
+      currentId: videoId,
+      currentTitle: video.title || videoId,
+      lastAttemptAt: new Date().toISOString(),
     });
     await saveProjectState({ videos, currentStep: 2 });
     broadcastTranscriptBatchEvent({ event: 'progress', videoId, status: 'running', title: video.title || videoId });
+    await appendBatchJobLog(`Fetching ${video.title || videoId}...`, 'info', { videoId, title: video.title || videoId });
 
-    const latestBefore = (await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY))[TRANSCRIPT_BATCH_KEY];
-    if (!latestBefore?.running) return;
+    const latestBefore = await getTranscriptBatchJob();
+    if (isBatchJobStopped(latestBefore)) {
+      stopped = true;
+      return;
+    }
 
     const result = await transcriptWithTimeout({
       id: video.id,
@@ -640,9 +780,11 @@ async function processNextTranscriptInBatch() {
       preferWorker: true,
     });
 
-    const latestAfter = (await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY))[TRANSCRIPT_BATCH_KEY];
-    if (!latestAfter?.running) return;
-    if (latestAfter.currentId && latestAfter.currentId !== videoId) return;
+    const latestAfter = await getTranscriptBatchJob();
+    if (isBatchJobStopped(latestAfter)) {
+      stopped = true;
+      return;
+    }
 
     if (!result?.ok || !result.segments?.length) {
       throw new Error(result?.error || 'Transcript returned zero caption lines.');
@@ -666,27 +808,32 @@ async function processNextTranscriptInBatch() {
       segmentCount: result.segmentCount || video.segments.length,
       method: result.method || '',
     });
+    await appendBatchJobLog(
+      `OK ${video.title || videoId} (${result.segmentCount || video.segments.length} lines${result.method ? ` · ${result.method}` : ''})`,
+      'info',
+      { videoId, title: video.title || videoId },
+    );
     shouldAdvance = true;
   } catch (error) {
-    const latest = (await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY))[TRANSCRIPT_BATCH_KEY];
-    if (!latest?.running) return;
-    if (latest.currentId && latest.currentId !== videoId) return;
-
-    if (video && videoIndex >= 0) {
-      video.status = 'failed';
-      video.error = safeText(error?.message || error).slice(0, 200);
-      broadcastTranscriptBatchEvent({
-        event: 'progress',
-        videoId,
-        status: 'failed',
-        title: video.title || videoId,
-        error: video.error,
-      });
+    const latest = await getTranscriptBatchJob();
+    if (isBatchJobStopped(latest)) {
+      stopped = true;
+      return;
     }
+
+    const message = cleanError(error);
+    if (video && videoIndex >= 0) {
+      await markVideoFailedInProject(videoId, videoIndex, video, message);
+      await saveTranscriptBatchJob({ failed: (latest?.failed || 0) + 1, lastError: message });
+    }
+    await appendBatchJobLog(`Failed ${video?.title || videoId}: ${message}`, 'error', {
+      videoId,
+      title: video?.title || videoId,
+    });
     shouldAdvance = true;
   } finally {
     try {
-      if (video && videoIndex >= 0) {
+      if (video && videoIndex >= 0 && !stopped) {
         const project = await loadProjectState();
         const videos = [...(project.videos || [])];
         if (videos[videoIndex]?.id === videoId) {
@@ -695,12 +842,14 @@ async function processNextTranscriptInBatch() {
         }
       }
 
-      if (shouldAdvance) {
-        const latest = (await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY))[TRANSCRIPT_BATCH_KEY];
-        if (latest?.running) await advanceTranscriptBatchQueue();
+      if (shouldAdvance && !stopped) {
+        const latest = await getTranscriptBatchJob();
+        if (latest?.running) {
+          await advanceTranscriptBatchQueue({ reason: 'item-complete' });
+        }
       }
     } finally {
-      batchProcessing = false;
+      releaseBatchProcessingLock();
     }
   }
 }
