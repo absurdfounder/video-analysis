@@ -156,6 +156,7 @@ function renderVideoCard(video) {
         ${hasData ? tag(`${segCount} lines`, 'relevance-relevant') : ''}
       </div>
       ${video.relevanceReason ? `<div class="mini">${escapeHtml(video.relevanceReason)}</div>` : ''}
+      ${video.error && status === 'failed' ? `<div class="mini error-text">${escapeHtml(video.error)}</div>` : ''}
       ${showBtn ? `<button type="button" class="btn-view-transcript" data-open-transcript="${escapeHtml(video.id)}">${escapeHtml(btnLabel)}</button>` : ''}
     </article>
   `;
@@ -355,7 +356,7 @@ function renderVideos() {
     'No relevant videos. Fetch videos in step 1 first.',
   );
   updateUI();
-  saveLocal();
+  saveLocal({ keepRunning: Boolean(state.batchJob?.running) });
 }
 
 function deriveStepStatus() {
@@ -363,11 +364,18 @@ function deriveStepStatus() {
   const relevant = state.videos.filter(isProcessable).length;
   const done = transcriptReady().length;
   const pending = pendingTranscripts().length;
+  const failed = state.videos.filter(v => v.status === 'failed').length;
   const prices = state.priceRows.length;
+
+  const step2Meta = pending
+    ? `${pending} pending${failed ? ` · ${failed} failed` : ''}`
+    : done
+      ? `${done} done${failed ? ` · ${failed} failed` : ''}`
+      : 'Waiting';
 
   return {
     1: { done: total > 0, meta: total ? `${total} videos` : 'Start here', desc: total ? `${total} videos loaded (${relevant} relevant).` : 'Pull latest videos from the channel.' },
-    2: { done: relevant > 0 && pending === 0, meta: pending ? `${pending} pending` : done ? `${done} done` : 'Waiting', desc: pending ? `${pending} transcript(s) to fetch.` : done ? 'All relevant transcripts fetched.' : 'Fetch transcripts after step 1.' },
+    2: { done: relevant > 0 && pending === 0 && !failed, meta: step2Meta, desc: pending ? `${pending} transcript(s) to fetch.` : failed ? `${failed} failed — check pinned YouTube tab or retry.` : done ? 'All relevant transcripts fetched.' : 'Fetch transcripts after step 1.' },
     3: { done: prices > 0, meta: prices ? `${prices} rows` : 'Waiting', desc: prices ? `${prices} price rows extracted.` : 'Run AI on transcripts to extract mandi prices.' },
     4: { done: Boolean(state.lastSync), meta: state.lastSync ? 'Synced' : 'Waiting', desc: state.lastSync ? `Last pushed ${new Date(state.lastSync).toLocaleString()}` : 'Push results to your website dataset.' },
   };
@@ -467,8 +475,9 @@ async function refreshBatchJob() {
   updateBatchControls();
 }
 
-async function saveLocal() {
-  normalizeVideos();
+async function saveLocal({ keepRunning = false } = {}) {
+  const duringBatch = keepRunning || Boolean(state.batchJob?.running);
+  normalizeVideos({ keepRunning: duringBatch });
   const payload = {
     videos: state.videos,
     priceRows: state.priceRows,
@@ -482,7 +491,7 @@ async function saveLocal() {
     log(`localStorage save failed (${error.message}). Using chrome.storage.`);
   }
 
-  if (chrome.storage?.local) {
+  if (chrome.storage?.local && !duringBatch) {
     await chrome.storage.local.set({ fruitTranscriptMinerStateV2: payload });
   }
 }
@@ -898,7 +907,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Minimized background window — no tab switching. Pause/Stop available during batch.';
+    if ($('statusText')) $('statusText').textContent = 'Pinned YouTube worker tab — failures show as failed, not silent skip.';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

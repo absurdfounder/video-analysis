@@ -487,6 +487,11 @@ body.modal-open { overflow: hidden; }
   flex-shrink: 0;
 }
 
+.error-text {
+  color: var(--danger);
+  font-weight: 700;
+}
+
 .sync-summary {
   padding: 14px;
   border-radius: 14px;

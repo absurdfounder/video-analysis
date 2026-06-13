@@ -20,7 +20,6 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   if (tabId === cachedYouTubeTabId || tabId === storedId) {
     cachedYouTubeTabId = null;
     await setStoredWorkerTabId(null);
-    await setStoredWorkerWindowId(null);
   }
 });
 
@@ -413,11 +412,14 @@ async function processNextTranscriptInBatch() {
 
   try {
     const result = await transcript({ id: video.id, videoUrl: video.url, languages: job.languages });
+    if (!result?.ok || !Array.isArray(result.segments) || !result.segments.length) {
+      throw new Error(result?.error || 'No caption lines returned.');
+    }
     Object.assign(video, {
       status: 'ok',
       language: result.language,
       transcriptText: result.transcriptText,
-      segments: result.segments || [],
+      segments: result.segments,
       error: '',
       isNew: false,
       needsWork: false,
@@ -675,7 +677,9 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
     apiErrorMsg = String(apiError?.message || apiError);
   }
 
-  const panelResult = await runInYouTubeTab(fetchTranscriptFromPanelInPage, [], tabId);
+  const panelResult = await withBriefTabFocus(tabId, async () => {
+    return runInYouTubeTab(fetchTranscriptFromPanelInPage, [], tabId);
+  });
 
   if (panelResult?.ok && panelResult.segments?.length) {
     return {
@@ -688,6 +692,23 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
   }
 
   throw new Error(panelResult?.error || apiErrorMsg || 'Could not download captions. Stay signed in at youtube.com and retry.');
+}
+
+async function withBriefTabFocus(tabId, fn) {
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  try {
+    await chrome.tabs.update(tabId, { active: true });
+    await sleep(600);
+    return await fn();
+  } finally {
+    if (activeTab?.id && activeTab.id !== tabId) {
+      try {
+        await chrome.tabs.update(activeTab.id, { active: true });
+      } catch {
+        // Previous tab may have closed.
+      }
+    }
+  }
 }
 
 function extractPrices(body) {
@@ -748,27 +769,7 @@ async function extractPricesAi(body) {
 
 let cachedYouTubeTabId = null;
 const WORKER_TAB_KEY = 'youtubeWorkerTabId';
-const WORKER_WINDOW_KEY = 'youtubeWorkerWindowId';
 const WORKER_TAB_URL = 'https://www.youtube.com/?fruit_miner=worker';
-
-async function getStoredWorkerWindowId() {
-  const data = await chrome.storage.local.get(WORKER_WINDOW_KEY);
-  return data[WORKER_WINDOW_KEY] || null;
-}
-
-async function setStoredWorkerWindowId(windowId) {
-  if (windowId) await chrome.storage.local.set({ [WORKER_WINDOW_KEY]: windowId });
-  else await chrome.storage.local.remove(WORKER_WINDOW_KEY);
-}
-
-async function keepWorkerWindowHidden(windowId) {
-  if (!windowId) return;
-  try {
-    await chrome.windows.update(windowId, { focused: false, state: 'minimized' });
-  } catch {
-    // Window may have been closed.
-  }
-}
 
 async function getStoredWorkerTabId() {
   const data = await chrome.storage.local.get(WORKER_TAB_KEY);
@@ -894,56 +895,52 @@ async function waitForVideoPageReady(tabId, videoId, timeoutMs = 35000) {
 async function ensureYouTubeTab() {
   if (cachedYouTubeTabId) {
     try {
-      const tab = await chrome.tabs.get(cachedYouTubeTabId);
+      await chrome.tabs.get(cachedYouTubeTabId);
       await prepareWorkerTab(cachedYouTubeTabId);
-      await keepWorkerWindowHidden(tab.windowId);
       return cachedYouTubeTabId;
     } catch {
       cachedYouTubeTabId = null;
       await setStoredWorkerTabId(null);
-      await setStoredWorkerWindowId(null);
     }
   }
 
   const storedId = await getStoredWorkerTabId();
-  const storedWindowId = await getStoredWorkerWindowId();
   if (storedId) {
     try {
-      const tab = await chrome.tabs.get(storedId);
+      await chrome.tabs.get(storedId);
       cachedYouTubeTabId = storedId;
       await prepareWorkerTab(storedId);
-      await keepWorkerWindowHidden(tab.windowId || storedWindowId);
-      if (tab.windowId) await setStoredWorkerWindowId(tab.windowId);
       return storedId;
     } catch {
       await setStoredWorkerTabId(null);
-      await setStoredWorkerWindowId(null);
     }
   }
 
-  const win = await chrome.windows.create({
-    url: WORKER_TAB_URL,
-    focused: false,
-    state: 'minimized',
-    type: 'normal',
-  });
-  const tabId = win.tabs?.[0]?.id;
-  if (!tabId) throw new Error('Could not create YouTube worker tab.');
+  let windowId = null;
+  try {
+    const win = await chrome.windows.getLastFocused({ populate: false });
+    windowId = win?.id;
+  } catch {
+    // Fall back to default window.
+  }
 
-  cachedYouTubeTabId = tabId;
-  await setStoredWorkerTabId(tabId);
-  await setStoredWorkerWindowId(win.id);
-  await waitForTabComplete(tabId, 25000);
-  await prepareWorkerTab(tabId);
-  await keepWorkerWindowHidden(win.id);
-  await installMuteHook(tabId);
-  return tabId;
+  const tab = await chrome.tabs.create({
+    url: WORKER_TAB_URL,
+    active: false,
+    pinned: true,
+    windowId,
+  });
+  cachedYouTubeTabId = tab.id;
+  await setStoredWorkerTabId(tab.id);
+  await waitForTabComplete(cachedYouTubeTabId, 25000);
+  await prepareWorkerTab(cachedYouTubeTabId);
+  await installMuteHook(cachedYouTubeTabId);
+  return cachedYouTubeTabId;
 }
 
 async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
   await prepareWorkerTab(tabId);
   const tab = await chrome.tabs.get(tabId);
-  await keepWorkerWindowHidden(tab.windowId);
   const currentUrl = String(tab.url || '');
   if (!currentUrl.includes(videoId)) {
     await chrome.tabs.update(tabId, { url: videoUrl, active: false, autoDiscardable: false });
@@ -951,8 +948,6 @@ async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
   }
   await prepareWorkerTab(tabId);
   await installMuteHook(tabId);
-  const refreshed = await chrome.tabs.get(tabId);
-  await keepWorkerWindowHidden(refreshed.windowId);
 }
 
 async function runInYouTubeTab(func, args = [], tabId = null) {
