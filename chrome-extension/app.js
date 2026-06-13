@@ -60,8 +60,14 @@ function syncBatchLogFromJob(job) {
 function updateAnalysisStatusUI(job) {
   const el = $('analysisStatusText');
   if (!el) return;
+  const analysisStats = analysisQueueStats();
   if (!job?.running) {
     if (job?.finishedAt) {
+      const stillPending = analysisStats.waiting + analysisStats.failed;
+      if (stillPending > 0) {
+        el.textContent = `Analysis incomplete · ${stillPending} still pending. Click Analyze again.`;
+        return;
+      }
       const failed = job.failed || 0;
       el.textContent = failed
         ? `Analysis finished with ${failed} failed video(s). Retry from this step.`
@@ -69,7 +75,9 @@ function updateAnalysisStatusUI(job) {
     } else if (job?.stoppedAt) {
       el.textContent = `Analysis stopped${job.stopReason ? `: ${job.stopReason}` : '.'}`;
     } else {
-      el.textContent = '';
+      el.textContent = analysisStats.waiting
+        ? `${analysisStats.waiting} transcript(s) ready to analyze.`
+        : '';
     }
     return;
   }
@@ -755,7 +763,6 @@ function renderPrices() {
   if ($('priceRowCountLabel')) $('priceRowCountLabel').textContent = String(state.priceRows.length);
 
   updateUI();
-  saveLocal();
 }
 
 function renderAnalysisList() {
@@ -796,7 +803,6 @@ function renderVideos() {
   );
   renderAnalysisList();
   updateUI();
-  saveLocal();
 }
 
 function deriveStepStatus() {
@@ -1148,7 +1154,7 @@ function syncFromStorageChanges(changes) {
 
   if (changes.aiAnalysisBatchJob?.newValue) {
     const job = changes.aiAnalysisBatchJob.newValue;
-    if (!job?.running && job?.finishedAt) goToStep(4);
+    if (!job?.running && job?.finishedAt && !pendingAnalysis().length) goToStep(4);
   }
 
   updateUI();
@@ -1180,6 +1186,19 @@ async function aiAnalysisStep() {
     apiKey,
     model: ($('openaiModel')?.value || 'gpt-4o-mini').trim(),
     maxCharsPerCall: Number($('aiMaxChars')?.value || 10000),
+    pendingVideos: pending.map((video) => ({
+      id: video.id,
+      title: video.title,
+      url: video.url,
+      upload_date: video.upload_date,
+      segments: video.segments,
+      channelIndex: video.channelIndex,
+      relevance: video.relevance,
+      status: video.status,
+      priceStatus: video.priceStatus,
+      language: video.language,
+      transcriptText: video.transcriptText,
+    })),
   });
 
   if (data.alreadyRunning) {
@@ -1190,7 +1209,7 @@ async function aiAnalysisStep() {
   }
 
   if (!data.started) {
-    goToStep(4);
+    log(data.message || 'AI analysis did not start. Reload the page and try again.', { level: 'warn' });
     return;
   }
 
@@ -1457,8 +1476,11 @@ chrome.runtime.onMessage.addListener((message) => {
       state.aiBatchRunning = false;
       state.aiBatchJob = { ...state.aiBatchJob, running: false, finishedAt: new Date().toISOString(), failed: message.failed || 0 };
       updateAnalysisStatusUI(state.aiBatchJob);
-      updateUI();
-      goToStep(4);
+      loadLocal().then(() => {
+        renderAll();
+        if (!pendingAnalysis().length) goToStep(4);
+        updateUI();
+      }).catch(() => {});
       return;
     }
     if (message.event === 'stopped') {
@@ -1510,8 +1532,15 @@ Promise.all([
   state.aiBatchRunning = Boolean(aiData?.job?.running);
   state.aiBatchJob = aiData?.job || null;
   if (aiData?.job) {
-    syncAiBatchLogFromJob(aiData.job);
-    updateAnalysisStatusUI(aiData.job);
+    if (!aiData.job.running && aiData.job.finishedAt && pendingAnalysis().length) {
+      state.aiBatchJob = null;
+      chrome.storage.local.remove('aiAnalysisBatchJob').catch(() => {});
+    } else {
+      syncAiBatchLogFromJob(aiData.job);
+      updateAnalysisStatusUI(aiData.job);
+    }
+  } else if (pendingAnalysis().length) {
+    updateAnalysisStatusUI(null);
   }
 
   normalizeVideos({
@@ -1526,7 +1555,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.32 — per-video analysis on cards';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.33 — analysis sync + flicker fix';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

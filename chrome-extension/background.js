@@ -1157,18 +1157,42 @@ async function fetchAiAnalysisBatch(body) {
   const apiKey = safeText(body.apiKey);
   const model = safeText(body.model || 'gpt-4o-mini');
   const maxCharsPerCall = Math.max(2500, Math.min(Number(body.maxCharsPerCall || 10000), 20000));
-  const project = await loadProjectState();
-  const pending = (project.videos || [])
+  let project = await loadProjectState();
+  let videos = [...(project.videos || [])];
+
+  if (Array.isArray(body.pendingVideos) && body.pendingVideos.length) {
+    for (const patch of body.pendingVideos) {
+      if (!patch?.id) continue;
+      const index = videos.findIndex((video) => video.id === patch.id);
+      if (index >= 0) {
+        videos[index] = { ...videos[index], ...patch };
+      } else {
+        videos.push(patch);
+      }
+    }
+    project = await saveProjectState({ videos, currentStep: 3 });
+    videos = [...(project.videos || [])];
+  }
+
+  const existing = await getAiAnalysisBatchJob();
+  if (existing?.running && existing.queue?.length) {
+    return { ok: true, started: false, alreadyRunning: true, total: existing.total || 0 };
+  }
+  if (existing) {
+    await chrome.storage.local.remove(AI_ANALYSIS_BATCH_KEY);
+  }
+
+  const pending = videos
     .filter(isAiAnalysisProcessable)
     .sort((a, b) => (a.channelIndex || 999999) - (b.channelIndex || 999999));
 
   if (!pending.length) {
-    return { ok: true, started: false, total: 0, message: 'No transcripts waiting for AI analysis.' };
-  }
-
-  const existing = await getAiAnalysisBatchJob();
-  if (existing?.running) {
-    return { ok: true, started: false, alreadyRunning: true, total: existing.total || 0 };
+    return {
+      ok: true,
+      started: false,
+      total: 0,
+      message: 'No transcripts waiting for AI analysis. Reload the extension page and try again.',
+    };
   }
 
   const startLog = apiKey
@@ -1328,7 +1352,26 @@ async function processNextAiAnalysisInBatch() {
 
   const job = await getAiAnalysisBatchJob();
   if (!job?.running || !job.queue?.length) {
-    if (job?.running) await finishAiAnalysisBatch(job, job.done || 0);
+    if (job?.running) {
+      const project = await loadProjectState();
+      const remaining = (project.videos || [])
+        .filter(isAiAnalysisProcessable)
+        .sort((a, b) => (a.channelIndex || 999999) - (b.channelIndex || 999999));
+      if (remaining.length) {
+        await chrome.storage.local.set({
+          [AI_ANALYSIS_BATCH_KEY]: {
+            ...job,
+            queue: remaining.map((video) => video.id),
+            total: Math.max(job.total || 0, (job.done || 0) + remaining.length),
+            currentId: null,
+            currentTitle: null,
+          },
+        });
+        await scheduleNextAiAnalysisInBatch(job.delayMs || 400);
+        return;
+      }
+      await finishAiAnalysisBatch(job, job.done || 0);
+    }
     return;
   }
 
@@ -1432,9 +1475,9 @@ async function processNextAiAnalysisInBatch() {
     }
 
     await mergeProjectPriceRowsForVideo(videoId, rows, {
-      priceStatus: 'ok',
+      priceStatus: rows.length ? 'ok' : 'failed',
       priceRowCount: rows.length,
-      priceError: '',
+      priceError: rows.length ? '' : 'No prices extracted from transcript.',
       analysisSummary: summary,
       analysisSource,
     });
