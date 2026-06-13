@@ -3,272 +3,137 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Delhi Fruit Market Transcript Miner</title>
+  <title>Delhi Fruit Market Miner</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <main class="shell">
-    <section class="hero">
+  <main class="app">
+    <header class="topbar">
       <div>
-        <p class="eyebrow">YouTube → Hindi transcript → timestamped prices</p>
-        <h1>Fruit Price Transcript Miner</h1>
-        <p class="subtext">Pull videos from a Hindi fruit-market channel, collect timestamped captions, use AI for messy Hindi, and jump back to the exact YouTube moment where a price was said.</p>
+        <p class="eyebrow">YouTube → prices</p>
+        <h1>Delhi Fruit Market Miner</h1>
+        <p class="status-line" id="statusText">Extension ready</p>
       </div>
-      <div class="status-card" id="statusCard">
-        <span class="dot"></span>
-        <span id="statusText">Setup not checked</span>
+      <div class="topbar-stats">
+        <div><strong id="statPending">0</strong><span>pending</span></div>
+        <div><strong id="statDone">0</strong><span>done</span></div>
+        <div><strong id="statPrices">0</strong><span>prices</span></div>
+      </div>
+    </header>
+
+    <section class="action-card">
+      <p class="next-step" id="nextAction">Check the channel for new fruit/veg price videos.</p>
+      <button id="runAllBtn" class="btn-primary btn-large">Check &amp; process new videos</button>
+      <div class="quick-actions">
+        <button id="checkNewBtn" class="btn-secondary">Check only</button>
+        <button id="fetchTranscriptsBtn" class="btn-secondary">Pull transcripts</button>
+        <button id="extractAiBtn" class="btn-secondary">Extract prices</button>
+        <button id="pushDataBtn" class="btn-secondary">Push to website</button>
       </div>
     </section>
 
-    <section class="panel controls">
-      <div class="workflow" aria-label="Workflow progress">
-        <div class="workflow-step active" id="stepVideos">
-          <span>1</span>
-          <strong>Find videos</strong>
-          <small>Waiting</small>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="queue" type="button">Queue</button>
+      <button class="tab" data-tab="prices" type="button">Prices</button>
+      <button class="tab" data-tab="settings" type="button">Settings</button>
+    </nav>
+
+    <section class="tab-panel active" id="tab-queue">
+      <div class="panel-head">
+        <h2>Videos to process</h2>
+        <input id="videoSearch" placeholder="Search videos..." />
+      </div>
+      <div id="pendingPill" class="inline-pill">0 new</div>
+      <div id="pendingList" class="card-list compact-list"></div>
+      <div id="videoList" class="card-list"></div>
+    </section>
+
+    <section class="tab-panel" id="tab-prices">
+      <div class="panel-head">
+        <h2>Extracted prices</h2>
+        <input id="priceSearch" placeholder="Search fruit..." />
+      </div>
+      <div id="priceList" class="card-list"></div>
+    </section>
+
+    <section class="tab-panel" id="tab-settings">
+      <div class="settings-group">
+        <h3>Channel</h3>
+        <label>Channel URL<input id="channelUrl" value="https://www.youtube.com/@delhifruitmarket/videos" /></label>
+        <div class="grid-2">
+          <label>Max videos<input id="maxVideos" type="number" min="1" max="100" value="25" /></label>
+          <label>Poll every (min)<input id="pollIntervalMinutes" type="number" min="30" max="1440" value="360" /></label>
         </div>
-        <div class="workflow-step" id="stepTranscripts">
-          <span>2</span>
-          <strong>Pull transcripts</strong>
-          <small>Locked</small>
-        </div>
-        <div class="workflow-step" id="stepPrices">
-          <span>3</span>
-          <strong>Extract prices</strong>
-          <small>Locked</small>
-        </div>
-        <div class="workflow-step" id="stepExport">
-          <span>4</span>
-          <strong>Review/export</strong>
-          <small>Locked</small>
-        </div>
-      </div>
-
-      <div class="next-action" id="nextAction">Paste or keep the channel URL, then fetch videos.</div>
-
-      <label>
-        Channel / playlist URL
-        <input id="channelUrl" value="https://www.youtube.com/@delhifruitmarket/videos?view=0&sort=dd&shelf_id=2" />
-      </label>
-
-      <div class="grid-3">
-        <label>
-          Max videos
-          <input id="maxVideos" type="number" min="1" max="1000" value="25" />
-        </label>
-        <label>
-          Subtitle languages
-          <input id="languages" value="hi.*,hi,en.*" />
-        </label>
-        <label>
-          Delay per video, ms
-          <input id="delayMs" type="number" min="0" value="1500" />
-        </label>
-      </div>
-
-      <div class="buttons">
-        <button id="checkBtn" class="secondary">Check setup</button>
-        <button id="fetchVideosBtn">Fetch videos</button>
-        <button id="fetchTranscriptsBtn">Pull transcripts</button>
-        <button id="extractPricesBtn" class="secondary">Basic extraction</button>
-      </div>
-      <p class="hint">Start with 10 to 25 videos. Pulling transcripts is the slow step because each video is checked one at a time.</p>
-    </section>
-
-    <section class="panel watch-panel" id="pending">
-      <div class="section-head multi">
-        <div>
-          <h2>Channel watch</h2>
-          <p>Background checks for new uploads, badges the extension icon, and can notify you. Irrelevant videos (gold, silver, etc.) are filtered before transcript pulls.</p>
-        </div>
-        <div class="pending-pill" id="pendingPill">0 pending</div>
-      </div>
-      <div class="grid-3">
-        <label>
-          Poll every (minutes)
-          <input id="pollIntervalMinutes" type="number" min="30" max="1440" value="360" />
-        </label>
-        <label class="checkbox-label">
-          <input id="notificationsEnabled" type="checkbox" checked />
-          Desktop notifications for new uploads
-        </label>
-        <label>
-          &nbsp;
-          <span class="hint" id="lastPollText">Last check: never</span>
-        </label>
-      </div>
-      <div class="buttons">
-        <button id="saveWatchBtn" class="secondary">Save watch settings</button>
-        <button id="checkNewBtn">Check for new videos</button>
-        <button id="classifyBtn" class="secondary">Classify titles</button>
-      </div>
-      <div class="pending-list" id="pendingList">No pending videos yet.</div>
-    </section>
-
-    <section class="panel ai-panel">
-      <div>
-        <h2>AI cleanup + extraction</h2>
-        <p>Use this when Hindi captions are broken. The AI reads timestamped segments and returns clean fruit/variety/unit/min/max rows with clickable timestamps.</p>
-      </div>
-      <div class="grid-4">
-        <label>
-          OpenAI API key <span class="muted">optional if set in terminal</span>
-          <input id="openaiKey" type="password" placeholder="sk-..." autocomplete="off" />
-        </label>
-        <label>
-          Model
-          <input id="openaiModel" value="gpt-4o-mini" />
-        </label>
-        <label>
-          AI max videos this run
-          <input id="aiMaxVideos" type="number" min="1" max="100" value="5" />
-        </label>
-        <label>
-          Max chars per AI call
-          <input id="aiMaxChars" type="number" min="2500" max="20000" value="10000" />
-        </label>
-      </div>
-      <div class="buttons">
-        <button id="extractAiBtn">AI clean & extract prices</button>
-      </div>
-      <p class="hint">For safety, API key is sent only to your local server. Better: run with <code>OPENAI_API_KEY=your_key npm start</code> and leave this field blank.</p>
-    </section>
-
-    <section class="stats">
-      <article>
-        <strong id="videoCount">0</strong>
-        <span>videos</span>
-      </article>
-      <article>
-        <strong id="okCount">0</strong>
-        <span>transcripts</span>
-      </article>
-      <article>
-        <strong id="priceCount">0</strong>
-        <span>price rows</span>
-      </article>
-      <article>
-        <strong id="failCount">0</strong>
-        <span>failed</span>
-      </article>
-    </section>
-
-    <section class="panel export-panel">
-      <div>
-        <h2>Website sync (JSON)</h2>
-        <p>Push processed data from the extension to your Netlify site. No database — one JSON blob on Netlify Blobs (or a local <code>app/data/project.json</code> file when running <code>npm start</code>).</p>
-      </div>
-      <div class="grid-3">
-        <label>
-          Website / Netlify URL
-          <input id="syncSiteUrl" placeholder="https://your-site.netlify.app" />
-        </label>
-        <label>
-          Sync token <span class="muted">optional</span>
-          <input id="syncToken" type="password" placeholder="DATA_SYNC_TOKEN" autocomplete="off" />
-        </label>
-        <label>
-          &nbsp;
-          <span class="hint">Set <code>DATA_SYNC_TOKEN</code> on Netlify if you want write protection.</span>
-        </label>
-      </div>
-      <div class="buttons">
-        <button id="pushDataBtn" class="secondary">Push to website</button>
-        <button id="pullDataBtn" class="secondary">Pull from website</button>
-      </div>
-    </section>
-
-    <section class="panel export-panel">
-      <div>
-        <h2>Exports</h2>
-        <p>Export raw transcript, timestamped segments, AI/regex price rows, or the full project JSON.</p>
-      </div>
-      <div class="buttons">
-        <button id="exportTranscriptsBtn" class="secondary">Export transcript CSV</button>
-        <button id="exportSegmentsBtn" class="secondary">Export timestamp segments CSV</button>
-        <button id="exportPricesBtn" class="secondary">Export price CSV</button>
-        <button id="exportJsonBtn" class="secondary">Export JSON</button>
-        <button id="clearBtn" class="ghost">Clear local data</button>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="section-head">
-        <h2>Videos</h2>
-        <input id="videoSearch" placeholder="Search title/status..." />
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Status</th>
-              <th>Relevance</th>
-              <th>Title</th>
-              <th>Language</th>
-              <th>Segments</th>
-              <th>Chars</th>
-              <th>Error</th>
-            </tr>
-          </thead>
-          <tbody id="videoTable"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="section-head multi">
-        <div>
-          <h2>Transcript segments</h2>
-          <p>Every line has a YouTube timestamp link. This is your source-of-truth table.</p>
-        </div>
-        <div class="segment-controls">
-          <select id="segmentVideoSelect"></select>
-          <input id="segmentSearch" placeholder="Search transcript text..." />
+        <label class="check-row"><input id="notificationsEnabled" type="checkbox" checked /> Notify when new videos appear</label>
+        <p class="hint" id="lastPollText">Last check: never</p>
+        <div class="quick-actions">
+          <button id="saveWatchBtn" class="btn-secondary" type="button">Save watch settings</button>
+          <button id="fetchVideosBtn" class="btn-secondary" type="button">Fetch videos manually</button>
+          <button id="classifyBtn" class="btn-secondary" type="button">Re-classify titles</button>
         </div>
       </div>
-      <div class="table-wrap tall">
-        <table class="segment-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Caption text</th>
-            </tr>
-          </thead>
-          <tbody id="segmentTable"></tbody>
-        </table>
+
+      <div class="settings-group">
+        <h3>Transcripts</h3>
+        <div class="grid-2">
+          <label>Languages<input id="languages" value="hi.*,hi,en.*" /></label>
+          <label>Delay ms<input id="delayMs" type="number" min="0" value="1500" /></label>
+        </div>
+        <button id="extractPricesBtn" class="btn-secondary" type="button">Basic regex extraction</button>
+      </div>
+
+      <div class="settings-group">
+        <h3>AI</h3>
+        <label>OpenAI API key<input id="openaiKey" type="password" placeholder="sk-..." autocomplete="off" /></label>
+        <div class="grid-2">
+          <label>Model<input id="openaiModel" value="gpt-4o-mini" /></label>
+          <label>Max videos/run<input id="aiMaxVideos" type="number" min="1" max="100" value="5" /></label>
+        </div>
+        <label>Max chars/call<input id="aiMaxChars" type="number" min="2500" max="20000" value="10000" /></label>
+      </div>
+
+      <div class="settings-group">
+        <h3>Website sync</h3>
+        <label>Netlify URL<input id="syncSiteUrl" placeholder="https://your-site.netlify.app" /></label>
+        <label>Sync token (optional)<input id="syncToken" type="password" placeholder="DATA_SYNC_TOKEN" autocomplete="off" /></label>
+        <button id="pullDataBtn" class="btn-secondary" type="button">Pull from website</button>
+      </div>
+
+      <div class="settings-group">
+        <h3>Export</h3>
+        <div class="quick-actions">
+          <button id="exportPricesBtn" class="btn-secondary" type="button">CSV prices</button>
+          <button id="exportJsonBtn" class="btn-secondary" type="button">JSON backup</button>
+          <button id="exportTranscriptsBtn" class="btn-secondary" type="button">CSV transcripts</button>
+          <button id="exportSegmentsBtn" class="btn-secondary" type="button">CSV segments</button>
+          <button id="clearBtn" class="btn-ghost" type="button">Clear local data</button>
+        </div>
       </div>
     </section>
 
-    <section class="panel">
-      <div class="section-head">
-        <h2>Extracted price rows</h2>
-        <input id="priceSearch" placeholder="Search fruit/variety/context..." />
-      </div>
-      <div class="table-wrap tall">
-        <table>
-          <thead>
-            <tr>
-              <th>Source</th>
-              <th>Fruit</th>
-              <th>Variety</th>
-              <th>Unit</th>
-              <th>Min</th>
-              <th>Max</th>
-              <th>Jump</th>
-              <th>Video</th>
-              <th>Clean/context line</th>
-              <th>Conf.</th>
-            </tr>
-          </thead>
-          <tbody id="priceTable"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel log-panel">
-      <h2>Run log</h2>
+    <details class="log-panel">
+      <summary>Activity log</summary>
       <pre id="log"></pre>
-    </section>
+    </details>
+
+    <!-- legacy hooks kept for workflow helpers -->
+    <div class="sr-only" aria-hidden="true">
+      <span id="videoCount">0</span>
+      <span id="okCount">0</span>
+      <span id="failCount">0</span>
+      <span id="priceCount">0</span>
+      <span id="statusCard"></span>
+      <span id="stepVideos"></span>
+      <span id="stepTranscripts"></span>
+      <span id="stepPrices"></span>
+      <span id="stepExport"></span>
+      <table><tbody id="videoTable"></tbody></table>
+      <table><tbody id="priceTable"></tbody></table>
+      <select id="segmentVideoSelect"></select>
+      <input id="segmentSearch" />
+      <table><tbody id="segmentTable"></tbody></table>
+      <button id="checkBtn" type="button"></button>
+    </div>
   </main>
 
   <script src="app.js"></script>

@@ -6,8 +6,9 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
-function isFilePreview() {
-  return window.location.protocol === 'file:';
+function setDisabled(id, disabled) {
+  const el = $(id);
+  if (el) el.disabled = disabled;
 }
 
 function isChromeExtension() {
@@ -15,9 +16,11 @@ function isChromeExtension() {
 }
 
 function log(message) {
+  const box = $('log');
+  if (!box) return;
   const now = new Date().toLocaleTimeString();
-  $('log').textContent += `[${now}] ${message}\n`;
-  $('log').scrollTop = $('log').scrollHeight;
+  box.textContent += `[${now}] ${message}\n`;
+  box.scrollTop = box.scrollHeight;
 }
 
 function sleep(ms) {
@@ -25,44 +28,9 @@ function sleep(ms) {
 }
 
 async function api(path, body) {
-  if (isChromeExtension()) {
-    const data = await chrome.runtime.sendMessage({ type: 'api', path, body });
-    if (!data || !data.ok) {
-      throw new Error(data?.error || 'Extension request failed.');
-    }
-    return data;
-  }
-
-  if (isFilePreview()) {
-    throw new Error('This app needs a web server for /api calls. Open the Netlify site or run it locally with npm start at http://localhost:3000.');
-  }
-
-  const res = await fetch(path, {
-    method: body ? 'POST' : 'GET',
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) {
-    throw new Error(data.error || `Request failed: ${res.status}`);
-  }
+  const data = await chrome.runtime.sendMessage({ type: 'api', path, body });
+  if (!data || !data.ok) throw new Error(data?.error || 'Extension request failed.');
   return data;
-}
-
-function setStatus(kind, text) {
-  const card = $('statusCard');
-  card.classList.remove('ok', 'bad');
-  if (kind) card.classList.add(kind);
-  $('statusText').textContent = text;
-}
-
-function setStep(id, stateName, label) {
-  const el = $(id);
-  if (!el) return;
-  el.classList.remove('active', 'done', 'error');
-  if (stateName) el.classList.add(stateName);
-  const small = el.querySelector('small');
-  if (small) small.textContent = label;
 }
 
 function isProcessable(video) {
@@ -71,121 +39,6 @@ function isProcessable(video) {
 
 function pendingVideos() {
   return state.videos.filter(video => video.needsWork !== false && isProcessable(video) && video.status !== 'ok');
-}
-
-function renderPendingPanel() {
-  const pill = $('pendingPill');
-  const list = $('pendingList');
-  if (!pill || !list) return;
-
-  const pending = pendingVideos();
-  const fresh = pending.filter(video => video.isNew);
-  pill.textContent = `${pending.length} pending${fresh.length ? ` · ${fresh.length} new` : ''}`;
-
-  if (!pending.length) {
-    list.textContent = 'No pending videos. Fetch or check for new channel uploads.';
-    return;
-  }
-
-  list.innerHTML = pending.slice(0, 12).map(video => `
-    <article class="pending-item ${video.isNew ? 'is-new' : ''}">
-      <div>
-        <strong>${escapeHtml(video.title || video.id)}</strong>
-        <div class="mini">${escapeHtml(video.relevance || 'unclassified')}${video.relevanceCategory ? ` · ${escapeHtml(video.relevanceCategory)}` : ''}${video.isNew ? ' · new upload' : ''}</div>
-      </div>
-      <span class="badge ${escapeHtml(video.status || 'pending')}">${escapeHtml(video.status || 'pending')}</span>
-    </article>
-  `).join('');
-}
-
-function renderRelevanceBadge(video) {
-  const relevance = video.relevance || 'unclassified';
-  const extra = video.isNew ? ' · new' : '';
-  const category = video.relevanceCategory ? ` (${video.relevanceCategory})` : '';
-  return `<span class="badge relevance-${escapeHtml(relevance)}">${escapeHtml(relevance)}${escapeHtml(category)}${extra}</span>`;
-}
-
-function workflowState() {
-  const hasVideos = state.videos.length > 0;
-  const okVideos = state.videos.filter(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
-  const failedVideos = state.videos.filter(v => v.status === 'failed');
-  const skippedVideos = state.videos.filter(v => v.status === 'skipped' || v.relevance === 'irrelevant');
-  const pending = pendingVideos();
-  const hasPrices = state.priceRows.length > 0;
-
-  if (!hasVideos) {
-    return {
-      next: 'Paste or keep the channel URL, then fetch videos or check for new uploads.',
-      steps: [
-        ['stepVideos', 'active', 'Ready'],
-        ['stepTranscripts', '', 'Waiting'],
-        ['stepPrices', '', 'Waiting'],
-        ['stepExport', '', 'Waiting'],
-      ],
-    };
-  }
-
-  if (!okVideos.length) {
-    return {
-      next: pending.length
-        ? `${pending.length} relevant videos pending transcripts${skippedVideos.length ? ` (${skippedVideos.length} skipped as irrelevant)` : ''}.`
-        : `${state.videos.length} videos found. Pull transcripts next.`,
-      steps: [
-        ['stepVideos', 'done', `${state.videos.length} found`],
-        ['stepTranscripts', failedVideos.length ? 'error' : 'active', failedVideos.length ? `${failedVideos.length} failed` : 'Next'],
-        ['stepPrices', '', 'Waiting'],
-        ['stepExport', '', 'Waiting'],
-      ],
-    };
-  }
-
-  if (!hasPrices) {
-    return {
-      next: `${okVideos.length} transcript${okVideos.length === 1 ? '' : 's'} ready. Run basic extraction, or use AI cleanup for messy Hindi captions.`,
-      steps: [
-        ['stepVideos', 'done', `${state.videos.length} found`],
-        ['stepTranscripts', 'done', `${okVideos.length} ready`],
-        ['stepPrices', 'active', 'Next'],
-        ['stepExport', '', 'Waiting'],
-      ],
-    };
-  }
-
-  return {
-    next: `${state.priceRows.length} price row${state.priceRows.length === 1 ? '' : 's'} ready. Review confidence/context, then export what you need.`,
-    steps: [
-      ['stepVideos', 'done', `${state.videos.length} found`],
-      ['stepTranscripts', 'done', `${okVideos.length} ready`],
-      ['stepPrices', 'done', `${state.priceRows.length} rows`],
-      ['stepExport', 'active', 'Ready'],
-    ],
-  };
-}
-
-function updateWorkflow() {
-  const flow = workflowState();
-  for (const [id, stateName, label] of flow.steps) setStep(id, stateName, label);
-  if ($('nextAction')) $('nextAction').textContent = flow.next;
-
-  const hasVideos = state.videos.length > 0;
-  const hasTranscripts = state.videos.some(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
-  const busy = Boolean(state.runningTask);
-  $('fetchVideosBtn').disabled = busy;
-  $('fetchTranscriptsBtn').disabled = busy || !hasVideos;
-  $('extractPricesBtn').disabled = busy || !hasTranscripts;
-  $('extractAiBtn').disabled = busy || !hasTranscripts;
-  $('checkNewBtn')?.disabled = busy;
-  $('classifyBtn')?.disabled = busy || !hasVideos;
-  $('saveWatchBtn')?.disabled = busy;
-}
-
-function counts() {
-  $('videoCount').textContent = state.videos.length;
-  $('okCount').textContent = state.videos.filter(v => v.status === 'ok').length;
-  $('failCount').textContent = state.videos.filter(v => v.status === 'failed').length;
-  $('priceCount').textContent = state.priceRows.length;
-  renderPendingPanel();
-  updateWorkflow();
 }
 
 function escapeHtml(text) {
@@ -199,10 +52,8 @@ function escapeHtml(text) {
 
 function secondsToClock(seconds) {
   const s = Math.max(0, Math.floor(Number(seconds) || 0));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
+  const m = Math.floor(s / 60);
   const sec = s % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
 
@@ -210,127 +61,155 @@ function timestampUrl(videoUrl, seconds) {
   const sec = Math.max(0, Math.floor(Number(seconds) || 0));
   try {
     const url = new URL(videoUrl);
-    url.searchParams.delete('t');
     url.searchParams.set('t', `${sec}s`);
     return url.toString();
   } catch {
-    const joiner = String(videoUrl || '').includes('?') ? '&' : '?';
-    return `${videoUrl}${joiner}t=${sec}s`;
+    return `${videoUrl}${String(videoUrl).includes('?') ? '&' : '?'}t=${sec}s`;
   }
 }
 
+function tag(text, cls) {
+  return `<span class="badge ${cls}">${escapeHtml(text)}</span>`;
+}
+
+function updateStats() {
+  const pending = pendingVideos();
+  const done = state.videos.filter(v => v.status === 'ok').length;
+  if ($('statPending')) $('statPending').textContent = pending.length;
+  if ($('statDone')) $('statDone').textContent = done;
+  if ($('statPrices')) $('statPrices').textContent = state.priceRows.length;
+  if ($('videoCount')) $('videoCount').textContent = state.videos.length;
+  if ($('okCount')) $('okCount').textContent = done;
+  if ($('failCount')) $('failCount').textContent = state.videos.filter(v => v.status === 'failed').length;
+  if ($('priceCount')) $('priceCount').textContent = state.priceRows.length;
+}
+
+function updateNextAction() {
+  const pending = pendingVideos();
+  const skipped = state.videos.filter(v => v.status === 'skipped' || v.relevance === 'irrelevant').length;
+  const el = $('nextAction');
+  if (!el) return;
+
+  if (!state.videos.length) {
+    el.textContent = 'Check the channel for new fruit/vegetable price videos.';
+    return;
+  }
+  if (pending.length) {
+    el.textContent = `${pending.length} video(s) ready to process${skipped ? ` · ${skipped} irrelevant skipped` : ''}.`;
+    return;
+  }
+  if (!state.priceRows.length) {
+    el.textContent = 'Transcripts are ready. Extract prices next.';
+    return;
+  }
+  el.textContent = `${state.priceRows.length} price rows ready. Push to website when done.`;
+}
+
+function setBusy(busy) {
+  state.runningTask = busy ? 'busy' : '';
+  setDisabled('runAllBtn', busy);
+  setDisabled('checkNewBtn', busy);
+  setDisabled('fetchTranscriptsBtn', busy);
+  setDisabled('extractAiBtn', busy);
+  setDisabled('pushDataBtn', busy);
+  setDisabled('fetchVideosBtn', busy);
+  setDisabled('classifyBtn', busy);
+  setDisabled('saveWatchBtn', busy);
+}
+
+function renderPendingPanel() {
+  const pill = $('pendingPill');
+  const list = $('pendingList');
+  if (!pill || !list) return;
+
+  const pending = pendingVideos();
+  const fresh = pending.filter(video => video.isNew);
+  pill.textContent = fresh.length ? `${fresh.length} new upload(s)` : `${pending.length} pending`;
+
+  if (!fresh.length) {
+    list.innerHTML = '';
+    return;
+  }
+
+  list.innerHTML = fresh.slice(0, 6).map(video => `
+    <article class="pending-item ${video.isNew ? 'is-new' : ''}">
+      <strong>${escapeHtml(video.title || video.id)}</strong>
+      <div class="mini">${escapeHtml(video.relevance || 'unclassified')}${video.relevanceCategory ? ` · ${escapeHtml(video.relevanceCategory)}` : ''}</div>
+    </article>
+  `).join('');
+}
+
 function renderVideos() {
-  const q = $('videoSearch').value.toLowerCase().trim();
+  const q = ($('videoSearch')?.value || '').toLowerCase().trim();
+  const list = $('videoList');
+  if (!list) return;
+
   const rows = state.videos.filter(v => {
-    const hay = [v.title, v.status, v.language, v.error, v.relevance, v.relevanceCategory].join(' ').toLowerCase();
+    const hay = [v.title, v.status, v.relevance, v.relevanceCategory, v.error].join(' ').toLowerCase();
     return !q || hay.includes(q);
   });
 
   if (!rows.length) {
-    const message = state.videos.length ? 'No videos match this search.' : 'No videos loaded yet. Fetch videos to start.';
-    $('videoTable').innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(message)}</td></tr>`;
-    renderSegmentsPreview();
-    counts();
-    saveLocal();
-    return;
+    list.innerHTML = `<div class="empty-state">${state.videos.length ? 'No videos match search.' : 'No videos yet. Click “Check & process new videos”.'}</div>`;
+  } else {
+    list.innerHTML = rows.map(v => `
+      <article class="video-card ${v.isNew ? 'is-new' : ''} ${v.status === 'skipped' ? 'is-skipped' : ''}">
+        <h3><a href="${escapeHtml(v.url)}" target="_blank" rel="noreferrer">${escapeHtml(v.title || v.id)}</a></h3>
+        <div class="card-meta">${escapeHtml(v.upload_date || 'Unknown date')}${v.language ? ` · ${escapeHtml(v.language)}` : ''}${v.error ? ` · ${escapeHtml(v.error)}` : ''}</div>
+        <div class="card-tags">
+          ${tag(v.status || 'pending', v.status || 'pending')}
+          ${tag(v.relevance || 'unclassified', `relevance-${v.relevance || 'unclassified'}`)}
+          ${v.isNew ? tag('new', 'relevance-uncertain') : ''}
+        </div>
+        ${v.relevanceReason ? `<div class="mini">${escapeHtml(v.relevanceReason)}</div>` : ''}
+      </article>
+    `).join('');
   }
 
-  $('videoTable').innerHTML = rows.map(v => {
-    const firstSegment = Array.isArray(v.segments) && v.segments.length ? v.segments[0] : null;
-    const firstUrl = firstSegment ? timestampUrl(v.url, firstSegment.start) : v.url;
-    return `
-      <tr class="${v.isNew ? 'row-new' : ''}">
-        <td><span class="badge ${escapeHtml(v.status || 'pending')}">${escapeHtml(v.status || 'pending')}</span></td>
-        <td>${renderRelevanceBadge(v)}</td>
-        <td>
-          <a href="${escapeHtml(v.url)}" target="_blank" rel="noreferrer">${escapeHtml(v.title || v.id)}</a>
-          ${v.relevanceReason ? `<div class="mini">${escapeHtml(v.relevanceReason)}</div>` : ''}
-          ${firstSegment ? `<div class="mini"><a href="${escapeHtml(firstUrl)}" target="_blank" rel="noreferrer">open at ${escapeHtml(firstSegment.timestamp_label || '0:00')}</a></div>` : ''}
-        </td>
-        <td>${escapeHtml(v.language || '')}</td>
-        <td>${Array.isArray(v.segments) ? v.segments.length.toLocaleString() : 0}</td>
-        <td>${(v.transcriptText || '').length.toLocaleString()}</td>
-        <td>${escapeHtml(v.error || '')}</td>
-      </tr>
-    `;
-  }).join('');
-
-  renderSegmentsPreview();
-  counts();
+  renderPendingPanel();
+  updateStats();
+  updateNextAction();
   saveLocal();
 }
 
-function renderSegmentsPreview() {
-  const select = $('segmentVideoSelect');
-  if (!select) return;
-
-  const current = select.value;
-  const okVideos = state.videos.filter(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
-  select.innerHTML = '<option value="">Choose a video with transcript...</option>' + okVideos.map(v => `
-    <option value="${escapeHtml(v.id)}">${escapeHtml(v.title || v.id)}</option>
-  `).join('');
-  if (current && okVideos.some(v => v.id === current)) select.value = current;
-
-  const selected = okVideos.find(v => v.id === select.value) || okVideos[0];
-  if (!select.value && selected) select.value = selected.id;
-
-  const q = $('segmentSearch')?.value.toLowerCase().trim() || '';
-  const segments = selected ? selected.segments.filter(seg => {
-    const hay = [seg.timestamp_label, seg.text].join(' ').toLowerCase();
-    return !q || hay.includes(q);
-  }).slice(0, 400) : [];
-
-  if (!segments.length) {
-    $('segmentTable').innerHTML = '<tr class="empty-row"><td colspan="2">No transcript segments yet. Pull transcripts after fetching videos.</td></tr>';
-    return;
-  }
-
-  $('segmentTable').innerHTML = segments.map(seg => {
-    const url = timestampUrl(selected.url, seg.start);
-    return `
-      <tr>
-        <td><a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(seg.timestamp_label || secondsToClock(seg.start))}</a></td>
-        <td>${escapeHtml(seg.text)}</td>
-      </tr>
-    `;
-  }).join('');
-}
-
 function renderPrices() {
-  const q = $('priceSearch').value.toLowerCase().trim();
+  const q = ($('priceSearch')?.value || '').toLowerCase().trim();
+  const list = $('priceList');
+  if (!list) return;
+
   const rows = state.priceRows.filter(row => {
     const hay = Object.values(row).join(' ').toLowerCase();
     return !q || hay.includes(q);
   });
 
   if (!rows.length) {
-    $('priceTable').innerHTML = '<tr class="empty-row"><td colspan="10">No price rows yet. Extract prices after transcripts are ready.</td></tr>';
-    counts();
-    saveLocal();
-    return;
+    list.innerHTML = '<div class="empty-state">No prices yet. Process videos first.</div>';
+  } else {
+    list.innerHTML = rows.map(row => {
+      const timeUrl = row.timestamp_url || timestampUrl(row.video_url, row.timestamp_seconds);
+      const label = row.timestamp_label || secondsToClock(row.timestamp_seconds);
+      return `
+        <article class="price-card">
+          <h3>${escapeHtml(row.fruit || 'unknown')}${row.fruit_hindi ? ` · ${escapeHtml(row.fruit_hindi)}` : ''}</h3>
+          <div class="card-meta"><a href="${escapeHtml(row.video_url)}" target="_blank" rel="noreferrer">${escapeHtml(row.video_title || row.video_id)}</a></div>
+          <div class="price-grid">
+            <div><span>Min</span><strong>₹${escapeHtml(row.min_price_inr)}</strong></div>
+            <div><span>Max</span><strong>₹${escapeHtml(row.max_price_inr)}</strong></div>
+            <div><span>Unit</span><strong>${escapeHtml(row.unit || '-')}</strong></div>
+            <div><span>Jump</span><strong><a href="${escapeHtml(timeUrl)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a></strong></div>
+          </div>
+          <div class="card-tags">
+            ${tag(row.source || 'regex', row.source === 'ai' ? 'source-pill ai' : 'relevance-relevant')}
+            ${row.confidence ? tag(row.confidence, 'relevance-unclassified') : ''}
+          </div>
+          ${row.clean_hindi_line || row.original_line ? `<div class="mini">${escapeHtml(row.clean_hindi_line || row.original_line)}</div>` : ''}
+        </article>
+      `;
+    }).join('');
   }
 
-  $('priceTable').innerHTML = rows.map(row => {
-    const timeUrl = row.timestamp_url || timestampUrl(row.video_url, row.timestamp_seconds);
-    const label = row.timestamp_label || secondsToClock(row.timestamp_seconds);
-    const clean = row.clean_hindi_line || row.original_line || row.context || '';
-    return `
-      <tr>
-        <td><span class="source-pill ${escapeHtml(row.source || 'regex')}">${escapeHtml(row.source || 'regex')}</span></td>
-        <td>${escapeHtml(row.fruit || '')}<div class="mini">${escapeHtml(row.fruit_hindi || '')}</div></td>
-        <td>${escapeHtml(row.variety || '')}</td>
-        <td>${escapeHtml(row.unit || '')}</td>
-        <td>${escapeHtml(row.min_price_inr)}</td>
-        <td>${escapeHtml(row.max_price_inr)}</td>
-        <td><a href="${escapeHtml(timeUrl)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a></td>
-        <td><a href="${escapeHtml(row.video_url)}" target="_blank" rel="noreferrer">${escapeHtml(row.video_title || row.video_id)}</a></td>
-        <td>${escapeHtml(clean)}${row.notes ? `<div class="mini">${escapeHtml(row.notes)}</div>` : ''}</td>
-        <td>${escapeHtml(row.confidence || '')}</td>
-      </tr>
-    `;
-  }).join('');
-
-  counts();
+  updateStats();
+  updateNextAction();
   saveLocal();
 }
 
@@ -343,14 +222,12 @@ function saveLocal() {
 
 function loadLocal() {
   try {
-    const saved = JSON.parse(localStorage.getItem('fruitTranscriptMinerStateV2') || localStorage.getItem('fruitTranscriptMinerState') || '{}');
+    const saved = JSON.parse(localStorage.getItem('fruitTranscriptMinerStateV2') || '{}');
     if (Array.isArray(saved.videos)) state.videos = saved.videos;
     if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
   } catch {}
-  try {
-    const savedKey = localStorage.getItem('fruitTranscriptMinerOpenAIKey') || '';
-    if (savedKey && $('openaiKey')) $('openaiKey').value = savedKey;
-  } catch {}
+  const savedKey = localStorage.getItem('fruitTranscriptMinerOpenAIKey') || '';
+  if (savedKey && $('openaiKey')) $('openaiKey').value = savedKey;
   renderVideos();
   renderPrices();
 }
@@ -379,35 +256,13 @@ function downloadFile(filename, content, type = 'text/plain;charset=utf-8') {
   URL.revokeObjectURL(url);
 }
 
-$('checkBtn').addEventListener('click', async () => {
-  try {
-    const data = await api('/api/status');
-    const ai = data.openaiConfigured ? 'OpenAI key found in server env' : 'OpenAI key not set in server env';
-    const cookies = data.extensionMode ? 'Chrome YouTube session will be used' : (data.youtubeCookiesConfigured ? 'YouTube cookies found' : 'YouTube cookies not set; Netlify may get bot checks');
-    setStatus('ok', `yt-dlp ready: ${data.ytdlpVersion}`);
-    log(`yt-dlp ready: ${data.ytdlpVersion}. ${cookies}. ${ai}.`);
-  } catch (error) {
-    setStatus('bad', 'yt-dlp missing');
-    log(`Setup problem: ${error.message}`);
-  }
-});
-
 async function markVideosProcessed(videoIds) {
-  if (!isChromeExtension() || !videoIds.length) return;
-  await chrome.runtime.sendMessage({
-    type: 'api',
-    path: '/api/mark-processed',
-    body: { videoIds },
-  });
+  if (!videoIds.length) return;
+  await chrome.runtime.sendMessage({ type: 'api', path: '/api/mark-processed', body: { videoIds } });
 }
 
 async function loadWatchSettings() {
-  if (!isChromeExtension()) return;
-  const data = await chrome.runtime.sendMessage({
-    type: 'api',
-    path: '/api/channel-settings',
-    body: { method: 'get' },
-  });
+  const data = await chrome.runtime.sendMessage({ type: 'api', path: '/api/channel-settings', body: { method: 'get' } });
   if (!data?.ok) return;
   const settings = data.settings || {};
   if ($('pollIntervalMinutes')) $('pollIntervalMinutes').value = settings.pollIntervalMinutes || 360;
@@ -417,279 +272,7 @@ async function loadWatchSettings() {
       ? `Last check: ${new Date(settings.lastPollAt).toLocaleString()}`
       : 'Last check: never';
   }
-  if ($('pendingPill') && typeof data.pendingCount === 'number') {
-    $('pendingPill').textContent = `${data.pendingCount} pending`;
-  }
 }
-
-$('saveWatchBtn')?.addEventListener('click', async () => {
-  try {
-    state.runningTask = 'watch';
-    updateWorkflow();
-    const data = await api('/api/channel-settings', {
-      method: 'set',
-      channelUrl: $('channelUrl').value.trim(),
-      pollIntervalMinutes: Number($('pollIntervalMinutes').value || 360),
-      notificationsEnabled: $('notificationsEnabled').checked,
-    });
-    log(`Watch settings saved. Poll every ${data.settings.pollIntervalMinutes} min. Pending badge: ${data.pendingCount}.`);
-    await loadWatchSettings();
-  } catch (error) {
-    log(`Save watch settings failed: ${error.message}`);
-  } finally {
-    state.runningTask = '';
-    updateWorkflow();
-  }
-});
-
-$('checkNewBtn')?.addEventListener('click', async () => {
-  try {
-    state.runningTask = 'watch';
-    updateWorkflow();
-    log('Checking channel for new uploads...');
-    const data = await api('/api/check-new-videos', {
-      channelUrl: $('channelUrl').value.trim(),
-      maxVideos: Number($('maxVideos').value || 15),
-      pollIntervalMinutes: Number($('pollIntervalMinutes').value || 360),
-      notificationsEnabled: $('notificationsEnabled').checked,
-    });
-    if (data.newCount) {
-      const merged = new Map(state.videos.map(video => [video.id, video]));
-      for (const video of data.videos) merged.set(video.id, { ...merged.get(video.id), ...video });
-      state.videos = [...merged.values()];
-      renderVideos();
-      log(`Found ${data.newCount} new upload(s). ${data.pendingCount} total pending in badge.`);
-    } else {
-      log(`No new uploads. ${data.pendingCount} still pending in badge.`);
-    }
-    await loadWatchSettings();
-  } catch (error) {
-    log(`New video check failed: ${error.message}`);
-  } finally {
-    state.runningTask = '';
-    updateWorkflow();
-  }
-});
-
-$('classifyBtn')?.addEventListener('click', async () => {
-  if (!state.videos.length) {
-    log('Fetch videos first.');
-    return;
-  }
-  try {
-    state.runningTask = 'classify';
-    updateWorkflow();
-    const apiKey = $('openaiKey')?.value.trim() || '';
-    log(apiKey ? 'Classifying titles with heuristics + AI for uncertain videos...' : 'Classifying titles with heuristics...');
-    const data = await api('/api/classify-videos', {
-      videos: state.videos,
-      apiKey,
-      model: $('openaiModel')?.value.trim() || 'gpt-4o-mini',
-    });
-    const byId = new Map(data.videos.map(video => [video.id, video]));
-    state.videos = state.videos.map(video => ({ ...video, ...byId.get(video.id) }));
-    const skipped = state.videos.filter(video => video.status === 'skipped');
-    const toMark = skipped.map(video => video.id);
-    if (toMark.length) await markVideosProcessed(toMark);
-    renderVideos();
-    log(`Classification done${data.aiUsed ? ' (AI used for uncertain titles)' : ''}: ${JSON.stringify(data.counts)}. ${skipped.length} skipped.`);
-  } catch (error) {
-    log(`Classification failed: ${error.message}`);
-  } finally {
-    state.runningTask = '';
-    updateWorkflow();
-  }
-});
-
-$('fetchVideosBtn').addEventListener('click', async () => {
-  try {
-    state.runningTask = 'videos';
-    updateWorkflow();
-    const channelUrl = $('channelUrl').value.trim();
-    const maxVideos = Number($('maxVideos').value || 50);
-    log(`Fetching up to ${maxVideos} videos...`);
-    const data = await api('/api/list-videos', { channelUrl, maxVideos });
-    state.videos = data.videos;
-    state.priceRows = [];
-    renderVideos();
-    renderPrices();
-    const skipped = state.videos.filter(video => video.status === 'skipped').length;
-    log(`Found ${data.count} videos.${skipped ? ` ${skipped} auto-skipped from title heuristics.` : ''}`);
-    log('Next: run Classify titles for uncertain videos, then pull transcripts for relevant ones.');
-  } catch (error) {
-    log(`Video fetch failed: ${error.message}`);
-  } finally {
-    state.runningTask = '';
-    updateWorkflow();
-  }
-});
-
-$('fetchTranscriptsBtn').addEventListener('click', async () => {
-  const languages = $('languages').value.trim() || 'hi.*,hi,en.*';
-  const delayMs = Number($('delayMs').value || 1000);
-  const pending = state.videos.filter(v => v.status !== 'ok' && isProcessable(v));
-
-  if (!state.videos.length) {
-    log('Fetch videos first.');
-    return;
-  }
-  if (!pending.length) {
-    log('No relevant pending videos. Irrelevant/skipped videos are not processed.');
-    return;
-  }
-
-  state.runningTask = 'transcripts';
-  updateWorkflow();
-  log(`Pulling transcripts for ${pending.length} relevant videos...`);
-
-  const processedIds = [];
-
-  for (let i = 0; i < state.videos.length; i++) {
-    const video = state.videos[i];
-    if (video.status === 'ok' || !isProcessable(video)) continue;
-
-    video.status = 'running';
-    video.error = '';
-    renderVideos();
-
-    try {
-      log(`Transcript ${i + 1}/${state.videos.length}: ${video.title}`);
-      const data = await api('/api/transcript', {
-        id: video.id,
-        videoUrl: video.url,
-        languages,
-      });
-      video.status = 'ok';
-      video.language = data.language;
-      video.transcriptText = data.transcriptText;
-      video.segments = data.segments;
-      video.error = '';
-      video.isNew = false;
-      video.needsWork = false;
-      processedIds.push(video.id);
-      log(`✓ ${video.title} (${data.segmentCount} timestamped segments, ${data.language})`);
-    } catch (error) {
-      video.status = 'failed';
-      video.error = error.message.slice(0, 280);
-      log(`× ${video.title}: ${error.message}`);
-    }
-
-    renderVideos();
-    if (delayMs > 0) await sleep(delayMs);
-  }
-
-  await markVideosProcessed(processedIds);
-  state.runningTask = '';
-  updateWorkflow();
-  await loadWatchSettings();
-  log('Transcript pull complete.');
-  log('Next: extract prices. Use AI cleanup if the captions look noisy or mixed Hindi/English.');
-});
-
-$('extractPricesBtn').addEventListener('click', async () => {
-  try {
-    const items = state.videos.filter(v => v.status === 'ok' && v.transcriptText);
-    if (!items.length) {
-      log('No transcripts found yet.');
-      return;
-    }
-    state.runningTask = 'prices';
-    updateWorkflow();
-    log(`Extracting basic timestamped price rows from ${items.length} transcripts...`);
-    const data = await api('/api/extract-prices', { items });
-    state.priceRows = data.rows;
-    renderPrices();
-    log(`Extracted ${data.count} regex price rows. Use AI extraction for messy Hindi captions.`);
-  } catch (error) {
-    log(`Price extraction failed: ${error.message}`);
-  } finally {
-    state.runningTask = '';
-    updateWorkflow();
-  }
-});
-
-$('extractAiBtn').addEventListener('click', async () => {
-  try {
-    const items = state.videos.filter(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
-    if (!items.length) {
-      log('No timestamped transcripts found yet.');
-      return;
-    }
-
-    const apiKey = $('openaiKey').value.trim();
-    const model = $('openaiModel').value.trim() || 'gpt-4o-mini';
-    const maxVideos = Number($('aiMaxVideos').value || items.length);
-    const maxCharsPerCall = Number($('aiMaxChars').value || 10000);
-
-    if (apiKey) localStorage.setItem('fruitTranscriptMinerOpenAIKey', apiKey);
-
-    state.runningTask = 'ai';
-    updateWorkflow();
-    log(`AI extracting prices from ${Math.min(maxVideos, items.length)} video(s) using ${model}...`);
-    const data = await api('/api/extract-prices-ai', {
-      items,
-      apiKey,
-      model,
-      maxVideos,
-      maxCharsPerCall,
-    });
-    state.priceRows = data.rows;
-    renderPrices();
-    log(`AI extracted ${data.count} price rows with timestamps. Review confidence + context before final analysis.`);
-  } catch (error) {
-    log(`AI extraction failed: ${error.message}`);
-  } finally {
-    state.runningTask = '';
-    updateWorkflow();
-  }
-});
-
-$('exportTranscriptsBtn').addEventListener('click', () => {
-  const rows = state.videos.map(v => ({
-    video_id: v.id,
-    title: v.title,
-    url: v.url,
-    upload_date: v.upload_date,
-    language: v.language,
-    status: v.status,
-    error: v.error,
-    segment_count: Array.isArray(v.segments) ? v.segments.length : 0,
-    transcript_text: v.transcriptText || '',
-  }));
-  const csv = toCsv(rows, ['video_id', 'title', 'url', 'upload_date', 'language', 'status', 'error', 'segment_count', 'transcript_text']);
-  downloadFile('delhi_fruit_market_transcripts.csv', csv, 'text/csv;charset=utf-8');
-});
-
-$('exportSegmentsBtn').addEventListener('click', () => {
-  const rows = [];
-  for (const v of state.videos) {
-    for (const seg of (v.segments || [])) {
-      rows.push({
-        video_id: v.id,
-        title: v.title,
-        upload_date: v.upload_date,
-        language: v.language,
-        timestamp_seconds: Math.floor(Number(seg.start) || 0),
-        timestamp_label: seg.timestamp_label || secondsToClock(seg.start),
-        timestamp_url: timestampUrl(v.url, seg.start),
-        duration: seg.duration,
-        text: seg.text,
-      });
-    }
-  }
-  const csv = toCsv(rows, ['video_id', 'title', 'upload_date', 'language', 'timestamp_seconds', 'timestamp_label', 'timestamp_url', 'duration', 'text']);
-  downloadFile('delhi_fruit_market_segments_with_timestamps.csv', csv, 'text/csv;charset=utf-8');
-});
-
-$('exportPricesBtn').addEventListener('click', () => {
-  const cols = [
-    'source', 'upload_date', 'fruit', 'fruit_hindi', 'variety', 'unit', 'min_price_inr', 'max_price_inr',
-    'market_name', 'confidence', 'timestamp_seconds', 'timestamp_label', 'timestamp_url', 'video_title', 'video_url',
-    'original_line', 'clean_hindi_line', 'context', 'notes'
-  ];
-  const csv = toCsv(state.priceRows, cols);
-  downloadFile('fruit_price_mentions_with_timestamps.csv', csv, 'text/csv;charset=utf-8');
-});
 
 function syncSettings() {
   return {
@@ -698,102 +281,337 @@ function syncSettings() {
   };
 }
 
-function saveSyncSettings() {
-  const { siteUrl, token } = syncSettings();
-  if (siteUrl) localStorage.setItem('fruitTranscriptMinerSyncSiteUrl', siteUrl);
-  if (token) localStorage.setItem('fruitTranscriptMinerSyncToken', token);
-}
-
 async function remoteDataRequest(method, body) {
   const { siteUrl, token } = syncSettings();
-  if (!siteUrl) throw new Error('Set your Netlify / website URL first.');
-  saveSyncSettings();
+  if (!siteUrl) throw new Error('Set your Netlify URL in Settings first.');
+  if (siteUrl) localStorage.setItem('fruitTranscriptMinerSyncSiteUrl', siteUrl);
+  if (token) localStorage.setItem('fruitTranscriptMinerSyncToken', token);
 
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
-
-  const res = await fetch(`${siteUrl}/api/data`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const res = await fetch(`${siteUrl}/api/data`, { method, headers, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) {
-    throw new Error(data.error || `Sync failed: ${res.status}`);
-  }
+  if (!res.ok || data.ok === false) throw new Error(data.error || `Sync failed: ${res.status}`);
   return data;
 }
 
+async function classifyCurrentVideos() {
+  const apiKey = ($('openaiKey')?.value || '').trim();
+  const model = ($('openaiModel')?.value || 'gpt-4o-mini').trim();
+  const data = await api('/api/classify-videos', { videos: state.videos, apiKey, model });
+  const byId = new Map(data.videos.map(video => [video.id, video]));
+  state.videos = state.videos.map(video => ({ ...video, ...byId.get(video.id) }));
+  const skipped = state.videos.filter(video => video.status === 'skipped').map(video => video.id);
+  if (skipped.length) await markVideosProcessed(skipped);
+  renderVideos();
+  return data;
+}
+
+async function pullTranscripts() {
+  const languages = ($('languages')?.value || 'hi.*,hi,en.*').trim();
+  const delayMs = Number($('delayMs')?.value || 1500);
+  const pending = state.videos.filter(v => v.status !== 'ok' && isProcessable(v));
+  if (!pending.length) return 0;
+
+  log(`Pulling transcripts for ${pending.length} relevant video(s)...`);
+  const processedIds = [];
+
+  for (const video of state.videos) {
+    if (video.status === 'ok' || !isProcessable(video)) continue;
+    video.status = 'running';
+    renderVideos();
+    try {
+      const data = await api('/api/transcript', { id: video.id, videoUrl: video.url, languages });
+      Object.assign(video, {
+        status: 'ok',
+        language: data.language,
+        transcriptText: data.transcriptText,
+        segments: data.segments,
+        error: '',
+        isNew: false,
+        needsWork: false,
+      });
+      processedIds.push(video.id);
+      log(`✓ ${video.title}`);
+    } catch (error) {
+      video.status = 'failed';
+      video.error = error.message.slice(0, 200);
+      log(`× ${video.title}: ${error.message}`);
+    }
+    renderVideos();
+    if (delayMs > 0) await sleep(delayMs);
+  }
+
+  await markVideosProcessed(processedIds);
+  return processedIds.length;
+}
+
+async function extractPrices() {
+  const items = state.videos.filter(v => v.status === 'ok' && Array.isArray(v.segments) && v.segments.length);
+  if (!items.length) return 0;
+
+  const apiKey = ($('openaiKey')?.value || '').trim();
+  if (apiKey) localStorage.setItem('fruitTranscriptMinerOpenAIKey', apiKey);
+
+  if (apiKey) {
+    const data = await api('/api/extract-prices-ai', {
+      items,
+      apiKey,
+      model: ($('openaiModel')?.value || 'gpt-4o-mini').trim(),
+      maxVideos: Number($('aiMaxVideos')?.value || items.length),
+      maxCharsPerCall: Number($('aiMaxChars')?.value || 10000),
+    });
+    state.priceRows = data.rows;
+    log(`AI extracted ${data.count} price rows.`);
+  } else {
+    const data = await api('/api/extract-prices', { items });
+    state.priceRows = data.rows;
+    log(`Regex extracted ${data.count} price rows. Add OpenAI key in Settings for better Hindi cleanup.`);
+  }
+
+  renderPrices();
+  return state.priceRows.length;
+}
+
+async function checkOrFetchVideos() {
+  const channelUrl = ($('channelUrl')?.value || '').trim();
+  const maxVideos = Number($('maxVideos')?.value || 25);
+
+  try {
+    const check = await api('/api/check-new-videos', {
+      channelUrl,
+      maxVideos,
+      pollIntervalMinutes: Number($('pollIntervalMinutes')?.value || 360),
+      notificationsEnabled: $('notificationsEnabled')?.checked !== false,
+    });
+    if (check.videos?.length) {
+      const merged = new Map(state.videos.map(video => [video.id, video]));
+      for (const video of check.videos) merged.set(video.id, { ...merged.get(video.id), ...video });
+      state.videos = [...merged.values()];
+      log(check.newCount ? `Found ${check.newCount} new upload(s).` : 'Channel checked, no new uploads.');
+      return check.newCount || 0;
+    }
+  } catch (error) {
+    log(`Check-new fallback: ${error.message}`);
+  }
+
+  const data = await api('/api/list-videos', { channelUrl, maxVideos });
+  state.videos = data.videos;
+  log(`Fetched ${data.count} videos.`);
+  return data.count;
+}
+
+// Tabs
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    $(`tab-${btn.dataset.tab}`)?.classList.add('active');
+  });
+});
+
+$('runAllBtn')?.addEventListener('click', async () => {
+  try {
+    setBusy(true);
+    log('Pipeline started: check → classify → transcripts → prices');
+    await checkOrFetchVideos();
+    renderVideos();
+    await classifyCurrentVideos();
+    await pullTranscripts();
+    await extractPrices();
+    log('Pipeline complete.');
+    await loadWatchSettings();
+  } catch (error) {
+    log(`Pipeline failed: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('checkNewBtn')?.addEventListener('click', async () => {
+  try {
+    setBusy(true);
+    await checkOrFetchVideos();
+    renderVideos();
+    await loadWatchSettings();
+  } catch (error) {
+    log(`Check failed: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('fetchVideosBtn')?.addEventListener('click', async () => {
+  try {
+    setBusy(true);
+    const data = await api('/api/list-videos', {
+      channelUrl: ($('channelUrl')?.value || '').trim(),
+      maxVideos: Number($('maxVideos')?.value || 25),
+    });
+    state.videos = data.videos;
+    renderVideos();
+    log(`Fetched ${data.count} videos.`);
+  } catch (error) {
+    log(`Fetch failed: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('classifyBtn')?.addEventListener('click', async () => {
+  try {
+    setBusy(true);
+    await classifyCurrentVideos();
+    log('Titles re-classified.');
+  } catch (error) {
+    log(`Classify failed: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('saveWatchBtn')?.addEventListener('click', async () => {
+  try {
+    setBusy(true);
+    await api('/api/channel-settings', {
+      method: 'set',
+      channelUrl: ($('channelUrl')?.value || '').trim(),
+      pollIntervalMinutes: Number($('pollIntervalMinutes')?.value || 360),
+      notificationsEnabled: $('notificationsEnabled')?.checked !== false,
+    });
+    log('Watch settings saved.');
+    await loadWatchSettings();
+  } catch (error) {
+    log(`Save settings failed: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('fetchTranscriptsBtn')?.addEventListener('click', async () => {
+  try {
+    setBusy(true);
+    await pullTranscripts();
+  } catch (error) {
+    log(`Transcripts failed: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('extractAiBtn')?.addEventListener('click', async () => {
+  try {
+    setBusy(true);
+    await extractPrices();
+  } catch (error) {
+    log(`Extract failed: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('extractPricesBtn')?.addEventListener('click', async () => {
+  try {
+    setBusy(true);
+    const items = state.videos.filter(v => v.status === 'ok' && v.transcriptText);
+    const data = await api('/api/extract-prices', { items });
+    state.priceRows = data.rows;
+    renderPrices();
+    log(`Regex extracted ${data.count} rows.`);
+  } catch (error) {
+    log(`Regex extract failed: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
 $('pushDataBtn')?.addEventListener('click', async () => {
   try {
-    state.runningTask = 'sync';
-    updateWorkflow();
-    log('Pushing local data to website JSON store...');
+    setBusy(true);
     const data = await remoteDataRequest('POST', {
-      channelUrl: $('channelUrl').value.trim(),
+      channelUrl: ($('channelUrl')?.value || '').trim(),
       videos: state.videos,
       priceRows: state.priceRows,
       knownVideoIds: state.videos.map(v => v.id),
     });
-    log(`Synced to website: ${data.counts.videos} videos, ${data.counts.priceRows} price rows.`);
+    log(`Pushed to website: ${data.counts.videos} videos, ${data.counts.priceRows} prices.`);
   } catch (error) {
-    log(`Website push failed: ${error.message}`);
+    log(`Push failed: ${error.message}`);
   } finally {
-    state.runningTask = '';
-    updateWorkflow();
+    setBusy(false);
   }
 });
 
 $('pullDataBtn')?.addEventListener('click', async () => {
   try {
-    state.runningTask = 'sync';
-    updateWorkflow();
-    log('Pulling data from website JSON store...');
+    setBusy(true);
     const data = await remoteDataRequest('GET');
     if (Array.isArray(data.data?.videos)) state.videos = data.data.videos;
     if (Array.isArray(data.data?.priceRows)) state.priceRows = data.data.priceRows;
     if (data.data?.channelUrl && $('channelUrl')) $('channelUrl').value = data.data.channelUrl;
     renderVideos();
     renderPrices();
-    saveLocal();
-    log(`Loaded from website: ${state.videos.length} videos, ${state.priceRows.length} price rows.`);
+    log(`Loaded from website.`);
   } catch (error) {
-    log(`Website pull failed: ${error.message}`);
+    log(`Pull failed: ${error.message}`);
   } finally {
-    state.runningTask = '';
-    updateWorkflow();
+    setBusy(false);
   }
 });
 
-$('exportJsonBtn').addEventListener('click', () => {
-  downloadFile('fruit_transcript_project_with_timestamps.json', JSON.stringify(state, null, 2), 'application/json;charset=utf-8');
+$('exportPricesBtn')?.addEventListener('click', () => {
+  const cols = ['source', 'fruit', 'fruit_hindi', 'variety', 'unit', 'min_price_inr', 'max_price_inr', 'timestamp_label', 'video_title', 'video_url', 'confidence'];
+  downloadFile('fruit_prices.csv', toCsv(state.priceRows, cols), 'text/csv;charset=utf-8');
 });
 
-$('clearBtn').addEventListener('click', () => {
-  if (!confirm('Clear saved local app data?')) return;
-  localStorage.removeItem('fruitTranscriptMinerState');
-  localStorage.removeItem('fruitTranscriptMinerStateV2');
+$('exportJsonBtn')?.addEventListener('click', () => {
+  downloadFile('fruit_project.json', JSON.stringify(state, null, 2), 'application/json;charset=utf-8');
+});
+
+$('exportTranscriptsBtn')?.addEventListener('click', () => {
+  const rows = state.videos.map(v => ({
+    video_id: v.id, title: v.title, url: v.url, status: v.status, language: v.language, transcript_text: v.transcriptText || '',
+  }));
+  downloadFile('transcripts.csv', toCsv(rows, ['video_id', 'title', 'url', 'status', 'language', 'transcript_text']), 'text/csv;charset=utf-8');
+});
+
+$('exportSegmentsBtn')?.addEventListener('click', () => {
+  const rows = [];
+  for (const v of state.videos) {
+    for (const seg of (v.segments || [])) {
+      rows.push({ video_id: v.id, title: v.title, timestamp_label: seg.timestamp_label, text: seg.text });
+    }
+  }
+  downloadFile('segments.csv', toCsv(rows, ['video_id', 'title', 'timestamp_label', 'text']), 'text/csv;charset=utf-8');
+});
+
+$('clearBtn')?.addEventListener('click', () => {
+  if (!confirm('Clear all local data?')) return;
   state.videos = [];
   state.priceRows = [];
-  $('log').textContent = '';
+  if ($('log')) $('log').textContent = '';
   renderVideos();
   renderPrices();
 });
 
-$('videoSearch').addEventListener('input', renderVideos);
-$('priceSearch').addEventListener('input', renderPrices);
-$('segmentVideoSelect').addEventListener('change', renderSegmentsPreview);
-$('segmentSearch').addEventListener('input', renderSegmentsPreview);
+$('videoSearch')?.addEventListener('input', renderVideos);
+$('priceSearch')?.addEventListener('input', renderPrices);
 
 loadLocal();
 loadWatchSettings();
-if (window.location.hash === '#pending') {
-  document.getElementById('pending')?.scrollIntoView({ behavior: 'smooth' });
-}
 if ($('syncSiteUrl')) $('syncSiteUrl').value = localStorage.getItem('fruitTranscriptMinerSyncSiteUrl') || '';
 if ($('syncToken')) $('syncToken').value = localStorage.getItem('fruitTranscriptMinerSyncToken') || '';
-
-if (isFilePreview()) {
-  setStatus('bad', 'Open via Netlify or localhost');
-  log('This file preview cannot call /api. Use the deployed Netlify URL or run the app locally with npm start and open http://localhost:3000.');
+if (window.location.hash === '#pending') {
+  document.querySelector('[data-tab="queue"]')?.click();
 }
+
+(async () => {
+  try {
+    const data = await api('/api/status');
+    if ($('statusText')) $('statusText').textContent = data.note || 'Extension ready';
+  } catch (error) {
+    if ($('statusText')) $('statusText').textContent = 'Extension error — reload from chrome://extensions';
+    log(error.message);
+  }
+})();
