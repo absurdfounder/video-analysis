@@ -778,7 +778,7 @@ async function ensureYouTubeTab() {
 
   const tab = await chrome.tabs.create({
     url: WORKER_TAB_URL,
-    active: false,
+    active: true,
   });
   cachedYouTubeTabId = tab.id;
   await setStoredWorkerTabId(tab.id);
@@ -798,7 +798,7 @@ async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
   const tab = await chrome.tabs.get(tabId);
   const currentUrl = String(tab.url || '');
   if (!currentUrl.includes(videoId)) {
-    await chrome.tabs.update(tabId, { url: videoUrl, active: false, autoDiscardable: false });
+    await chrome.tabs.update(tabId, { url: videoUrl, active: true, autoDiscardable: false });
     await waitForTabComplete(tabId, 45000, videoId);
   }
   await prepareWorkerTab(tabId);

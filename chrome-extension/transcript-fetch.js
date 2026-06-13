@@ -39,9 +39,17 @@ function fetchTranscriptInPage(languages) {
   }
 
   function getLivePlayerResponse() {
-    return window.ytInitialPlayerResponse
+    const response = window.ytInitialPlayerResponse
       || window.ytplayer?.config?.args?.player_response
       || null;
+    if (typeof response === 'string') {
+      try { return JSON.parse(response); } catch { return null; }
+    }
+    return response;
+  }
+
+  function getLiveInitialData() {
+    return window.ytInitialData || window.yt?.initialData || null;
   }
 
   async function waitForElement(selector, timeoutMs = 15000) {
@@ -69,6 +77,7 @@ function fetchTranscriptInPage(languages) {
   function scrollToDescription() {
     const targets = [
       'ytd-video-description-transcript-section-renderer',
+      'ytd-structured-description-content-renderer',
       'ytd-text-inline-expander',
       '#description',
       'ytd-watch-metadata',
@@ -119,11 +128,16 @@ function fetchTranscriptInPage(languages) {
       const button = section.querySelector('button[aria-label="Show transcript"]')
         || section.querySelector('#primary-button button')
         || section.querySelector('yt-button-shape button')
+        || section.querySelector('ytd-button-renderer button')
         || section.querySelector('button');
       if (button) return button;
     }
     return document.querySelector('button[aria-label="Show transcript"]')
-      || [...document.querySelectorAll('button')].find((btn) => /show transcript/i.test(btn.getAttribute('aria-label') || btn.textContent || ''));
+      || document.querySelector('ytd-button-renderer button[aria-label="Show transcript"]')
+      || [...document.querySelectorAll('button, yt-button-shape button, ytd-button-renderer button')].find((btn) => {
+        const label = `${btn.getAttribute('aria-label') || ''} ${btn.textContent || ''}`.trim();
+        return /\b(show\s+)?transcript\b/i.test(label) && !/close transcript/i.test(label);
+      });
   }
 
   function transcriptPanelRoot() {
@@ -135,15 +149,17 @@ function fetchTranscriptInPage(languages) {
   function extractSegmentsFromPanel() {
     const panel = transcriptPanelRoot();
     const scope = panel || document;
-    const nodes = scope.querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model');
+    const nodes = scope.querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model, [class*="transcript-segment"]');
     if (!nodes.length) return [];
 
     const segments = [];
     for (const node of nodes) {
       const timestampEl = node.querySelector('.segment-timestamp, .segment-start-offset, [class*="timestamp"]');
-      const textEl = node.querySelector('.segment-text, yt-formatted-string.segment-text, [class*="segment-text"]');
-      const text = stripHtml(textEl?.textContent || '');
-      const start = parseClockLabel(timestampEl?.textContent || '');
+      const textEl = node.querySelector('.segment-text, yt-formatted-string.segment-text, [class*="segment-text"], yt-formatted-string, span.yt-core-attributed-string');
+      const rawText = stripHtml(textEl?.textContent || node.textContent || '');
+      const timeMatch = rawText.match(/\b(?:(\d{1,2}:)?\d{1,2}:\d{2})\b/);
+      const text = stripHtml(rawText.replace(timeMatch?.[0] || '', ''));
+      const start = parseClockLabel(timestampEl?.textContent || timeMatch?.[0] || '');
       if (!text) continue;
       segments.push({
         start: Number(start.toFixed(3)),
@@ -193,7 +209,7 @@ function fetchTranscriptInPage(languages) {
   }
 
   async function tryInnerTube(player) {
-    const params = extractTranscriptParams(player, document.documentElement.innerHTML);
+    const params = extractTranscriptParams(player, document.documentElement.innerHTML, getLiveInitialData());
     if (!params) return null;
     const result = await fetchInnerTubeTranscriptInPage(params);
     if (result?.segments?.length) {
@@ -288,14 +304,38 @@ function fetchTranscriptFromPanelInPage() {
   });
 }
 
-function extractTranscriptParams(player, html) {
+function findTranscriptParamsInObject(value, seen = new Set()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return '';
+  seen.add(value);
+  if (typeof value.params === 'string' && (
+    value.getTranscriptEndpoint
+    || value.commandMetadata?.webCommandMetadata?.apiUrl === '/youtubei/v1/get_transcript'
+  )) {
+    return value.params;
+  }
+  if (typeof value.getTranscriptEndpoint?.params === 'string') return value.getTranscriptEndpoint.params;
+  if (typeof value.transcriptEndpoint?.params === 'string') return value.transcriptEndpoint.params;
+  for (const child of Object.values(value)) {
+    const found = findTranscriptParamsInObject(child, seen);
+    if (found) return found;
+  }
+  return '';
+}
+
+function extractTranscriptParams(player, html, initialData = null) {
   const fromPlayer = player?.captions?.playerCaptionsTracklistRenderer?.openTranscriptParams;
   if (fromPlayer) return fromPlayer;
+
+  const pageInitialData = typeof window !== 'undefined' ? window.ytInitialData : null;
+  const fromInitialData = findTranscriptParamsInObject(initialData || pageInitialData);
+  if (fromInitialData) return fromInitialData;
 
   const htmlText = String(html || '');
   const patterns = [
     /"openTranscriptParams":"([^"]+)"/,
     /"getTranscriptEndpoint":\{"params":"([^"]+)"/,
+    /"apiUrl":"\/youtubei\/v1\/get_transcript"[\s\S]{0,500}?"params":"([^"]+)"/,
+    /"params":"([^"]+)"[\s\S]{0,500}?"apiUrl":"\/youtubei\/v1\/get_transcript"/,
   ];
   for (const pattern of patterns) {
     const match = htmlText.match(pattern);
