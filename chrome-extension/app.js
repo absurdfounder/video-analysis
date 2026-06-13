@@ -70,8 +70,9 @@ function displayStatus(video) {
   return 'pending';
 }
 
-function normalizeVideos() {
+function normalizeVideos({ keepRunning = false } = {}) {
   for (const video of state.videos) {
+    if (!keepRunning && video.status === 'running') video.status = 'pending';
     if (video.status === 'ok' && !hasTranscriptData(video)) video.status = 'pending';
     if (hasTranscriptData(video)) video.status = 'ok';
   }
@@ -524,18 +525,61 @@ async function fetchTranscriptsStep() {
     return;
   }
 
-  log(`Fetching ${pending.length} transcript(s)...`);
+  await saveLocal();
+  log(`Fetching ${pending.length} transcript(s) in background — you can switch tabs freely.`);
 
-  for (const video of pending) {
-    try {
-      await fetchTranscriptForVideo(video);
-    } catch {
-      // error already logged
-    }
-    if (delayMs > 0) await sleep(delayMs);
+  const data = await api('/api/fetch-transcripts-batch', {
+    delayMs,
+    languages: ($('languages')?.value || 'hi.*,hi,en.*').trim(),
+  });
+
+  if (data.alreadyRunning) {
+    log('Transcript batch already running in background.');
+    setBusy(true);
+    return;
   }
 
-  goToStep(3);
+  if (!data.started) {
+    goToStep(3);
+    return;
+  }
+
+  setBusy(true);
+  goToStep(2);
+}
+
+function applySavedProject(saved, { keepRunning } = {}) {
+  if (!saved) return;
+  if (Array.isArray(saved.videos)) state.videos = saved.videos;
+  if (Array.isArray(saved.priceRows)) state.priceRows = saved.priceRows;
+  if (saved.lastSync) state.lastSync = saved.lastSync;
+  if (saved.currentStep) state.currentStep = saved.currentStep;
+  const preserveRunning = keepRunning ?? (saved.videos || []).some(video => video.status === 'running');
+  normalizeVideos({ keepRunning: preserveRunning });
+  renderVideos();
+  renderPrices();
+  updateUI();
+}
+
+function syncFromStorageChanges(changes) {
+  const jobRunning = changes.transcriptBatchJob?.newValue?.running
+    || (changes.transcriptBatchJob === undefined && state.runningTask);
+
+  if (changes.fruitTranscriptMinerStateV2?.newValue) {
+    applySavedProject(changes.fruitTranscriptMinerStateV2.newValue, {
+      keepRunning: Boolean(changes.transcriptBatchJob?.newValue?.running),
+    });
+    if (state.currentStep) goToStep(state.currentStep);
+  }
+
+  if (changes.transcriptBatchJob?.newValue) {
+    const job = changes.transcriptBatchJob.newValue;
+    setBusy(Boolean(job?.running));
+    if (!job?.running && job?.finishedAt) {
+      log(`Background transcript batch finished (${job.done || 0}/${job.total || 0}).`);
+      goToStep(3);
+    }
+  }
 }
 
 async function aiAnalysisStep() {
@@ -623,9 +667,8 @@ $('stepBtn1')?.addEventListener('click', async () => {
 });
 
 $('stepBtn2')?.addEventListener('click', async () => {
-  try { setBusy(true); await fetchTranscriptsStep(); }
-  catch (e) { log(`Step 2 failed: ${e.message}`); }
-  finally { setBusy(false); }
+  try { await fetchTranscriptsStep(); }
+  catch (e) { log(`Step 2 failed: ${e.message}`); setBusy(false); }
 });
 
 $('stepBtn3')?.addEventListener('click', async () => {
@@ -720,12 +763,51 @@ if ($('syncSiteUrl')) $('syncSiteUrl').value = localStorage.getItem('fruitTransc
 if ($('syncToken')) $('syncToken').value = localStorage.getItem('fruitTranscriptMinerSyncToken') || '';
 
 loadLocal().catch((error) => log(`Load failed: ${error.message}`));
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  syncFromStorageChanges(changes);
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type !== 'transcript-batch-event') return;
+  if (message.event === 'complete') {
+    setBusy(false);
+    goToStep(3);
+    log(`Transcript batch complete (${message.done || 0} videos).`);
+    return;
+  }
+  if (message.event === 'progress') {
+    if (message.status === 'running') {
+      log(`Fetching transcript: ${message.title || message.videoId}...`);
+      return;
+    }
+    if (message.status === 'ok') {
+      log(`Transcript loaded: ${message.title || message.videoId} (${message.segmentCount || 0} lines${message.method ? ` · ${message.method}` : ''})`);
+      return;
+    }
+    if (message.status === 'failed') {
+      log(`Transcript failed: ${message.title || message.videoId}: ${message.error || 'unknown error'}`);
+    }
+  }
+});
+
+api('/api/transcript-batch-status').then((data) => {
+  if (data?.job?.running) {
+    setBusy(true);
+    normalizeVideos({ keepRunning: true });
+    renderVideos();
+  } else {
+    normalizeVideos();
+    renderVideos();
+  }
+}).catch(() => {});
 loadWatchSettings();
 
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'One muted worker tab handles all videos — no focus steal, no new tabs per video';
+    if ($('statusText')) $('statusText').textContent = 'Transcript batch runs in background — safe to leave this page';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

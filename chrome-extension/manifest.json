@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fruit Price Transcript Miner",
-  "version": "1.4.7",
+  "version": "1.4.8",
   "description": "Pull YouTube captions from your browser session and extract timestamped fruit price rows.",
   "action": {
     "default_title": "Open Fruit Price Transcript Miner"

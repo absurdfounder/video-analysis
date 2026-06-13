@@ -12,6 +12,7 @@ const STORAGE_DEFAULTS = {
 chrome.runtime.onInstalled.addListener(async () => {
   const settings = await loadChannelSettings();
   await schedulePoll(settings.pollIntervalMinutes);
+  await resumeTranscriptBatchIfNeeded();
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -35,6 +36,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'processNextTranscript') {
+    await processNextTranscriptInBatch();
+    return;
+  }
   if (alarm.name !== 'pollChannel') return;
   await checkForNewVideosBackground();
 });
@@ -65,6 +70,8 @@ async function handleApi(path, body) {
   if (path === '/api/check-new-videos') return checkNewVideos(body);
   if (path === '/api/channel-settings') return channelSettings(body);
   if (path === '/api/mark-processed') return markProcessed(body);
+  if (path === '/api/fetch-transcripts-batch') return fetchTranscriptsBatch(body);
+  if (path === '/api/transcript-batch-status') return transcriptBatchStatus();
   return { ok: false, error: `Unknown extension API route: ${path}` };
 }
 
@@ -262,6 +269,199 @@ async function markProcessed(body) {
   const badge = await updateActionBadge(next);
   return { ok: true, processedVideoIds: next.processedVideoIds, pendingCount: badge };
 }
+
+const PROJECT_STATE_KEY = 'fruitTranscriptMinerStateV2';
+const TRANSCRIPT_BATCH_KEY = 'transcriptBatchJob';
+let batchProcessing = false;
+
+function hasTranscriptSegments(video) {
+  return Array.isArray(video?.segments) && video.segments.length > 0;
+}
+
+function isBatchProcessable(video) {
+  return video?.relevance !== 'irrelevant' && video?.status !== 'skipped' && !hasTranscriptSegments(video);
+}
+
+async function loadProjectState() {
+  const stored = await chrome.storage.local.get(PROJECT_STATE_KEY);
+  return stored[PROJECT_STATE_KEY] || { videos: [], priceRows: [], currentStep: 1 };
+}
+
+async function saveProjectState(patch) {
+  const current = await loadProjectState();
+  const next = {
+    ...current,
+    ...patch,
+    videos: patch.videos || current.videos || [],
+    priceRows: patch.priceRows || current.priceRows || [],
+  };
+  await chrome.storage.local.set({ [PROJECT_STATE_KEY]: next });
+  return next;
+}
+
+function broadcastTranscriptBatchEvent(payload) {
+  chrome.runtime.sendMessage({ type: 'transcript-batch-event', ...payload }).catch(() => {});
+}
+
+async function transcriptBatchStatus() {
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  return { ok: true, job: stored[TRANSCRIPT_BATCH_KEY] || null };
+}
+
+async function fetchTranscriptsBatch(body) {
+  const delayMs = Math.max(500, Number(body.delayMs || 1500));
+  const languages = safeText(body.languages || 'hi.*,hi,en.*');
+  const project = await loadProjectState();
+  const pending = (project.videos || []).filter(isBatchProcessable);
+
+  if (!pending.length) {
+    return { ok: true, started: false, total: 0, message: 'No pending transcripts.' };
+  }
+
+  const existing = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  if (existing[TRANSCRIPT_BATCH_KEY]?.running) {
+    return { ok: true, started: false, alreadyRunning: true, total: existing[TRANSCRIPT_BATCH_KEY].total || 0 };
+  }
+
+  await chrome.storage.local.set({
+    [TRANSCRIPT_BATCH_KEY]: {
+      running: true,
+      queue: pending.map(video => video.id),
+      delayMs,
+      languages,
+      total: pending.length,
+      done: 0,
+      currentId: null,
+      currentTitle: null,
+      startedAt: new Date().toISOString(),
+    },
+  });
+
+  processNextTranscriptInBatch().catch(error => console.warn('Transcript batch failed:', error));
+
+  return { ok: true, started: true, total: pending.length };
+}
+
+async function resumeTranscriptBatchIfNeeded() {
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (job?.running && job.queue?.length) {
+    processNextTranscriptInBatch().catch(error => console.warn('Transcript batch resume failed:', error));
+  }
+}
+
+async function finishTranscriptBatch(job, doneCount) {
+  await chrome.storage.local.set({
+    [TRANSCRIPT_BATCH_KEY]: {
+      ...job,
+      running: false,
+      queue: [],
+      currentId: null,
+      currentTitle: null,
+      finishedAt: new Date().toISOString(),
+    },
+  });
+  await saveProjectState({ currentStep: 3 });
+  broadcastTranscriptBatchEvent({ event: 'complete', done: doneCount, total: job.total || doneCount });
+}
+
+async function processNextTranscriptInBatch() {
+  if (batchProcessing) return;
+
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (!job?.running || !job.queue?.length) {
+    if (job?.running) await finishTranscriptBatch(job, job.done || 0);
+    return;
+  }
+
+  batchProcessing = true;
+  const videoId = job.queue[0];
+  const project = await loadProjectState();
+  const videos = [...(project.videos || [])];
+  const index = videos.findIndex(video => video.id === videoId);
+
+  if (index === -1) {
+    const nextJob = { ...job, queue: job.queue.slice(1), done: job.done + 1 };
+    if (!nextJob.queue.length) {
+      batchProcessing = false;
+      await finishTranscriptBatch(nextJob, nextJob.done);
+      return;
+    }
+    await chrome.storage.local.set({ [TRANSCRIPT_BATCH_KEY]: nextJob });
+    batchProcessing = false;
+    chrome.alarms.create('processNextTranscript', { when: Date.now() + job.delayMs });
+    return;
+  }
+
+  const video = { ...videos[index] };
+  video.status = 'running';
+  video.error = '';
+  videos[index] = video;
+
+  await chrome.storage.local.set({
+    [TRANSCRIPT_BATCH_KEY]: { ...job, currentId: videoId, currentTitle: video.title || videoId },
+  });
+  await saveProjectState({ videos, currentStep: 2 });
+  broadcastTranscriptBatchEvent({ event: 'progress', videoId, status: 'running', title: video.title || videoId });
+
+  try {
+    const result = await transcript({ id: video.id, videoUrl: video.url, languages: job.languages });
+    Object.assign(video, {
+      status: 'ok',
+      language: result.language,
+      transcriptText: result.transcriptText,
+      segments: result.segments || [],
+      error: '',
+      isNew: false,
+      needsWork: false,
+    });
+    await markProcessed({ videoIds: [video.id] });
+    broadcastTranscriptBatchEvent({
+      event: 'progress',
+      videoId,
+      status: 'ok',
+      title: video.title || videoId,
+      segmentCount: result.segmentCount || video.segments.length,
+      method: result.method || '',
+    });
+  } catch (error) {
+    video.status = 'failed';
+    video.error = safeText(error?.message || error).slice(0, 200);
+    broadcastTranscriptBatchEvent({
+      event: 'progress',
+      videoId,
+      status: 'failed',
+      title: video.title || videoId,
+      error: video.error,
+    });
+  }
+
+  videos[index] = video;
+  const nextQueue = job.queue.slice(1);
+  const nextJob = {
+    ...job,
+    queue: nextQueue,
+    done: job.done + 1,
+    currentId: null,
+    currentTitle: null,
+    running: nextQueue.length > 0,
+  };
+
+  await saveProjectState({ videos, currentStep: nextQueue.length ? 2 : 3 });
+  await chrome.storage.local.set({ [TRANSCRIPT_BATCH_KEY]: nextJob });
+  batchProcessing = false;
+
+  if (nextQueue.length) {
+    chrome.alarms.create('processNextTranscript', { when: Date.now() + job.delayMs });
+  } else {
+    await finishTranscriptBatch(nextJob, nextJob.done);
+  }
+}
+
+chrome.runtime.onStartup.addListener(() => {
+  resumeTranscriptBatchIfNeeded().catch(() => {});
+});
 
 async function listVideos(body) {
   const channelUrl = normalizeChannelUrl(body.channelUrl);
