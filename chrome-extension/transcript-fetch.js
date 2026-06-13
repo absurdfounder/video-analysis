@@ -1,4 +1,4 @@
-function fetchTranscriptInPage(languages) {
+function fetchTranscriptInPage(languages, backgroundOnly = false) {
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   function stripHtml(text) {
@@ -433,13 +433,15 @@ function fetchTranscriptInPage(languages) {
       errors.push('Caption track download returned empty.');
     }
 
-    const panelResult = await tryPanelDom();
+    const panelResult = backgroundOnly ? null : await tryPanelDom();
     if (panelResult?.segments?.length) return panelResult;
     if (panelResult?.error) errors.push(panelResult.error);
 
     return {
       ok: false,
-      error: errors.filter(Boolean).join(' · ') || 'No transcript methods returned caption lines.',
+      error: errors.filter(Boolean).join(' · ') || (backgroundOnly
+        ? 'Background caption APIs returned no lines. Retry this video manually if needed.'
+        : 'No transcript methods returned caption lines.'),
     };
   })();
 }

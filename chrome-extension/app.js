@@ -295,12 +295,12 @@ function renderTranscriptModalState(video) {
     return;
   }
 
-  if ($('modalMeta')) $('modalMeta').textContent = 'Capture opens a muted YouTube tab and fetches the transcript automatically.';
+  if ($('modalMeta')) $('modalMeta').textContent = 'Fetching in background worker tab — you can keep using other tabs.';
   if ($('modalCapture')) $('modalCapture').textContent = 'Capture now';
   if ($('modalSegments')) {
     $('modalSegments').innerHTML = `
       <div class="empty-state">
-        Press Capture now to open the video in a muted YouTube tab and fetch its transcript.
+        Press Capture now to fetch via the hidden background worker tab.
       </div>
     `;
   }
@@ -313,7 +313,7 @@ async function captureTranscriptFromModal() {
     $('modalCapture').disabled = true;
     $('modalCapture').textContent = 'Capturing...';
   }
-  if ($('modalMeta')) $('modalMeta').textContent = 'Opening YouTube worker tab and fetching transcript...';
+  if ($('modalMeta')) $('modalMeta').textContent = 'Fetching in background worker tab...';
   if ($('modalSegments')) $('modalSegments').innerHTML = '<div class="empty-state">Starting capture...</div>';
 
   try {
@@ -624,7 +624,7 @@ async function fetchTranscriptsStep() {
   }
 
   await saveLocal();
-  log(`Fetching ${pending.length} transcript(s) in background — worker tab runs automatically.`);
+  log(`Fetching ${pending.length} transcript(s) in background — your current tab will not switch.`);
 
   const data = await api('/api/fetch-transcripts-batch', {
     delayMs,
@@ -896,9 +896,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 const CAPTURE_STAGE_LABELS = {
   quick: 'Checking active YouTube tab',
-  worker: 'Opening worker tab',
-  load: 'Loading video page',
-  fetch: 'Fetching captions',
+  worker: 'Working in background worker tab',
+  load: 'Loading video in background',
+  fetch: 'Fetching captions in background',
   done: 'Capture complete',
 };
 
@@ -955,7 +955,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.20 — fast worker path';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.21 — silent background worker';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

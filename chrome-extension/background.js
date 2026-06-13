@@ -367,10 +367,10 @@ async function openBatchVideo(video) {
   if (!video?.url) return;
   const existing = await findOpenWatchTab(video.id);
   if (existing?.id) {
-    await chrome.tabs.update(existing.id, { active: true });
+    await chrome.tabs.update(existing.id, { active: false });
     return;
   }
-  await chrome.tabs.create({ url: video.url, active: true });
+  await chrome.tabs.create({ url: video.url, active: false });
 }
 
 async function saveTranscriptToProject(videoId, result) {
@@ -846,7 +846,7 @@ async function captureVisibleTranscript(body) {
   let result = await fetchTranscriptFromActiveWatchTabIfMatch(id);
 
   if (!result?.ok || !result.segments?.length) {
-    broadcastCaptureProgress(id, 'worker', 'Opening worker tab...');
+    broadcastCaptureProgress(id, 'worker', 'Working in background worker tab...');
     try {
       result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages, { preferWorker: true });
     } catch (error) {
@@ -1263,16 +1263,25 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options
     }
   }
 
-  broadcastCaptureProgress(videoId, 'load', 'Loading video page...');
+  broadcastCaptureProgress(videoId, 'load', 'Loading in background worker tab...');
   const tabId = await ensureYouTubeTab();
   await prepareWorkerTab(tabId);
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
   await waitForYouTubePageReady(tabId, videoId);
 
-  broadcastCaptureProgress(videoId, 'fetch', 'Fetching captions...');
-  const pageResult = await withBriefTabFocus(tabId, async () => {
-    return runInYouTubeTab('fetchTranscriptInPage', [languages], tabId);
-  });
+  try {
+    const html = await fetchTextViaYouTubeTab(videoUrl);
+    const apiResult = await buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, 'page-html');
+    if (apiResult?.ok && apiResult.segments?.length) return apiResult;
+    lastError = apiResult?.error || lastError;
+  } catch (error) {
+    lastError = cleanError(error) || lastError;
+  }
+
+  broadcastCaptureProgress(videoId, 'fetch', 'Fetching captions in background...');
+  await prepareWorkerTab(tabId);
+  await sleep(400);
+  const pageResult = await runInYouTubeTab('fetchTranscriptInPage', [languages, true], tabId);
 
   if (pageResult?.ok && pageResult.segments?.length) {
     return {
@@ -1286,34 +1295,7 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options
 
   lastError = pageResult?.error || lastError;
 
-  try {
-    const html = await fetchTextViaYouTubeTab(videoUrl);
-    const apiResult = await buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, 'page-html');
-    if (apiResult?.ok && apiResult.segments?.length) return apiResult;
-    lastError = apiResult?.error || lastError;
-  } catch (error) {
-    lastError = cleanError(error) || lastError;
-  }
-
   throw new Error(lastError || 'Could not download captions. Stay signed in at youtube.com and retry.');
-}
-
-async function withBriefTabFocus(tabId, fn) {
-  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  try {
-    await chrome.tabs.update(tabId, { active: true, autoDiscardable: false });
-    await prepareWorkerTab(tabId);
-    await sleep(450);
-    return await fn();
-  } finally {
-    if (activeTab?.id && activeTab.id !== tabId) {
-      try {
-        await chrome.tabs.update(activeTab.id, { active: true });
-      } catch {
-        // Previous tab may have closed.
-      }
-    }
-  }
 }
 
 async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, methodPrefix) {
