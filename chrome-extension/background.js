@@ -14,6 +14,15 @@ chrome.runtime.onInstalled.addListener(async () => {
   await schedulePoll(settings.pollIntervalMinutes);
   await resumeTranscriptBatchIfNeeded();
   await resumeAiAnalysisBatchIfNeeded();
+  try {
+    await chrome.sidePanel.setOptions({
+      path: 'index.html?mode=sidepanel',
+      enabled: true,
+    });
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+  } catch {
+    // sidePanel unavailable on older Chrome builds
+  }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -61,8 +70,18 @@ chrome.notifications.onClicked.addListener(() => {
   chrome.tabs.create({ url: chrome.runtime.getURL('index.html#pending') });
 });
 
-chrome.action.onClicked.addListener(() => {
-  chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
+chrome.action.onClicked.addListener(async (tab) => {
+  const stored = await chrome.storage.local.get('fruitMinerOpenUIMode');
+  const mode = stored.fruitMinerOpenUIMode || 'sidepanel';
+  if (mode === 'tab') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
+    return;
+  }
+  try {
+    await chrome.sidePanel.open({ tabId: tab.id });
+  } catch {
+    chrome.tabs.create({ url: chrome.runtime.getURL('index.html?mode=sidepanel') });
+  }
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -90,6 +109,7 @@ async function handleApi(path, body) {
   if (path === '/api/transcript-batch-status') return transcriptBatchStatus();
   if (path === '/api/extract-prices-ai-video') return extractPricesAiForVideo(body);
   if (path === '/api/fetch-ai-analysis-batch') return fetchAiAnalysisBatch(body);
+  if (path === '/api/analyze-single-video') return analyzeSingleVideo(body);
   if (path === '/api/stop-ai-analysis-batch') return stopAiAnalysisBatch(body);
   if (path === '/api/ai-analysis-batch-status') return aiAnalysisBatchStatus();
   return { ok: false, error: `Unknown extension API route: ${path}` };
@@ -1339,6 +1359,113 @@ function videoToAnalysisItem(video) {
   };
 }
 
+async function analyzeVideoForPrices(video, { apiKey, model, maxCharsPerCall, logFallback = null }) {
+  const analysisItem = videoToAnalysisItem(video);
+  let rows = [];
+  let summary = null;
+  let analysisSource = 'regex';
+
+  if (apiKey) {
+    const result = await extractPricesAiForVideo({
+      item: analysisItem,
+      apiKey,
+      model,
+      maxCharsPerCall,
+    });
+    if (!result?.ok) throw new Error(result?.error || 'AI price extraction failed.');
+    rows = result.rows || [];
+    summary = result.summary || null;
+    if (!rows.length) {
+      if (logFallback) await logFallback('AI returned 0 rows; using regex fallback.');
+      rows = extractPricesFromSegments(analysisItem);
+      analysisSource = 'regex';
+    } else {
+      analysisSource = 'ai';
+    }
+  } else {
+    if (logFallback) await logFallback('No OpenAI key — using regex extraction.');
+    rows = extractPricesFromSegments(analysisItem);
+  }
+
+  return { rows, summary, analysisSource };
+}
+
+async function analyzeSingleVideo(body) {
+  const videoId = safeText(body.videoId);
+  const apiKey = safeText(body.apiKey);
+  const model = safeText(body.model || 'gpt-4o-mini');
+  const maxCharsPerCall = Math.max(2500, Math.min(Number(body.maxCharsPerCall || 10000), 20000));
+  if (!videoId) return { ok: false, error: 'Missing video id.' };
+
+  let project = await loadProjectState();
+  let videos = [...(project.videos || [])];
+  if (body.pendingVideo?.id) {
+    const index = videos.findIndex((video) => video.id === body.pendingVideo.id);
+    if (index >= 0) videos[index] = { ...videos[index], ...body.pendingVideo };
+    else videos.push(body.pendingVideo);
+    project = await saveProjectState({ videos, currentStep: 3 });
+    videos = [...(project.videos || [])];
+  }
+
+  const index = videos.findIndex((video) => video.id === videoId);
+  if (index === -1) return { ok: false, error: 'Video not found in project.' };
+
+  const video = { ...videos[index] };
+  if (!hasTranscriptSegments(video)) {
+    return { ok: false, error: 'Video has no transcript segments.' };
+  }
+
+  video.priceStatus = 'running';
+  video.priceError = '';
+  videos[index] = video;
+  await saveProjectState({ videos, currentStep: 3 });
+  broadcastAiAnalysisBatchEvent({
+    event: 'progress',
+    videoId,
+    status: 'running',
+    title: video.title || videoId,
+  });
+
+  try {
+    const { rows, summary, analysisSource } = await analyzeVideoForPrices(video, {
+      apiKey,
+      model,
+      maxCharsPerCall,
+    });
+    await mergeProjectPriceRowsForVideo(videoId, rows, {
+      priceStatus: rows.length ? 'ok' : 'failed',
+      priceRowCount: rows.length,
+      priceError: rows.length ? '' : 'No prices extracted from transcript.',
+      analysisSummary: summary,
+      analysisSource,
+    });
+    broadcastAiAnalysisBatchEvent({
+      event: 'progress',
+      videoId,
+      status: rows.length ? 'ok' : 'failed',
+      title: video.title || videoId,
+      priceRowCount: rows.length,
+      error: rows.length ? '' : 'No prices extracted from transcript.',
+    });
+    return { ok: true, count: rows.length, rows, videoId };
+  } catch (error) {
+    const message = cleanError(error);
+    await mergeProjectPriceRowsForVideo(videoId, [], {
+      priceStatus: 'failed',
+      priceRowCount: 0,
+      priceError: message.slice(0, 240),
+    });
+    broadcastAiAnalysisBatchEvent({
+      event: 'progress',
+      videoId,
+      status: 'failed',
+      title: video.title || videoId,
+      error: message,
+    });
+    return { ok: false, error: message, videoId };
+  }
+}
+
 async function processNextAiAnalysisInBatch() {
   if (aiBatchProcessing) {
     if (aiBatchProcessingStartedAt && Date.now() - aiBatchProcessingStartedAt > AI_BATCH_STALE_MS) {
@@ -1436,37 +1563,15 @@ async function processNextAiAnalysisInBatch() {
       return;
     }
 
-    let rows = [];
-    let summary = null;
-    let analysisSource = 'regex';
-    const analysisItem = videoToAnalysisItem(video);
-    if (job.apiKey) {
-      const result = await extractPricesAiForVideo({
-        item: analysisItem,
-        apiKey: job.apiKey,
-        model: job.model,
-        maxCharsPerCall: job.maxCharsPerCall,
-      });
-      if (!result?.ok) throw new Error(result?.error || 'AI price extraction failed.');
-      rows = result.rows || [];
-      summary = result.summary || null;
-      if (!rows.length) {
-        await appendAiBatchJobLog('AI returned 0 rows; using regex fallback.', 'warn', {
-          videoId,
-          title: video.title || videoId,
-        });
-        rows = extractPricesFromSegments(analysisItem);
-        analysisSource = 'regex';
-      } else {
-        analysisSource = 'ai';
-      }
-    } else {
-      await appendAiBatchJobLog('No OpenAI key — using regex extraction.', 'warn', {
+    const { rows, summary, analysisSource } = await analyzeVideoForPrices(video, {
+      apiKey: job.apiKey,
+      model: job.model,
+      maxCharsPerCall: job.maxCharsPerCall,
+      logFallback: (message) => appendAiBatchJobLog(message, 'warn', {
         videoId,
         title: video.title || videoId,
-      });
-      rows = extractPricesFromSegments(analysisItem);
-    }
+      }),
+    });
 
     const latestAfter = await getAiAnalysisBatchJob();
     if (!latestAfter?.running) {
@@ -1835,18 +1940,20 @@ function parseMarketDate(title, uploadDate = '') {
 
 const PRICE_EXTRACTION_SYSTEM = [
   'You extract structured Delhi fruit/vegetable wholesale mandi intelligence from noisy Hindi YouTube market-report captions.',
+  'Cover ALL commodities mentioned: fruits, vegetables, garlic, onion, potato, tomato, ginger, etc.',
   'Return JSON only:',
   '{"rows":[{"fruit":"","fruit_hindi":"","variety":"","quality_grade":"","quality_label":"","party_name":"","mandi_name":"","area_name":"","origin":"","unit":"","min_price_inr":null,"max_price_inr":null,"price_notes":"","market_name":"","timestamp_seconds":0,"confidence":"high|medium|low","original_line":"","clean_hindi_line":"","context":"","notes":""}],',
   '"chunk_summary":{"fruits":[],"parties":[],"areas":[],"qualities":[]}}',
   '',
   'Rules:',
-  '- One row per distinct fruit + quality/grade + party + price (or quality discussion) mention.',
+  '- fruit field: English commodity name (garlic, onion, mango, potato, etc.). fruit_hindi: Hindi name when spoken.',
+  '- One row per distinct commodity + quality/grade + party + price (or quality discussion) mention.',
   '- quality_grade: A grade, B grade, C grade, super, medium, ordinary, premium, second, third, or exact Hindi phrase.',
   '- party_name: trader/party/seller names (पार्टी, व्यापारी names) when spoken.',
   '- area_name / mandi_name: Azadpur, yards, blocks, localities, godowns.',
-  '- min_price_inr/max_price_inr: use null if no price stated but fruit+quality+party still useful.',
+  '- min_price_inr/max_price_inr: use null if no price stated but commodity+quality+party still useful.',
   '- timestamp_seconds MUST match the [seconds] bracket on the source segment line.',
-  '- Extract all fruits covered in the chunk; separate rows when grades or parties differ.',
+  '- Extract every commodity covered in the chunk; separate rows when grades or parties differ.',
 ].join('\n');
 
 function mergeAnalysisSummaries(existing, chunkSummary) {
@@ -2662,35 +2769,82 @@ function pushSegment(segments, current) {
   });
 }
 
-const FRUITS = [
+const MANDI_PRODUCE = [
   { name: 'mango', terms: ['आम', 'mango', 'kesar', 'alphonso', 'hapus', 'dasheri', 'langra', 'chausa', 'safeda', 'totapuri'] },
   { name: 'apple', terms: ['सेब', 'apple'] },
   { name: 'banana', terms: ['केला', 'banana'] },
-  { name: 'orange', terms: ['संतरा', 'orange', 'kinnow'] },
+  { name: 'orange', terms: ['संतरा', 'orange', 'kinnow', 'santra'] },
   { name: 'lychee', terms: ['लीची', 'litchi', 'lychee'] },
-  { name: 'grapes', terms: ['अंगूर', 'grapes'] },
+  { name: 'grapes', terms: ['अंगूर', 'grapes', 'angoor'] },
   { name: 'pomegranate', terms: ['अनार', 'pomegranate'] },
   { name: 'papaya', terms: ['पपीता', 'papaya'] },
   { name: 'guava', terms: ['अमरूद', 'guava'] },
+  { name: 'garlic', terms: ['लहसुन', 'garlic', 'lehsun', 'lahsun', 'garlicmarket'] },
+  { name: 'onion', terms: ['प्याज', 'onion', 'pyaz', 'pyaaz', 'onionmarket'] },
+  { name: 'potato', terms: ['आलू', 'aloo', 'potato', 'potatomarket'] },
+  { name: 'tomato', terms: ['टमाटर', 'tamatar', 'tomato'] },
+  { name: 'ginger', terms: ['अदरक', 'adrak', 'ginger'] },
+  { name: 'cauliflower', terms: ['फूलगोभी', 'gobi', 'cauliflower'] },
+  { name: 'cabbage', terms: ['पत्तागोभी', 'cabbage', 'bandgobi'] },
+  { name: 'peas', terms: ['मटर', 'peas', 'matar'] },
+  { name: 'carrot', terms: ['गाजर', 'carrot', 'gajar'] },
+  { name: 'capsicum', terms: ['शिमला मिर्च', 'capsicum', 'shimla'] },
+  { name: 'lemon', terms: ['नींबू', 'nimbu', 'lemon'] },
+  { name: 'watermelon', terms: ['तरबूज', 'tarbuj', 'watermelon'] },
+  { name: 'melon', terms: ['खरबूजा', 'kharbuja', 'melon'] },
+  { name: 'cucumber', terms: ['खीरा', 'kheera', 'cucumber'] },
+  { name: 'brinjal', terms: ['बैंगन', 'baingan', 'brinjal', 'eggplant'] },
+  { name: 'chilli', terms: ['मिर्च', 'mirch', 'chilli', 'chili'] },
+  { name: 'coriander', terms: ['धनिया', 'dhaniya', 'coriander'] },
+  { name: 'spinach', terms: ['पालक', 'palak', 'spinach'] },
+  { name: 'beans', terms: ['बीन्स', 'beans', 'sem'] },
+  { name: 'coconut', terms: ['नारियल', 'nariyal', 'coconut'] },
+  { name: 'pear', terms: ['नाशपाती', 'pear', 'nashpati'] },
 ];
+
+function detectCommodities(text, title = '') {
+  const hay = `${title} ${text}`.toLowerCase();
+  const found = [];
+  const seen = new Set();
+  for (const item of MANDI_PRODUCE) {
+    if (item.terms.some((term) => hay.includes(term.toLowerCase()))) {
+      if (!seen.has(item.name)) {
+        seen.add(item.name);
+        found.push(item.name);
+      }
+    }
+  }
+  return found;
+}
+
+function isYearLikePrice(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 1900 && n <= 2100;
+}
 
 function extractPricesFromSegments(item) {
   const rows = [];
   const marketDate = parseMarketDate(item.title, item.upload_date);
+  const titleCommodities = detectCommodities('', item.title || '');
   const segments = Array.isArray(item.segments) ? item.segments : [];
+  const priceRe = /(?:₹|rs\.?|inr|रुप(?:ए|ये|या)?|भाव|rate|price|रेट)?\s*(\d{1,6})(?:\s*(?:से|to|तक|-|–|—)\s*(?:₹|rs\.?|inr)?\s*(\d{1,6}))?/gi;
+
   for (const seg of segments) {
     const text = safeText(seg.text);
-    const prices = [...text.matchAll(/(?:rs\.?|₹|रुप(?:ए|ये)?|भाव|rate|price)?\s*(\d{1,5})(?:\s*(?:-|से|to)\s*(\d{1,5}))?/gi)];
-    if (!prices.length) continue;
-    const fruits = detectFruits(text);
-    if (!fruits.length) continue;
-    for (const match of prices.slice(0, 3)) {
+    let match;
+    while ((match = priceRe.exec(text)) !== null) {
       const min = normalizeNumeric(match[1]);
       const max = normalizeNumeric(match[2] || match[1]);
       if (min === '' || max === '' || min <= 0 || max > 100000) continue;
-      for (const fruit of fruits) {
+      if (isYearLikePrice(min) || isYearLikePrice(max)) continue;
+
+      const commodities = detectCommodities(text, item.title);
+      const targets = commodities.length ? commodities : titleCommodities;
+      if (!targets.length) continue;
+
+      for (const commodity of targets) {
         rows.push(withLinks({
-          fruit,
+          fruit: commodity,
           fruit_hindi: '',
           variety: '',
           quality_grade: '',
@@ -2706,7 +2860,7 @@ function extractPricesFromSegments(item) {
           market_name: '',
           market_date: marketDate.label,
           market_date_sort: marketDate.sortKey,
-          confidence: 'medium',
+          confidence: match[2] ? 'medium' : 'low',
           original_line: text,
           clean_hindi_line: text,
           context: text,
@@ -2720,8 +2874,7 @@ function extractPricesFromSegments(item) {
 }
 
 function detectFruits(text) {
-  const lower = text.toLowerCase();
-  return FRUITS.filter(fruit => fruit.terms.some(term => lower.includes(term.toLowerCase()))).map(fruit => fruit.name);
+  return detectCommodities(text);
 }
 
 function detectUnit(text) {

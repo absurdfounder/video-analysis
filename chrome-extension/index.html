@@ -68,12 +68,12 @@
     </section>
 
     <section class="step-panel" id="panel-3">
-      <p class="step-desc" id="stepDesc3">Extract rich mandi intelligence from each transcript: fruits covered that day, A/B grades, party names, areas, min–max prices, and clickable timestamps — grouped by market day.</p>
+      <p class="step-desc" id="stepDesc3">Analyze transcripts one-by-one in channel order — same flow as step 2. Each card shows live status; use “Analyze this video” for a single retry.</p>
       <div class="batch-controls">
         <button id="stepBtn3" class="btn-primary btn-large" type="button">Analyze all transcripts</button>
         <button id="stopAiAnalysisBatchBtn" class="btn-ghost btn-large" type="button" disabled>Stop</button>
       </div>
-      <p id="analysisStatusText" class="hint"></p>
+      <p id="analysisStatusText" class="hint batch-status-line"></p>
       <div class="panel-tools">
         <input id="analysisSearch" placeholder="Search videos in analysis queue..." />
       </div>
@@ -97,6 +97,13 @@
     <details class="fold-panel">
       <summary>Settings</summary>
       <div class="settings-body">
+        <label>Open extension as
+          <select id="openUIMode">
+            <option value="sidepanel">Side panel (compact, like Wonder Sites)</option>
+            <option value="tab">Full browser tab</option>
+          </select>
+        </label>
+        <button id="openFullTabBtn" class="btn-secondary" type="button">Open full screen tab now</button>
         <label>Channel URL<input id="channelUrl" value="https://www.youtube.com/@delhifruitmarket/videos" /></label>
         <div class="grid-2">
           <label>Max videos (0 = all)<input id="maxVideos" type="number" min="0" max="1000" value="0" /></label>

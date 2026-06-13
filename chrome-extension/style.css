@@ -28,6 +28,41 @@ body {
   padding: 24px 0 48px;
 }
 
+body.sidepanel-mode .app {
+  width: 100%;
+  padding: 12px 10px 28px;
+}
+
+body.sidepanel-mode .topbar {
+  flex-direction: column;
+}
+
+body.sidepanel-mode .stepper {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+body.sidepanel-mode .batch-status-line {
+  font-weight: 700;
+  color: var(--green-dark);
+}
+
+.batch-status-line {
+  min-height: 1.2em;
+}
+
+.card-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.btn-analyze-one {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;

@@ -606,8 +606,14 @@ function renderAnalysisCard(video) {
           : 'pending';
   const analysisBody = priceStatus === 'ok' ? renderVideoAnalysisBody(video) : '';
 
+  const queuePos = state.aiBatchRunning && Array.isArray(state.aiBatchJob?.queue)
+    ? state.aiBatchJob.queue.indexOf(video.id)
+    : -1;
+  const isCurrent = state.aiBatchRunning && state.aiBatchJob?.currentId === video.id;
+  const canAnalyzeOne = (priceStatus === 'pending' || priceStatus === 'failed') && !state.aiBatchRunning && !state.runningTask;
+
   return `
-    <article class="video-card ${priceStatus === 'running' ? 'is-running' : ''} ${priceStatus === 'ok' ? 'has-transcript has-analysis' : ''}">
+    <article class="video-card ${isCurrent || priceStatus === 'running' ? 'is-running' : ''} ${priceStatus === 'ok' ? 'has-transcript has-analysis' : ''}" data-video-id="${escapeHtml(video.id)}">
       <h3>
         ${video.channelIndex ? `<span class="channel-index-label">#${video.channelIndex}</span> ` : ''}
         <a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a>
@@ -620,9 +626,18 @@ function renderAnalysisCard(video) {
         ${fruitList.length ? tag(`${fruitList.length} fruit${fruitList.length === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
         ${partyCount ? tag(`${partyCount} part${partyCount === 1 ? 'y' : 'ies'}`, 'relevance-relevant') : ''}
         ${areaCount ? tag(`${areaCount} area${areaCount === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
+        ${queuePos >= 0 && state.aiBatchRunning ? tag(`queue #${queuePos + 1}`, isCurrent ? 'running' : 'relevance-relevant') : ''}
+        ${isCurrent ? tag('processing now', 'running') : ''}
       </div>
       ${fruitList.length && !analysisBody ? `<div class="analysis-summary-line">${fruitList.slice(0, 8).map((fruit) => tag(fruit, 'relevance-relevant')).join('')}</div>` : ''}
       ${analysisBody}
+      ${canAnalyzeOne ? `
+        <div class="card-actions-row">
+          <button type="button" class="btn-secondary btn-analyze-one" data-analyze-one="${escapeHtml(video.id)}">
+            Analyze this video
+          </button>
+        </div>
+      ` : ''}
       ${video.priceError ? `<div class="mini">${escapeHtml(video.priceError)}</div>` : ''}
     </article>
   `;
@@ -781,7 +796,27 @@ function renderAnalysisList() {
     return;
   }
 
-  container.innerHTML = videos.map((video) => renderAnalysisCard(video)).join('');
+  const groups = groupVideosByDate(videos);
+  container.innerHTML = groups.map((group) => `
+    <section class="date-group">
+      <header class="date-group-head">
+        <h3>${escapeHtml(group.label)}</h3>
+        <span>${group.videos.length} video${group.videos.length === 1 ? '' : 's'}</span>
+      </header>
+      <div class="card-list">
+        ${group.videos
+          .sort((a, b) => (a.channelIndex || 999999) - (b.channelIndex || 999999))
+          .map((video) => renderAnalysisCard(video))
+          .join('')}
+      </div>
+    </section>
+  `).join('');
+
+  const runningId = state.aiBatchJob?.currentId;
+  if (runningId) {
+    const runningCard = container.querySelector(`[data-video-id="${runningId}"]`);
+    runningCard?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
 }
 
 function renderAll() {
@@ -930,6 +965,29 @@ function updateUI() {
 function setBusy(busy) {
   state.runningTask = busy ? 'busy' : '';
   updateUI();
+}
+
+function applyOpenUiMode() {
+  const mode = ($('openUIMode')?.value || localStorage.getItem('fruitMinerOpenUIMode') || 'sidepanel').trim();
+  if ($('openUIMode')) $('openUIMode').value = mode;
+  localStorage.setItem('fruitMinerOpenUIMode', mode);
+  if (chrome.storage?.local) {
+    chrome.storage.local.set({ fruitMinerOpenUIMode: mode }).catch(() => {});
+  }
+  const inSidepanel = new URLSearchParams(location.search).get('mode') === 'sidepanel' || document.body.classList.contains('sidepanel-mode');
+  document.body.classList.toggle('sidepanel-mode', inSidepanel || mode === 'sidepanel');
+  if ($('openFullTabBtn')) {
+    $('openFullTabBtn').style.display = inSidepanel ? '' : 'none';
+  }
+}
+
+function initUiMode() {
+  if (new URLSearchParams(location.search).get('mode') === 'sidepanel') {
+    document.body.classList.add('sidepanel-mode');
+  }
+  const saved = localStorage.getItem('fruitMinerOpenUIMode') || 'sidepanel';
+  if ($('openUIMode')) $('openUIMode').value = saved;
+  applyOpenUiMode();
 }
 
 async function saveLocal() {
@@ -1160,6 +1218,48 @@ function syncFromStorageChanges(changes) {
   updateUI();
 }
 
+async function analyzeOneVideo(videoId) {
+  const video = state.videos.find((item) => item.id === videoId);
+  if (!video || !hasTranscriptData(video)) {
+    throw new Error('Video not ready for analysis.');
+  }
+
+  setBusy(true);
+  video.priceStatus = 'running';
+  video.priceError = '';
+  renderAnalysisList();
+  log(`Analyzing ${video.title || videoId}...`);
+
+  try {
+    const data = await api('/api/analyze-single-video', {
+      videoId,
+      apiKey: getOpenAiKey(),
+      model: ($('openaiModel')?.value || 'gpt-4o-mini').trim(),
+      maxCharsPerCall: Number($('aiMaxChars')?.value || 10000),
+      pendingVideo: {
+        id: video.id,
+        title: video.title,
+        url: video.url,
+        upload_date: video.upload_date,
+        segments: video.segments,
+        channelIndex: video.channelIndex,
+        relevance: video.relevance,
+        status: video.status,
+        priceStatus: video.priceStatus,
+        language: video.language,
+        transcriptText: video.transcriptText,
+      },
+    });
+    await loadLocal();
+    renderAll();
+    log(data.count
+      ? `OK ${video.title || videoId} (${data.count} mention${data.count === 1 ? '' : 's'})`
+      : `No prices found in ${video.title || videoId}. Add OpenAI key for richer extraction.`, { level: data.count ? 'info' : 'warn' });
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function aiAnalysisStep() {
   const pending = pendingAnalysis();
   if (!analysisListVideos().length) {
@@ -1375,6 +1475,28 @@ $('clearBtn')?.addEventListener('click', () => {
 
 $('videoSearch')?.addEventListener('input', renderVideos);
 $('analysisSearch')?.addEventListener('input', renderAnalysisList);
+
+$('analysisList')?.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-analyze-one]');
+  if (!button || state.aiBatchRunning || state.runningTask) return;
+  const videoId = button.getAttribute('data-analyze-one');
+  if (!videoId) return;
+  try {
+    await analyzeOneVideo(videoId);
+  } catch (error) {
+    log(`Analyze failed: ${error.message}`, { level: 'error' });
+    await loadLocal();
+    renderAll();
+  }
+});
+
+$('openUIMode')?.addEventListener('change', applyOpenUiMode);
+
+$('openFullTabBtn')?.addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
+});
+
+initUiMode();
 $('priceSearch')?.addEventListener('input', renderPrices);
 
 document.addEventListener('click', (event) => {
@@ -1555,7 +1677,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.33 — analysis sync + flicker fix';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.34 — side panel + veg prices + one-by-one analysis';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

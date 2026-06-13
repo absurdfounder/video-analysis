@@ -1,10 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Fruit Price Transcript Miner",
-  "version": "1.5.33",
+  "version": "1.5.34",
   "description": "Pull YouTube captions from your browser session and extract timestamped fruit price rows.",
   "action": {
-    "default_title": "Open Fruit Price Transcript Miner"
+    "default_title": "Open Delhi Fruit Market Miner"
+  },
+  "side_panel": {
+    "default_path": "index.html?mode=sidepanel"
   },
   "background": {
     "service_worker": "background.js"
@@ -14,7 +17,8 @@
     "storage",
     "alarms",
     "notifications",
-    "scripting"
+    "scripting",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
