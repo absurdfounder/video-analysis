@@ -88,7 +88,7 @@
     </section>
 
     <section class="step-panel" id="panel-4">
-      <p class="step-desc" id="stepDesc4">Append processed data to your website JSON store on Netlify.</p>
+      <p class="step-desc" id="stepDesc4">Push analyzed data to your Cloudflare D1 database (or legacy Netlify JSON). Set API URL in Settings first.</p>
       <button id="stepBtn4" class="btn-primary btn-large" type="button">Update dataset on website</button>
       <div id="syncSummary" class="sync-summary">Nothing pushed yet.</div>
       <div id="pricePreview" class="card-list compact-preview"></div>
@@ -121,11 +121,12 @@
           <label>AI max videos<input id="aiMaxVideos" type="number" min="1" max="100" value="25" /></label>
         </div>
         <label>Max chars/call<input id="aiMaxChars" type="number" min="2500" max="20000" value="10000" /></label>
-        <label>Netlify URL<input id="syncSiteUrl" placeholder="https://your-site.netlify.app" /></label>
-        <label>Sync token<input id="syncToken" type="password" placeholder="optional" autocomplete="off" /></label>
+        <label>API URL (Cloudflare Worker)<input id="syncSiteUrl" placeholder="https://fruit-mandi-api.your-name.workers.dev" /></label>
+        <label>Sync token<input id="syncToken" type="password" placeholder="optional — matches Worker SYNC_TOKEN" autocomplete="off" /></label>
+        <p class="hint">Use your Cloudflare Worker URL from <code>cloudflare/README.md</code>. Legacy Netlify <code>/api/data</code> URLs still work.</p>
         <div class="quick-actions">
           <button id="saveWatchBtn" class="btn-secondary" type="button">Save watch settings</button>
-          <button id="pullDataBtn" class="btn-secondary" type="button">Pull from website</button>
+          <button id="pullDataBtn" class="btn-secondary" type="button">Pull from API</button>
           <button id="exportJsonBtn" class="btn-secondary" type="button">Export JSON</button>
           <button id="clearBtn" class="btn-ghost" type="button">Clear data</button>
         </div>

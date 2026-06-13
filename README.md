@@ -40,7 +40,28 @@ After code updates, click **Reload** on the extension card in `chrome://extensio
 - **Pull transcripts** only processes relevant videos (skipped ones are not fetched)
 
 
-## Website JSON sync (no database)
+## Cloudflare D1 database (recommended)
+
+Structured SQL storage with CRUD — no Supabase/Firebase required.
+
+Setup lives in [`cloudflare/README.md`](cloudflare/README.md):
+
+1. `cd cloudflare && npm install`
+2. `npm run db:create` → paste `database_id` into `wrangler.toml`
+3. `npm run db:migrate && npm run deploy`
+4. Extension **Settings → API URL** → `https://fruit-mandi-api.<you>.workers.dev`
+5. **Step 4 → Update dataset**
+
+API highlights:
+
+- `POST /api/data` — bulk sync from extension (same as before)
+- `GET /api/prices?fruit=onion&market_date=2026-06-13` — query prices
+- `GET /api/analysis/:videoId` — per-video structured rollup
+- `DELETE /api/videos/:id` — real CRUD
+
+Optional: set Worker env `SYNC_TOKEN` and the same value in extension **Sync token**.
+
+## Website JSON sync (legacy Netlify)
 
 Processed data can sync to one JSON blob instead of a database:
 

@@ -1,0 +1,12 @@
+name = "fruit-mandi-api"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# After `npm run db:create`, paste the database_id below.
+[[d1_databases]]
+binding = "DB"
+database_name = "fruit-mandi"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# Optional: set SYNC_TOKEN in Cloudflare dashboard → Worker → Settings → Variables
+# Extension uses the same value in Settings → Sync token.

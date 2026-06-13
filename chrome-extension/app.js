@@ -890,7 +890,7 @@ function deriveStepStatus() {
       meta: analysisMeta,
       desc: analysisDesc,
     },
-    4: { done: Boolean(state.lastSync), meta: state.lastSync ? 'Synced' : 'Waiting', desc: state.lastSync ? `Last pushed ${new Date(state.lastSync).toLocaleString()}` : 'Push results to your website dataset.' },
+    4: { done: Boolean(state.lastSync), meta: state.lastSync ? 'Synced' : 'Waiting', desc: state.lastSync ? `Last pushed ${new Date(state.lastSync).toLocaleString()}` : 'Push to Cloudflare D1 via Worker API (see cloudflare/README.md).' },
   };
 }
 
@@ -1334,7 +1334,7 @@ async function updateDatasetStep() {
     siteUrl: ($('syncSiteUrl')?.value || localStorage.getItem('fruitTranscriptMinerSyncSiteUrl') || '').trim().replace(/\/$/, ''),
     token: ($('syncToken')?.value || localStorage.getItem('fruitTranscriptMinerSyncToken') || '').trim(),
   };
-  if (!siteUrl) throw new Error('Set your Netlify URL in Settings first.');
+  if (!siteUrl) throw new Error('Set your Cloudflare Worker API URL in Settings first.');
   localStorage.setItem('fruitTranscriptMinerSyncSiteUrl', siteUrl);
   if (token) localStorage.setItem('fruitTranscriptMinerSyncToken', token);
 
@@ -1357,9 +1357,9 @@ async function updateDatasetStep() {
 
   state.lastSync = new Date().toISOString();
   if ($('syncSummary')) {
-    $('syncSummary').textContent = `Dataset updated · ${data.counts.videos} videos · ${data.counts.priceRows} price rows`;
+    $('syncSummary').textContent = `Dataset updated · ${data.counts.videos} videos · ${data.counts.priceRows} price rows${data.storage ? ` · ${data.storage}` : ''}`;
   }
-  log(`Dataset updated on website.`);
+  log(`Dataset synced to ${data.storage || 'API'}.`);
   updateUI();
   saveLocal();
 }
@@ -1433,7 +1433,7 @@ $('pullDataBtn')?.addEventListener('click', async () => {
   try {
     setBusy(true);
     const siteUrl = ($('syncSiteUrl')?.value || '').trim().replace(/\/$/, '');
-    if (!siteUrl) throw new Error('Set Netlify URL first.');
+    if (!siteUrl) throw new Error('Set Cloudflare Worker API URL in Settings first.');
     const res = await fetch(`${siteUrl}/api/data`);
     const data = await res.json();
     if (Array.isArray(data.data?.videos)) state.videos = data.data.videos;
@@ -1447,7 +1447,7 @@ $('pullDataBtn')?.addEventListener('click', async () => {
       }
     }
     renderAll();
-    log('Loaded from website.');
+    log('Loaded from API.');
   } catch (e) { log(e.message); }
   finally { setBusy(false); }
 });
@@ -1677,7 +1677,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.34 — side panel + veg prices + one-by-one analysis';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.35 — Cloudflare D1 sync';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
