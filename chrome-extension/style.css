@@ -304,8 +304,70 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   background: #fff;
 }
 
+.video-card {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: 12px;
+  align-items: start;
+  border-left-width: 5px;
+}
+
+.video-card-main {
+  min-width: 0;
+}
+
+.video-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #e8eee8;
+  border: 1px solid var(--line);
+}
+
+.video-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.video-thumb-empty {
+  background:
+    linear-gradient(135deg, rgba(26, 122, 76, 0.08), rgba(43, 93, 166, 0.08)),
+    #f4f6f2;
+}
+
 .video-card.is-new { border-color: #e8c45c; background: #fffaf0; }
 .video-card.is-skipped { opacity: 0.5; }
+.video-card.status-ok,
+.video-card.analysis-ok {
+  border-left-color: var(--green);
+  background: #fbfffc;
+}
+
+.video-card.status-running,
+.video-card.analysis-running,
+.video-card.is-running {
+  border-left-color: #d78a00;
+  background: #fffaf0;
+}
+
+.video-card.status-failed,
+.video-card.analysis-failed {
+  border-left-color: var(--danger);
+  background: #fff8f8;
+}
+
+.video-card.status-pending,
+.video-card.analysis-pending {
+  border-left-color: #8b9a90;
+}
+
+.video-card.analysis-no-transcript {
+  border-left-color: #64748b;
+}
 
 .video-card h3, .price-card h3 {
   margin: 0 0 6px;
@@ -346,6 +408,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .video-card.is-running { outline: 1px solid #f59e0b; }
 .badge.failed { background: #ffe8e8; color: var(--danger); }
 .badge.running { background: #fff4d6; color: var(--warn); }
+.badge.pending, .badge.no-transcript { background: #eef1ed; color: var(--muted); }
 .badge.skipped, .badge.relevance-irrelevant { background: #f1f1f1; color: #666; }
 .badge.relevance-uncertain { background: #fff4d6; color: var(--warn); }
 .badge.relevance-unclassified { background: #edf3ff; color: var(--blue); }
@@ -593,6 +656,38 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   background: #d8edde;
 }
 
+.card-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.btn-open-youtube {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  border-radius: 12px;
+  background: #f1f4ef;
+  color: var(--green-dark);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.card-actions .btn-view-transcript {
+  margin-top: 0;
+}
+
+.error-text {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff1f1;
+  color: var(--danger);
+}
+
 /* Transcript modal */
 .modal.hidden { display: none; }
 
@@ -787,16 +882,78 @@ input {
   margin-top: 12px;
 }
 
-.log-panel pre {
+.log-panel .log-list {
   margin: 10px 0 0;
-  max-height: 180px;
+  max-height: 240px;
   overflow: auto;
   padding: 12px;
   border-radius: 12px;
   background: #101b14;
-  color: #d9ffe4;
   font-size: 12px;
-  white-space: pre-wrap;
+  display: grid;
+  gap: 6px;
+}
+
+.log-entry {
+  display: grid;
+  grid-template-columns: 74px 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  color: #d9ffe4;
+}
+
+.log-time {
+  color: rgba(217, 255, 228, 0.62);
+  font-variant-numeric: tabular-nums;
+}
+
+.log-level {
+  justify-self: start;
+  min-width: 48px;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(217, 255, 228, 0.8);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.log-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.log-warn .log-level {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+}
+
+.log-error .log-level {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+}
+
+.log-error .log-message { color: #fecaca; }
+.log-warn .log-message { color: #fde68a; }
+
+@media (max-width: 700px) {
+  .video-card {
+    grid-template-columns: 96px 1fr;
+    padding: 10px;
+  }
+
+  .card-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .log-entry {
+    grid-template-columns: 66px minmax(0, 1fr);
+  }
+
+  .log-level {
+    display: none;
+  }
 }
 
 .sr-only {

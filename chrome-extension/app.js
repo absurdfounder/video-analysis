@@ -61,8 +61,15 @@ function log(message, { level = 'info' } = {}) {
   const box = $('log');
   if (!box) return;
   const now = new Date().toLocaleTimeString();
-  const prefix = level === 'error' ? '✗ ' : level === 'warn' ? '⚠ ' : '';
-  box.textContent += `[${now}] ${prefix}${message}\n`;
+  const entry = document.createElement('div');
+  entry.className = `log-entry log-${level}`;
+  entry.innerHTML = `
+    <span class="log-time">${escapeHtml(now)}</span>
+    <span class="log-level">${escapeHtml(level)}</span>
+    <span class="log-message">${escapeHtml(message)}</span>
+  `;
+  box.append(entry);
+  while (box.children.length > 250) box.firstElementChild?.remove();
   box.scrollTop = box.scrollHeight;
 }
 
@@ -161,6 +168,32 @@ function escapeHtml(text) {
 
 function tag(text, cls) {
   return `<span class="badge ${cls}">${escapeHtml(text)}</span>`;
+}
+
+function safeVideoId(value) {
+  const text = String(value || '').trim();
+  const direct = text.match(/^[a-zA-Z0-9_-]{6,}$/);
+  if (direct) return text;
+  const fromWatch = text.match(/[?&]v=([a-zA-Z0-9_-]{6,})/);
+  if (fromWatch) return fromWatch[1];
+  const fromShort = text.match(/youtu\.be\/([a-zA-Z0-9_-]{6,})/);
+  return fromShort ? fromShort[1] : '';
+}
+
+function videoThumbnailUrl(video) {
+  const id = safeVideoId(video?.id || video?.url);
+  return id ? `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg` : '';
+}
+
+function renderVideoThumb(video) {
+  const src = videoThumbnailUrl(video);
+  if (!src) return '<div class="video-thumb video-thumb-empty" aria-hidden="true"></div>';
+  const title = escapeHtml(video.title || video.id || 'YouTube video');
+  return `
+    <a class="video-thumb" href="${escapeHtml(video.url || `https://www.youtube.com/watch?v=${video.id}`)}" target="_blank" rel="noreferrer" aria-label="Open ${title}">
+      <img src="${escapeHtml(src)}" alt="${title}" loading="lazy" />
+    </a>
+  `;
 }
 
 function isProcessable(video) {
@@ -370,24 +403,27 @@ function renderVideoCard(video) {
     : '';
 
   return `
-    <article class="video-card ${video.isNew ? 'is-new' : ''} ${status === 'skipped' ? 'is-skipped' : ''} ${hasData ? 'has-transcript' : ''} ${analysisMeta ? 'has-analysis' : ''}">
-      <h3><a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a></h3>
-      <div class="card-tags">
-        ${video.channelIndex ? tag(`#${video.channelIndex}`, 'channel-index') : ''}
-        ${tag(status, status)}
-        ${tag(video.relevance || 'unclassified', `relevance-${video.relevance || 'unclassified'}`)}
-        ${hasData ? tag(`${segCount} lines`, 'relevance-relevant') : ''}
-        ${analysisMeta ? tag(`${analysisMeta.mention_count} mention${analysisMeta.mention_count === 1 ? '' : 's'}`, 'ok') : ''}
-        ${analysisMeta?.fruits?.length ? tag(`${analysisMeta.fruits.length} fruit${analysisMeta.fruits.length === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
-      </div>
-      ${analysisPreview}
-      ${video.relevanceReason ? `<div class="mini">${escapeHtml(video.relevanceReason)}</div>` : ''}
-      ${showBtn ? `
-        <div class="card-actions">
-          <a class="btn-open-youtube" href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">Open YouTube</a>
-          <button type="button" class="btn-view-transcript" data-open-transcript="${escapeHtml(video.id)}">${escapeHtml(btnLabel)}</button>
+    <article class="video-card status-${status} ${video.isNew ? 'is-new' : ''} ${status === 'skipped' ? 'is-skipped' : ''} ${hasData ? 'has-transcript' : ''} ${analysisMeta ? 'has-analysis' : ''}">
+      ${renderVideoThumb(video)}
+      <div class="video-card-main">
+        <h3><a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a></h3>
+        <div class="card-tags">
+          ${video.channelIndex ? tag(`#${video.channelIndex}`, 'channel-index') : ''}
+          ${tag(status, status)}
+          ${tag(video.relevance || 'unclassified', `relevance-${video.relevance || 'unclassified'}`)}
+          ${hasData ? tag(`${segCount} lines`, 'relevance-relevant') : ''}
+          ${analysisMeta ? tag(`${analysisMeta.mention_count} mention${analysisMeta.mention_count === 1 ? '' : 's'}`, 'ok') : ''}
+          ${analysisMeta?.fruits?.length ? tag(`${analysisMeta.fruits.length} fruit${analysisMeta.fruits.length === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
         </div>
-      ` : ''}
+        ${analysisPreview}
+        ${video.relevanceReason ? `<div class="mini">${escapeHtml(video.relevanceReason)}</div>` : ''}
+        ${showBtn ? `
+          <div class="card-actions">
+            <a class="btn-open-youtube" href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">Open YouTube</a>
+            <button type="button" class="btn-view-transcript" data-open-transcript="${escapeHtml(video.id)}">${escapeHtml(btnLabel)}</button>
+          </div>
+        ` : ''}
+      </div>
     </article>
   `;
 }
@@ -631,32 +667,35 @@ function renderAnalysisCard(video) {
   const canAnalyzeOne = (priceStatus === 'pending' || priceStatus === 'failed') && !state.aiBatchRunning && !state.runningTask;
 
   return `
-    <article class="video-card ${isCurrent || priceStatus === 'running' ? 'is-running' : ''} ${priceStatus === 'ok' ? 'has-transcript has-analysis' : ''}" data-video-id="${escapeHtml(video.id)}">
-      <h3>
-        ${video.channelIndex ? `<span class="channel-index-label">#${video.channelIndex}</span> ` : ''}
-        <a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a>
-      </h3>
-      <div class="card-meta">${escapeHtml(marketDay)}${analysisMeta?.source ? ` · ${escapeHtml(analysisMeta.source)} extraction` : ''}</div>
-      <div class="card-tags">
-        ${tag(statusLabel, priceStatus === 'ok' ? 'ok' : priceStatus)}
-        ${tag(`${segmentCount(video)} lines`, 'relevance-relevant')}
-        ${shownRows ? tag(`${shownRows} mention${shownRows === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
-        ${fruitList.length ? tag(`${fruitList.length} fruit${fruitList.length === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
-        ${partyCount ? tag(`${partyCount} part${partyCount === 1 ? 'y' : 'ies'}`, 'relevance-relevant') : ''}
-        ${areaCount ? tag(`${areaCount} area${areaCount === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
-        ${queuePos >= 0 && state.aiBatchRunning ? tag(`queue #${queuePos + 1}`, isCurrent ? 'running' : 'relevance-relevant') : ''}
-        ${isCurrent ? tag('processing now', 'running') : ''}
-      </div>
-      ${fruitList.length && !analysisBody ? `<div class="analysis-summary-line">${fruitList.slice(0, 8).map((fruit) => tag(fruit, 'relevance-relevant')).join('')}</div>` : ''}
-      ${analysisBody}
-      ${canAnalyzeOne ? `
-        <div class="card-actions-row">
-          <button type="button" class="btn-secondary btn-analyze-one" data-analyze-one="${escapeHtml(video.id)}">
-            Analyze this video
-          </button>
+    <article class="video-card analysis-${priceStatus} ${isCurrent || priceStatus === 'running' ? 'is-running' : ''} ${priceStatus === 'ok' ? 'has-transcript has-analysis' : ''}" data-video-id="${escapeHtml(video.id)}">
+      ${renderVideoThumb(video)}
+      <div class="video-card-main">
+        <h3>
+          ${video.channelIndex ? `<span class="channel-index-label">#${video.channelIndex}</span> ` : ''}
+          <a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a>
+        </h3>
+        <div class="card-meta">${escapeHtml(marketDay)}${analysisMeta?.source ? ` · ${escapeHtml(analysisMeta.source)} extraction` : ''}</div>
+        <div class="card-tags">
+          ${tag(statusLabel, priceStatus === 'ok' ? 'ok' : priceStatus)}
+          ${tag(`${segmentCount(video)} lines`, 'relevance-relevant')}
+          ${shownRows ? tag(`${shownRows} mention${shownRows === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
+          ${fruitList.length ? tag(`${fruitList.length} fruit${fruitList.length === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
+          ${partyCount ? tag(`${partyCount} part${partyCount === 1 ? 'y' : 'ies'}`, 'relevance-relevant') : ''}
+          ${areaCount ? tag(`${areaCount} area${areaCount === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
+          ${queuePos >= 0 && state.aiBatchRunning ? tag(`queue #${queuePos + 1}`, isCurrent ? 'running' : 'relevance-relevant') : ''}
+          ${isCurrent ? tag('processing now', 'running') : ''}
         </div>
-      ` : ''}
-      ${video.priceError ? `<div class="mini">${escapeHtml(video.priceError)}</div>` : ''}
+        ${fruitList.length && !analysisBody ? `<div class="analysis-summary-line">${fruitList.slice(0, 8).map((fruit) => tag(fruit, 'relevance-relevant')).join('')}</div>` : ''}
+        ${analysisBody}
+        ${canAnalyzeOne ? `
+          <div class="card-actions-row">
+            <button type="button" class="btn-secondary btn-analyze-one" data-analyze-one="${escapeHtml(video.id)}">
+              Analyze this video
+            </button>
+          </div>
+        ` : ''}
+        ${video.priceError ? `<div class="mini error-text">${escapeHtml(video.priceError)}</div>` : ''}
+      </div>
     </article>
   `;
 }
@@ -1610,33 +1649,33 @@ document.querySelectorAll('.step').forEach(btn => {
 
 $('stepBtn1')?.addEventListener('click', async () => {
   try { setBusy(true); await fetchVideosStep(); }
-  catch (e) { log(`Step 1 failed: ${e.message}`); }
+  catch (e) { log(`Step 1 failed: ${e.message}`, { level: 'error' }); }
   finally { setBusy(false); }
 });
 
 $('stepBtn2')?.addEventListener('click', async () => {
   try { await fetchTranscriptsStep(); }
-  catch (e) { log(`Step 2 failed: ${e.message}`); setBusy(false); }
+  catch (e) { log(`Step 2 failed: ${e.message}`, { level: 'error' }); setBusy(false); }
 });
 
 $('stopTranscriptBatchBtn')?.addEventListener('click', async () => {
   try { await stopTranscriptsStep(); }
-  catch (e) { log(`Stop failed: ${e.message}`); }
+  catch (e) { log(`Stop failed: ${e.message}`, { level: 'error' }); }
 });
 
 $('stepBtn3')?.addEventListener('click', async () => {
   try { await aiAnalysisStep(); }
-  catch (e) { log(`Step 3 failed: ${e.message}`); }
+  catch (e) { log(`Step 3 failed: ${e.message}`, { level: 'error' }); }
 });
 
 $('stopAiAnalysisBatchBtn')?.addEventListener('click', async () => {
   try { await stopAiAnalysisStep(); }
-  catch (e) { log(`Stop analysis failed: ${e.message}`); }
+  catch (e) { log(`Stop analysis failed: ${e.message}`, { level: 'error' }); }
 });
 
 $('stepBtn4')?.addEventListener('click', async () => {
   try { setBusy(true); await updateDatasetStep(); }
-  catch (e) { log(`Step 4 failed: ${e.message}`); }
+  catch (e) { log(`Step 4 failed: ${e.message}`, { level: 'error' }); }
   finally { setBusy(false); }
 });
 
@@ -1971,7 +2010,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.3 — OpenAI analysis via extension background';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.4 — thumbnails, logs, OpenAI direct';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
