@@ -10,3 +10,6 @@ cloudflare/.wrangler/
 
 # Generated YouTube/debug dumps can contain page API keys and cookies.
 tmp_*.html
+
+# Local deploy-only secrets. Never commit browser cookies.
+app/secrets/

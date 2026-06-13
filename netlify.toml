@@ -6,7 +6,7 @@
   functions = "app/netlify/functions"
 
 [functions]
-  included_files = ["app/bin/yt-dlp", "app/package.json"]
+  included_files = ["app/bin/yt-dlp", "app/package.json", "app/secrets/youtube-cookies.txt"]
   node_bundler = "esbuild"
 
 [[redirects]]

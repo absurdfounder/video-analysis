@@ -179,6 +179,11 @@ function getYoutubeCookiesText() {
   if (process.env.YOUTUBE_COOKIES) {
     return process.env.YOUTUBE_COOKIES.replace(/\\n/g, '\n');
   }
+  const cookieFile = process.env.YOUTUBE_COOKIES_FILE
+    || path.resolve(__dirname, '../../secrets/youtube-cookies.txt');
+  try {
+    if (fs.existsSync(cookieFile)) return fs.readFileSync(cookieFile, 'utf8');
+  } catch {}
   return '';
 }
 
