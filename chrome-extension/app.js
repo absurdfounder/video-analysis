@@ -114,14 +114,18 @@ function groupVideosByDate(videos) {
 }
 
 function renderVideoCard(video) {
+  const segCount = Array.isArray(video.segments) ? video.segments.length : 0;
+  const hasTranscript = video.status === 'ok' && segCount > 0;
   return `
-    <article class="video-card ${video.isNew ? 'is-new' : ''} ${video.status === 'skipped' ? 'is-skipped' : ''}">
+    <article class="video-card ${video.isNew ? 'is-new' : ''} ${video.status === 'skipped' ? 'is-skipped' : ''} ${hasTranscript ? 'has-transcript' : ''}">
       <h3><a href="${escapeHtml(video.url)}" target="_blank" rel="noreferrer">${escapeHtml(video.title || video.id)}</a></h3>
       <div class="card-tags">
         ${tag(video.status || 'pending', video.status || 'pending')}
         ${tag(video.relevance || 'unclassified', `relevance-${video.relevance || 'unclassified'}`)}
+        ${hasTranscript ? tag(`${segCount} segments`, 'relevance-relevant') : ''}
       </div>
       ${video.relevanceReason ? `<div class="mini">${escapeHtml(video.relevanceReason)}</div>` : ''}
+      ${hasTranscript ? `<button type="button" class="btn-view-transcript" data-open-transcript="${escapeHtml(video.id)}">Read transcript by time</button>` : ''}
     </article>
   `;
 }
@@ -156,13 +160,6 @@ function renderDateGroups(videos, containerId, emptyMessage) {
   `).join('');
 }
 
-function secondsToClock(seconds) {
-  const s = Math.max(0, Math.floor(Number(seconds) || 0));
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return `${m}:${String(sec).padStart(2, '0')}`;
-}
-
 function timestampUrl(videoUrl, seconds) {
   try {
     const url = new URL(videoUrl);
@@ -171,6 +168,66 @@ function timestampUrl(videoUrl, seconds) {
   } catch {
     return videoUrl;
   }
+}
+
+let modalVideoId = '';
+
+function openTranscriptModal(videoId) {
+  const video = state.videos.find(v => v.id === videoId);
+  const modal = $('transcriptModal');
+  if (!video || !modal || !Array.isArray(video.segments) || !video.segments.length) return;
+
+  modalVideoId = videoId;
+  if ($('modalTitle')) $('modalTitle').textContent = video.title || video.id;
+  if ($('modalMeta')) {
+    $('modalMeta').textContent = `${video.segments.length} segments · ${video.language || 'unknown'} · ${parseVideoDate(video).label}`;
+  }
+  if ($('modalYoutube')) $('modalYoutube').href = video.url;
+  if ($('modalSearch')) $('modalSearch').value = '';
+  renderModalSegments(video);
+  modal.classList.remove('hidden');
+  document.body.classList.add('modal-open');
+}
+
+function closeTranscriptModal() {
+  $('transcriptModal')?.classList.add('hidden');
+  document.body.classList.remove('modal-open');
+  modalVideoId = '';
+}
+
+function renderModalSegments(video) {
+  const list = $('modalSegments');
+  if (!list) return;
+
+  const q = ($('modalSearch')?.value || '').toLowerCase().trim();
+  const segments = (video.segments || []).filter(seg => {
+    if (!q) return true;
+    const hay = [seg.timestamp_label, seg.text].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+
+  if (!segments.length) {
+    list.innerHTML = '<div class="empty-state">No segments match this search.</div>';
+    return;
+  }
+
+  list.innerHTML = segments.map(seg => {
+    const label = seg.timestamp_label || secondsToClock(seg.start);
+    const url = timestampUrl(video.url, seg.start);
+    return `
+      <article class="segment-row">
+        <a class="segment-time" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>
+        <p class="segment-text">${escapeHtml(seg.text)}</p>
+      </article>
+    `;
+  }).join('');
+}
+
+function secondsToClock(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${String(sec).padStart(2, '0')}`;
 }
 
 function renderPrices() {
@@ -555,6 +612,27 @@ $('clearBtn')?.addEventListener('click', () => {
 
 $('videoSearch')?.addEventListener('input', renderVideos);
 $('priceSearch')?.addEventListener('input', renderPrices);
+
+document.addEventListener('click', (event) => {
+  const openBtn = event.target.closest('[data-open-transcript]');
+  if (openBtn) {
+    event.preventDefault();
+    openTranscriptModal(openBtn.dataset.openTranscript);
+    return;
+  }
+  if (event.target.closest('[data-close-modal]') || event.target.closest('#modalClose')) {
+    closeTranscriptModal();
+  }
+});
+
+$('modalSearch')?.addEventListener('input', () => {
+  const video = state.videos.find(v => v.id === modalVideoId);
+  if (video) renderModalSegments(video);
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeTranscriptModal();
+});
 
 if ($('syncSiteUrl')) $('syncSiteUrl').value = localStorage.getItem('fruitTranscriptMinerSyncSiteUrl') || '';
 if ($('syncToken')) $('syncToken').value = localStorage.getItem('fruitTranscriptMinerSyncToken') || '';

@@ -319,6 +319,138 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   text-transform: uppercase;
 }
 
+.video-card.has-transcript {
+  border-color: rgba(26, 122, 76, 0.35);
+}
+
+.btn-view-transcript {
+  margin-top: 10px;
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--soft-green);
+  color: var(--green-dark);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn-view-transcript:hover {
+  background: #d8edde;
+}
+
+/* Transcript modal */
+.modal.hidden { display: none; }
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 32, 25, 0.45);
+}
+
+.modal-panel {
+  position: relative;
+  width: min(720px, 100%);
+  max-height: min(85vh, 900px);
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  border-radius: 22px;
+  background: var(--card);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-head h2 {
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.modal-meta {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.modal-close {
+  border: 0;
+  background: #eef2ec;
+  color: var(--muted);
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modal-tools {
+  display: flex;
+  gap: 10px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-tools input { flex: 1; }
+
+.modal-tools .btn-secondary {
+  white-space: nowrap;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.segment-list {
+  overflow: auto;
+  padding: 12px 18px 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.segment-row {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fafcf9;
+}
+
+.segment-time {
+  font-weight: 900;
+  color: var(--green-dark);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.segment-time:hover { text-decoration: underline; }
+
+.segment-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+body.modal-open { overflow: hidden; }
+
 .sync-summary {
   padding: 14px;
   border-radius: 14px;

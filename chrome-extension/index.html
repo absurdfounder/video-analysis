@@ -114,6 +114,24 @@
       <pre id="log"></pre>
     </details>
 
+    <div id="transcriptModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-backdrop" data-close-modal></div>
+      <div class="modal-panel">
+        <header class="modal-head">
+          <div>
+            <h2 id="modalTitle">Transcript</h2>
+            <p class="modal-meta" id="modalMeta"></p>
+          </div>
+          <button id="modalClose" class="modal-close" type="button" aria-label="Close">×</button>
+        </header>
+        <div class="modal-tools">
+          <input id="modalSearch" placeholder="Search transcript text..." />
+          <a id="modalYoutube" class="btn-secondary" href="#" target="_blank" rel="noreferrer">Open on YouTube</a>
+        </div>
+        <div id="modalSegments" class="segment-list"></div>
+      </div>
+    </div>
+
     <div class="sr-only" aria-hidden="true">
       <span id="statPending">0</span>
       <span id="videoCount">0</span>
