@@ -373,9 +373,9 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
     return null;
   }
 
-  async function tryInnerTube(player) {
+  async function tryInnerTube(player, method = 'innertube') {
     const params = extractTranscriptParams(player, document.documentElement.innerHTML, getLiveInitialData());
-    if (!params) return null;
+    if (!params) return { ok: false, error: 'No transcript params in page HTML.' };
     const result = await fetchInnerTubeTranscriptInPage(params);
     if (result?.segments?.length) {
       return {
@@ -383,34 +383,15 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
         segments: result.segments,
         language: 'unknown',
         fileName: 'innertube-transcript',
-        method: 'innertube',
+        method,
       };
     }
-    return null;
+    return { ok: false, error: result?.error || 'innerTube transcript empty.' };
   }
 
-  async function tryPanelDom() {
-    mutePlayer();
-    const existingSegments = extractSegmentsFromPanel();
-    if (existingSegments.length) {
-      return {
-        ok: true,
-        segments: existingSegments,
-        language: 'unknown',
-        fileName: 'youtube-transcript-panel',
-        method: 'visible-panel-dom',
-      };
-    }
-
-    const existingHtmlSegments = extractSegmentsFromTranscriptHtml((transcriptPanelRoot() || document.documentElement).innerHTML);
-    if (existingHtmlSegments.length) {
-      return {
-        ok: true,
-        segments: existingHtmlSegments,
-        language: 'unknown',
-        fileName: 'youtube-transcript-panel-html',
-        method: 'visible-panel-html',
-      };
+  async function openTranscriptUi() {
+    if (transcriptPanelRoot() && extractSegmentsFromPanel().length) {
+      return { ok: true, alreadyOpen: true };
     }
 
     scrollToDescription();
@@ -437,6 +418,32 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
 
     clickElement(transcriptButton);
     await sleep(700);
+    return { ok: true, alreadyOpen: false };
+  }
+
+  async function scrapeTranscriptPanel() {
+    mutePlayer();
+    const existingSegments = extractSegmentsFromPanel();
+    if (existingSegments.length) {
+      return {
+        ok: true,
+        segments: existingSegments,
+        language: 'unknown',
+        fileName: 'youtube-transcript-panel',
+        method: 'visible-panel-dom',
+      };
+    }
+
+    const existingHtmlSegments = extractSegmentsFromTranscriptHtml((transcriptPanelRoot() || document.documentElement).innerHTML);
+    if (existingHtmlSegments.length) {
+      return {
+        ok: true,
+        segments: existingHtmlSegments,
+        language: 'unknown',
+        fileName: 'youtube-transcript-panel-html',
+        method: 'visible-panel-html',
+      };
+    }
 
     for (let attempt = 0; attempt < 20; attempt++) {
       mutePlayer();
@@ -512,7 +519,20 @@ function fetchTranscriptInPage(languages, backgroundOnly = false) {
       errors.push('Caption track download returned empty.');
     }
 
-    const panelResult = await tryPanelDom();
+    const openResult = await openTranscriptUi();
+    if (!openResult.ok) {
+      errors.push(openResult.error);
+    } else {
+      const freshPlayer = getLivePlayerResponse();
+      const retryInnerTube = await tryInnerTube(freshPlayer, 'innertube-after-panel');
+      if (retryInnerTube?.segments?.length) return { ...retryInnerTube, ok: true };
+      if (retryInnerTube?.error) errors.push(retryInnerTube.error);
+
+      const retryCaptions = await tryCaptionTracks(freshPlayer);
+      if (retryCaptions?.segments?.length) return { ...retryCaptions, ok: true };
+    }
+
+    const panelResult = await scrapeTranscriptPanel();
     if (panelResult?.segments?.length) return { ...panelResult, ok: true };
     if (panelResult?.error) errors.push(panelResult.error);
 
@@ -835,7 +855,63 @@ function fetchInnerTubeTranscriptInPage(params) {
     return segments;
   }
 
+  function findKeyDeep(value, key, seen = new Set()) {
+    if (!value || typeof value !== 'object' || seen.has(value)) return null;
+    seen.add(value);
+    if (Object.prototype.hasOwnProperty.call(value, key)) return value[key];
+    for (const child of Object.values(value)) {
+      const found = findKeyDeep(child, key, seen);
+      if (found !== null && found !== undefined) return found;
+    }
+    return null;
+  }
+
+  function segmentTextFromRenderer(renderer) {
+    const snippet = renderer?.snippet;
+    if (!snippet) return '';
+    if (Array.isArray(snippet.runs)) {
+      return stripHtml(snippet.runs.map(run => run?.text || '').join(''));
+    }
+    return stripHtml(snippet.simpleText || snippet.text || '');
+  }
+
+  function parseInitialSegments(data) {
+    const listRenderer = findKeyDeep(data, 'transcriptSegmentListRenderer');
+    const initialSegments = Array.isArray(listRenderer?.initialSegments) ? listRenderer.initialSegments : [];
+    const segments = [];
+
+    for (const item of initialSegments) {
+      const renderer = item?.transcriptSegmentRenderer || item;
+      const text = segmentTextFromRenderer(renderer);
+      const startMs = Number(renderer?.startMs || renderer?.startOffsetMs || 0);
+      const endMs = Number(renderer?.endMs || 0);
+      if (!text) continue;
+      const start = startMs / 1000;
+      const end = endMs > startMs ? endMs / 1000 : start;
+      segments.push({
+        start: Number(start.toFixed(3)),
+        end: Number(end.toFixed(3)),
+        duration: Number(Math.max(0, end - start).toFixed(3)),
+        timestamp_label: stripHtml(renderer?.startTimeText?.simpleText || secondsToClock(start)),
+        text,
+      });
+    }
+
+    for (let i = 0; i < segments.length; i++) {
+      const nextStart = segments[i + 1]?.start;
+      if (Number.isFinite(nextStart) && nextStart > segments[i].start) {
+        segments[i].end = Number(nextStart.toFixed(3));
+        segments[i].duration = Number((segments[i].end - segments[i].start).toFixed(3));
+      }
+    }
+
+    return segments;
+  }
+
   function parseInnerTubeResponse(data) {
+    const initialSegments = parseInitialSegments(data);
+    if (initialSegments.length) return initialSegments;
+
     const cuePaths = [
       data?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer?.body?.transcriptBodyRenderer?.cueGroups,
       data?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer?.content?.transcriptSearchPanelRenderer?.body?.transcriptBodyRenderer?.cueGroups,
@@ -845,6 +921,13 @@ function fetchInnerTubeTranscriptInPage(params) {
       const segments = cuesToSegments(cues);
       if (segments.length) return segments;
     }
+
+    const cueGroups = findKeyDeep(data, 'cueGroups');
+    if (Array.isArray(cueGroups)) {
+      const segments = cuesToSegments(cueGroups);
+      if (segments.length) return segments;
+    }
+
     return [];
   }
 
