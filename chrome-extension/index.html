@@ -75,6 +75,36 @@
       <p class="hint">Start with 10 to 25 videos. Pulling transcripts is the slow step because each video is checked one at a time.</p>
     </section>
 
+    <section class="panel watch-panel" id="pending">
+      <div class="section-head multi">
+        <div>
+          <h2>Channel watch</h2>
+          <p>Background checks for new uploads, badges the extension icon, and can notify you. Irrelevant videos (gold, silver, etc.) are filtered before transcript pulls.</p>
+        </div>
+        <div class="pending-pill" id="pendingPill">0 pending</div>
+      </div>
+      <div class="grid-3">
+        <label>
+          Poll every (minutes)
+          <input id="pollIntervalMinutes" type="number" min="30" max="1440" value="360" />
+        </label>
+        <label class="checkbox-label">
+          <input id="notificationsEnabled" type="checkbox" checked />
+          Desktop notifications for new uploads
+        </label>
+        <label>
+          &nbsp;
+          <span class="hint" id="lastPollText">Last check: never</span>
+        </label>
+      </div>
+      <div class="buttons">
+        <button id="saveWatchBtn" class="secondary">Save watch settings</button>
+        <button id="checkNewBtn">Check for new videos</button>
+        <button id="classifyBtn" class="secondary">Classify titles</button>
+      </div>
+      <div class="pending-list" id="pendingList">No pending videos yet.</div>
+    </section>
+
     <section class="panel ai-panel">
       <div>
         <h2>AI cleanup + extraction</h2>
@@ -125,6 +155,31 @@
 
     <section class="panel export-panel">
       <div>
+        <h2>Website sync (JSON)</h2>
+        <p>Push processed data from the extension to your Netlify site. No database — one JSON blob on Netlify Blobs (or a local <code>app/data/project.json</code> file when running <code>npm start</code>).</p>
+      </div>
+      <div class="grid-3">
+        <label>
+          Website / Netlify URL
+          <input id="syncSiteUrl" placeholder="https://your-site.netlify.app" />
+        </label>
+        <label>
+          Sync token <span class="muted">optional</span>
+          <input id="syncToken" type="password" placeholder="DATA_SYNC_TOKEN" autocomplete="off" />
+        </label>
+        <label>
+          &nbsp;
+          <span class="hint">Set <code>DATA_SYNC_TOKEN</code> on Netlify if you want write protection.</span>
+        </label>
+      </div>
+      <div class="buttons">
+        <button id="pushDataBtn" class="secondary">Push to website</button>
+        <button id="pullDataBtn" class="secondary">Pull from website</button>
+      </div>
+    </section>
+
+    <section class="panel export-panel">
+      <div>
         <h2>Exports</h2>
         <p>Export raw transcript, timestamped segments, AI/regex price rows, or the full project JSON.</p>
       </div>
@@ -147,6 +202,7 @@
           <thead>
             <tr>
               <th>Status</th>
+              <th>Relevance</th>
               <th>Title</th>
               <th>Language</th>
               <th>Segments</th>

@@ -1,3 +1,28 @@
+importScripts('classify.js');
+
+const STORAGE_DEFAULTS = {
+  channelUrl: 'https://www.youtube.com/@delhifruitmarket/videos',
+  knownVideoIds: [],
+  processedVideoIds: [],
+  pollIntervalMinutes: 360,
+  notificationsEnabled: true,
+  lastPollAt: null,
+};
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const settings = await loadChannelSettings();
+  await schedulePoll(settings.pollIntervalMinutes);
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'pollChannel') return;
+  await checkForNewVideosBackground();
+});
+
+chrome.notifications.onClicked.addListener(() => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('index.html#pending') });
+});
+
 chrome.action.onClicked.addListener(() => {
   chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
 });
@@ -16,6 +41,10 @@ async function handleApi(path, body) {
   if (path === '/api/transcript') return transcript(body);
   if (path === '/api/extract-prices') return extractPrices(body);
   if (path === '/api/extract-prices-ai') return extractPricesAi(body);
+  if (path === '/api/classify-videos') return classifyVideos(body);
+  if (path === '/api/check-new-videos') return checkNewVideos(body);
+  if (path === '/api/channel-settings') return channelSettings(body);
+  if (path === '/api/mark-processed') return markProcessed(body);
   return { ok: false, error: `Unknown extension API route: ${path}` };
 }
 
@@ -27,20 +56,222 @@ function status() {
     youtubeCookiesConfigured: true,
     openaiConfigured: false,
     note: 'Chrome extension mode uses your browser YouTube session instead of Netlify/yt-dlp.',
+    features: ['classify-videos', 'check-new-videos', 'channel-watch'],
   };
 }
 
+async function loadChannelSettings() {
+  const stored = await chrome.storage.local.get(STORAGE_DEFAULTS);
+  return { ...STORAGE_DEFAULTS, ...stored };
+}
+
+async function saveChannelSettings(patch) {
+  const current = await loadChannelSettings();
+  const clean = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
+  const next = { ...current, ...clean };
+  await chrome.storage.local.set(next);
+  return next;
+}
+
+async function schedulePoll(intervalMinutes) {
+  const minutes = Math.max(30, Math.min(Number(intervalMinutes) || 360, 24 * 60));
+  await chrome.alarms.clear('pollChannel');
+  await chrome.alarms.create('pollChannel', { periodInMinutes: minutes });
+  return minutes;
+}
+
+function pendingCount(settings, videos = []) {
+  const processed = new Set(settings.processedVideoIds || []);
+  const fromVideos = videos.filter(video => video?.id && !processed.has(video.id) && isProcessableVideo(video));
+  const fromKnown = (settings.knownVideoIds || []).filter(id => !processed.has(id));
+  return Math.max(fromVideos.length, fromKnown.length);
+}
+
+async function updateActionBadge(settings, extraPending = 0) {
+  const count = Math.max(0, (settings.knownVideoIds || []).length - (settings.processedVideoIds || []).length, extraPending);
+  if (count > 0) {
+    await chrome.action.setBadgeText({ text: String(Math.min(count, 99)) });
+    await chrome.action.setBadgeBackgroundColor({ color: '#b43b3b' });
+  } else {
+    await chrome.action.setBadgeText({ text: '' });
+  }
+  return count;
+}
+
+async function notifyNewVideos(newVideos, settings) {
+  if (!settings.notificationsEnabled || !newVideos.length) return;
+  const title = newVideos.length === 1
+    ? '1 new mandi video'
+    : `${newVideos.length} new mandi videos`;
+  const message = newVideos.slice(0, 2).map(video => video.title).join(' · ').slice(0, 180);
+  await chrome.notifications.create(`new-videos-${Date.now()}`, {
+    type: 'basic',
+    title,
+    message: message || 'Open the extension to classify and process.',
+  });
+}
+
+function enrichVideos(videos, settings, { markNew = false } = {}) {
+  const known = new Set(settings.knownVideoIds || []);
+  const processed = new Set(settings.processedVideoIds || []);
+  return videos.map(video => {
+    const classified = applyClassification(
+      {
+        ...video,
+        relevance: video.relevance || 'unclassified',
+        relevanceCategory: video.relevanceCategory || '',
+        relevanceScore: video.relevanceScore || 0,
+        relevanceReason: video.relevanceReason || '',
+        relevanceSource: video.relevanceSource || '',
+      },
+      video.relevance && video.relevance !== 'unclassified'
+        ? {
+            relevance: video.relevance,
+            relevanceCategory: video.relevanceCategory,
+            relevanceScore: video.relevanceScore,
+            relevanceReason: video.relevanceReason,
+            relevanceSource: video.relevanceSource,
+          }
+        : classifyByTitle(video.title),
+    );
+    return {
+      ...classified,
+      isNew: markNew ? !known.has(video.id) : Boolean(video.isNew),
+      needsWork: !processed.has(video.id) && isProcessableVideo(classified),
+    };
+  });
+}
+
+async function classifyVideos(body) {
+  const items = Array.isArray(body.videos) ? body.videos : [];
+  if (!items.length) return { ok: false, error: 'No videos to classify.' };
+
+  const apiKey = safeText(body.apiKey);
+  const model = safeText(body.model || 'gpt-4o-mini');
+  const result = apiKey
+    ? await classifyVideosWithAi(items, apiKey, model, classifyCallOpenAI)
+    : { videos: classifyVideosHeuristic(items), aiUsed: false, counts: countRelevance(classifyVideosHeuristic(items)) };
+
+  return { ok: true, ...result };
+}
+
+async function classifyCallOpenAI({ apiKey, model, system, prompt }) {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error?.message || `OpenAI request failed: ${response.status}`);
+  return extractJson(data?.choices?.[0]?.message?.content || '');
+}
+
+async function checkNewVideos(body = {}) {
+  const settings = await loadChannelSettings();
+  const channelUrl = normalizeChannelUrl(body.channelUrl || settings.channelUrl);
+  const maxVideos = Math.max(1, Math.min(Number(body.maxVideos || 15), 50));
+  const listed = await listVideos({ channelUrl, maxVideos });
+  if (!listed.ok) return listed;
+
+  const known = new Set(settings.knownVideoIds || []);
+  const newVideos = listed.videos.filter(video => !known.has(video.id));
+  const enriched = enrichVideos(listed.videos, settings, { markNew: true });
+  const nextKnown = [...new Set([...(settings.knownVideoIds || []), ...listed.videos.map(video => video.id)])];
+
+  const nextSettings = await saveChannelSettings({
+    channelUrl,
+    knownVideoIds: nextKnown,
+    lastPollAt: new Date().toISOString(),
+    pollIntervalMinutes: Number(body.pollIntervalMinutes || settings.pollIntervalMinutes),
+    notificationsEnabled: body.notificationsEnabled ?? settings.notificationsEnabled,
+  });
+
+  if (body.pollIntervalMinutes) await schedulePoll(nextSettings.pollIntervalMinutes);
+  if (newVideos.length) await notifyNewVideos(newVideos, nextSettings);
+  const badge = await updateActionBadge(nextSettings);
+
+  return {
+    ok: true,
+    newCount: newVideos.length,
+    newVideos: enrichVideos(newVideos, settings, { markNew: true }),
+    videos: enriched,
+    pendingCount: badge,
+    lastPollAt: nextSettings.lastPollAt,
+  };
+}
+
+async function checkForNewVideosBackground() {
+  try {
+    await checkNewVideos({});
+  } catch (error) {
+    console.warn('Channel poll failed:', error);
+  }
+}
+
+async function channelSettings(body = {}) {
+  const method = body.method || 'get';
+  if (method === 'set') {
+    const next = await saveChannelSettings({
+      channelUrl: body.channelUrl ? normalizeChannelUrl(body.channelUrl) : undefined,
+      pollIntervalMinutes: body.pollIntervalMinutes,
+      notificationsEnabled: body.notificationsEnabled,
+    });
+    if (body.pollIntervalMinutes) await schedulePoll(next.pollIntervalMinutes);
+    const badge = await updateActionBadge(next);
+    return { ok: true, settings: next, pendingCount: badge };
+  }
+
+  const settings = await loadChannelSettings();
+  const badge = await updateActionBadge(settings);
+  return { ok: true, settings, pendingCount: badge };
+}
+
+async function markProcessed(body) {
+  const ids = Array.isArray(body.videoIds) ? body.videoIds.filter(Boolean) : [];
+  const settings = await loadChannelSettings();
+  const nextProcessed = [...new Set([...(settings.processedVideoIds || []), ...ids])];
+  const next = await saveChannelSettings({ processedVideoIds: nextProcessed });
+  const badge = await updateActionBadge(next);
+  return { ok: true, processedVideoIds: next.processedVideoIds, pendingCount: badge };
+}
+
 async function listVideos(body) {
-  const channelUrl = safeText(body.channelUrl);
+  const channelUrl = normalizeChannelUrl(body.channelUrl);
   const maxVideos = Math.max(1, Math.min(Number(body.maxVideos || 25), 100));
   if (!/^https?:\/\//i.test(channelUrl) || !/(youtube\.com|youtu\.be)/i.test(channelUrl)) {
     return { ok: false, error: 'Please enter a valid YouTube channel/video/playlist URL.' };
   }
 
-  const html = await fetchText(channelUrl);
-  const initialData = extractJsonObject(html, 'ytInitialData');
+  let html = '';
+  let initialData = null;
+  let scrapeError = '';
+
+  try {
+    html = await fetchText(channelUrl);
+    initialData = extractJsonObject(html, 'ytInitialData');
+  } catch (error) {
+    scrapeError = cleanError(error);
+  }
+
   const videos = [];
-  collectVideos(initialData, videos);
+  if (initialData) collectVideos(initialData, videos);
+
+  if (!videos.length && html) {
+    try {
+      const rssVideos = await listVideosFromRss(html, initialData, maxVideos);
+      videos.push(...rssVideos);
+    } catch (error) {
+      scrapeError = scrapeError || cleanError(error);
+    }
+  }
 
   const seen = new Set();
   const unique = videos
@@ -62,9 +293,32 @@ async function listVideos(body) {
       transcriptText: '',
       segments: [],
       error: '',
+      relevance: 'unclassified',
+      relevanceCategory: '',
+      relevanceScore: 0,
+      relevanceReason: '',
+      relevanceSource: '',
+      isNew: false,
+      needsWork: true,
     }));
 
-  return { ok: true, count: unique.length, videos: unique };
+  const settings = await loadChannelSettings();
+  const enriched = enrichVideos(unique, settings, { markNew: true });
+  const skippedIds = enriched.filter(video => video.status === 'skipped').map(video => video.id);
+  const nextKnown = [...new Set([...(settings.knownVideoIds || []), ...enriched.map(video => video.id)])];
+  const nextProcessed = [...new Set([...(settings.processedVideoIds || []), ...skippedIds])];
+  await saveChannelSettings({ channelUrl, knownVideoIds: nextKnown, processedVideoIds: nextProcessed });
+  await updateActionBadge({ ...settings, knownVideoIds: nextKnown, processedVideoIds: nextProcessed });
+
+  if (!enriched.length) {
+    return {
+      ok: false,
+      error: scrapeError
+        || 'Found 0 videos. Open youtube.com in this Chrome profile, confirm you are signed in, then retry. YouTube may have changed its page layout.',
+    };
+  }
+
+  return { ok: true, count: enriched.length, videos: enriched };
 }
 
 async function transcript(body) {
@@ -202,6 +456,71 @@ function readBalancedJson(text, start) {
   return '';
 }
 
+function normalizeChannelUrl(url) {
+  const raw = safeText(url);
+  try {
+    const parsed = new URL(raw);
+    if (!parsed.hostname.includes('youtube.com')) return raw;
+    let pathname = parsed.pathname.replace(/\/$/, '');
+    if (/^\/@[^/]+$/.test(pathname)) pathname += '/videos';
+    parsed.pathname = pathname;
+    parsed.searchParams.delete('shelf_id');
+    parsed.searchParams.delete('view');
+    parsed.searchParams.delete('sort');
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
+
+function extractChannelId(html, initialData) {
+  const fromMeta = initialData?.metadata?.channelMetadataRenderer?.externalId;
+  if (fromMeta) return fromMeta;
+  const match = String(html || '').match(/"externalId":"(UC[^"]+)"/);
+  return match?.[1] || '';
+}
+
+async function listVideosFromRss(html, initialData, maxVideos) {
+  const channelId = extractChannelId(html, initialData);
+  if (!channelId) throw new Error('Could not resolve YouTube channel ID for RSS fallback.');
+
+  const rss = await fetchText(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`);
+  const entries = [...String(rss).matchAll(/<entry>([\s\S]*?)<\/entry>/g)].slice(0, maxVideos);
+  return entries.map(entry => {
+    const block = entry[1];
+    const id = block.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)?.[1] || '';
+    const title = decodeXmlEntities(block.match(/<title>([^<]*)<\/title>/)?.[1] || '');
+    const published = block.match(/<published>([^<]+)<\/published>/)?.[1] || '';
+    return {
+      id,
+      title,
+      upload_date: published ? published.slice(0, 10) : '',
+      duration: '',
+      channel: '',
+    };
+  }).filter(video => video.id);
+}
+
+function decodeXmlEntities(text) {
+  return String(text || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function extractPublishedFromLockup(meta) {
+  const rows = meta?.metadata?.contentMetadataViewModel?.metadataRows || [];
+  for (const row of rows) {
+    for (const part of row.metadataParts || []) {
+      const text = part.text?.content || part.accessibilityLabel || '';
+      if (/(ago|hour|day|week|month|year|minute)/i.test(text)) return text;
+    }
+  }
+  return '';
+}
+
 function collectVideos(node, out) {
   if (!node || out.length >= 150) return;
   if (Array.isArray(node)) {
@@ -209,7 +528,20 @@ function collectVideos(node, out) {
     return;
   }
   if (typeof node !== 'object') return;
-  const renderer = node.videoRenderer || node.gridVideoRenderer || node.compactVideoRenderer;
+
+  const lockup = node.lockupViewModel;
+  if (lockup?.contentId && lockup.contentType !== 'SHORTS') {
+    const meta = lockup.metadata?.lockupMetadataViewModel;
+    out.push({
+      id: lockup.contentId,
+      title: meta?.title?.content || textFromRuns(meta?.title),
+      upload_date: extractPublishedFromLockup(meta),
+      duration: '',
+      channel: '',
+    });
+  }
+
+  const renderer = node.videoRenderer || node.gridVideoRenderer || node.compactVideoRenderer || node.playlistVideoRenderer;
   if (renderer?.videoId) {
     out.push({
       id: renderer.videoId,
@@ -219,6 +551,9 @@ function collectVideos(node, out) {
       channel: textFromRuns(renderer.ownerText || renderer.shortBylineText),
     });
   }
+
+  if (node.richItemRenderer?.content) collectVideos(node.richItemRenderer.content, out);
+
   for (const value of Object.values(node)) collectVideos(value, out);
 }
 
