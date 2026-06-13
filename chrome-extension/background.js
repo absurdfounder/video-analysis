@@ -73,6 +73,7 @@ async function handleApi(path, body) {
   if (path === '/api/mark-processed') return markProcessed(body);
   if (path === '/api/fetch-transcripts-batch') return fetchTranscriptsBatch(body);
   if (path === '/api/stop-transcripts-batch') return stopTranscriptBatch(body);
+  if (path === '/api/complete-transcript-batch-item') return completeTranscriptBatchItem(body);
   if (path === '/api/transcript-batch-status') return transcriptBatchStatus();
   return { ok: false, error: `Unknown extension API route: ${path}` };
 }
@@ -311,8 +312,6 @@ async function transcriptBatchStatus() {
 }
 
 async function fetchTranscriptsBatch(body) {
-  const delayMs = Math.max(500, Number(body.delayMs || 1500));
-  const languages = safeText(body.languages || 'hi.*,hi,en.*');
   const project = await loadProjectState();
   const pending = (project.videos || []).filter(isBatchProcessable);
 
@@ -331,20 +330,91 @@ async function fetchTranscriptsBatch(body) {
   await chrome.storage.local.set({
     [TRANSCRIPT_BATCH_KEY]: {
       running: true,
+      mode: 'guided',
       queue: pending.map(video => video.id),
-      delayMs,
-      languages,
       total: pending.length,
       done: 0,
-      currentId: null,
-      currentTitle: null,
+      currentId: pending[0].id,
+      currentTitle: pending[0].title || pending[0].id,
       startedAt: new Date().toISOString(),
     },
   });
 
-  processNextTranscriptInBatch().catch(error => console.warn('Transcript batch failed:', error));
+  await openBatchVideo(pending[0]);
+  broadcastTranscriptBatchEvent({
+    event: 'next',
+    videoId: pending[0].id,
+    title: pending[0].title || pending[0].id,
+    done: 0,
+    total: pending.length,
+  });
 
   return { ok: true, started: true, total: pending.length };
+}
+
+async function openBatchVideo(video) {
+  if (!video?.url) return;
+  const existing = await findOpenWatchTab(video.id);
+  if (existing?.id) {
+    await chrome.tabs.update(existing.id, { active: true });
+    return;
+  }
+  await chrome.tabs.create({ url: video.url, active: true });
+}
+
+async function completeTranscriptBatchItem(body = {}) {
+  const id = safeText(body.id);
+  if (!id) return { ok: false, error: 'Missing completed video ID.' };
+
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (!job?.running) return { ok: true, advanced: false, reason: 'No running batch.' };
+  if (job.currentId && job.currentId !== id) {
+    return {
+      ok: true,
+      advanced: false,
+      reason: `Batch is waiting for ${job.currentId}, not ${id}.`,
+      currentId: job.currentId,
+    };
+  }
+
+  const queue = Array.isArray(job.queue) ? job.queue : [];
+  const nextQueue = queue[0] === id ? queue.slice(1) : queue.filter(videoId => videoId !== id);
+  const done = (job.done || 0) + 1;
+
+  if (!nextQueue.length) {
+    await finishTranscriptBatch({ ...job, queue: [], done }, done);
+    return { ok: true, advanced: true, complete: true, done, total: job.total || done };
+  }
+
+  const project = await loadProjectState();
+  const nextVideo = (project.videos || []).find(video => video.id === nextQueue[0]);
+  const nextJob = {
+    ...job,
+    queue: nextQueue,
+    done,
+    currentId: nextQueue[0],
+    currentTitle: nextVideo?.title || nextQueue[0],
+    running: true,
+  };
+  await chrome.storage.local.set({ [TRANSCRIPT_BATCH_KEY]: nextJob });
+  if (nextVideo) await openBatchVideo(nextVideo);
+  broadcastTranscriptBatchEvent({
+    event: 'next',
+    videoId: nextJob.currentId,
+    title: nextJob.currentTitle,
+    done,
+    total: nextJob.total || done,
+  });
+  return {
+    ok: true,
+    advanced: true,
+    complete: false,
+    nextId: nextJob.currentId,
+    nextTitle: nextJob.currentTitle,
+    done,
+    total: nextJob.total || done,
+  };
 }
 
 async function finishTranscriptBatch(job, doneCount) {
@@ -395,6 +465,7 @@ async function processNextTranscriptInBatch() {
 
   const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
   const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (job?.mode === 'guided') return;
   if (!job?.running || !job.queue?.length) {
     if (job?.running) await finishTranscriptBatch(job, job.done || 0);
     return;

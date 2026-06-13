@@ -231,6 +231,7 @@ let modalVideoId = '';
 async function fetchTranscriptForVideo(video) {
   const previousStatus = video.status;
   const previousError = video.error;
+  let batch = null;
   try {
     const data = await api('/api/capture-visible-transcript', { id: video.id, videoUrl: video.url });
     if (!data.segments?.length) throw new Error('Transcript returned zero caption lines.');
@@ -244,7 +245,12 @@ async function fetchTranscriptForVideo(video) {
       needsWork: false,
     });
     if (hasTranscriptData(video)) await markVideosProcessed([video.id]);
+    await saveLocal();
+    batch = await api('/api/complete-transcript-batch-item', { id: video.id }).catch(() => null);
     log(`Transcript captured: ${video.title} (${segmentCount(video)} lines${data.method ? ` · ${data.method}` : ''})`);
+    if (batch?.complete) log('Missing-gap fill complete.');
+    if (batch?.nextTitle) log(`Next video opened: ${batch.nextTitle}`);
+    return { data, batch };
   } catch (error) {
     const message = /Unknown extension API route/i.test(error.message)
       ? 'Extension background is stale. Reload the unpacked extension at chrome://extensions, then retry.'
@@ -308,8 +314,11 @@ async function captureTranscriptFromModal() {
   if ($('modalSegments')) $('modalSegments').innerHTML = '<div class="empty-state">Checking open YouTube tabs...</div>';
 
   try {
-    await fetchTranscriptForVideo(video);
+    const result = await fetchTranscriptForVideo(video);
     renderTranscriptModalState(video);
+    if (result?.batch?.advanced && result.batch.nextId) {
+      closeTranscriptModal();
+    }
   } catch (error) {
     if ($('modalMeta')) $('modalMeta').textContent = 'Capture needs the exact YouTube tab.';
     if ($('modalSegments')) {
@@ -612,7 +621,7 @@ async function fetchTranscriptsStep() {
   }
 
   await saveLocal();
-  log(`Started missing-gap fill for ${pending.length} transcript(s). Use Stop to pause the batch.`);
+  log(`Started missing-gap fill for ${pending.length} transcript(s). The first missing video will open; show its transcript, then Capture now.`);
 
   const data = await api('/api/fetch-transcripts-batch', {
     delayMs,
@@ -885,6 +894,11 @@ chrome.runtime.onMessage.addListener((message) => {
     log(`Transcript batch complete (${message.done || 0} videos).`);
     return;
   }
+  if (message.event === 'next') {
+    setBusy(true);
+    log(`Opened next missing video: ${message.title || message.videoId} (${message.done || 0}/${message.total || 0} done).`);
+    return;
+  }
   if (message.event === 'progress') {
     if (message.status === 'running') {
       log(`Fetching transcript: ${message.title || message.videoId}...`);
@@ -915,7 +929,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.16 — manual start stop';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.17 — guided queue advance';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
