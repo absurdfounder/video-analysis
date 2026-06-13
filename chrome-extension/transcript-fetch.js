@@ -424,10 +424,91 @@ function fetchTranscriptInPage(languages) {
 }
 
 function fetchTranscriptFromPanelInPage() {
-  return fetchTranscriptInPage('hi.*,hi,en.*').then((result) => {
-    if (result?.segments?.length) return { ok: true, segments: result.segments, format: result.method || 'dom' };
-    return { ok: false, error: result?.error || 'Panel transcript fetch failed.' };
+  return fetchVisibleTranscriptPanelOnlyInPage();
+}
+
+function fetchVisibleTranscriptPanelOnlyInPage() {
+  const stripText = (text) => String(text || '').replace(/\s+/g, ' ').trim();
+  const parseClock = (label) => {
+    const parts = String(label || '').trim().split(':').map(Number);
+    if (parts.some(part => !Number.isFinite(part))) return 0;
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return parts[0] || 0;
+  };
+  const secondsToClock = (seconds) => {
+    const s = Math.max(0, Math.floor(Number(seconds) || 0));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+  const panel = document.querySelector('ytd-engagement-panel-section-list-renderer[target-id*="transcript"]')
+    || document.querySelector('ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]')
+    || document.querySelector('yt-section-list-renderer[data-target-id*="transcript"]')
+    || document.querySelector('ytd-transcript-renderer')
+    || document;
+  let rowNodes = [...panel.querySelectorAll('transcript-segment-view-model, ytd-transcript-segment-renderer')];
+  if (!rowNodes.length && panel !== document) {
+    rowNodes = [...document.querySelectorAll('transcript-segment-view-model, ytd-transcript-segment-renderer')];
+  }
+  const segments = [];
+
+  for (const row of rowNodes) {
+    const timestampEl = row.querySelector(
+      '.ytwTranscriptSegmentViewModelTimestamp, .segment-timestamp, .segment-start-offset, [class*="TranscriptSegmentViewModelTimestamp"], [class*="timestamp"]',
+    );
+    const textEl = row.querySelector(
+      'span.ytAttributedStringHost, .segment-text, yt-formatted-string.segment-text, yt-formatted-string, span.yt-core-attributed-string',
+    );
+    const rowText = stripText(row.textContent || '');
+    const timeMatch = rowText.match(/\b(?:(\d{1,2}:)?\d{1,2}:\d{2})\b/);
+    const timestampText = stripText(timestampEl?.textContent || timeMatch?.[0] || '');
+    const text = stripText((textEl?.textContent || rowText).replace(timestampText, '').replace(timeMatch?.[0] || '', ''));
+    if (!timestampText || !text) continue;
+    const start = parseClock(timestampText);
+    segments.push({
+      start: Number(start.toFixed(3)),
+      end: Number(start.toFixed(3)),
+      duration: 0,
+      timestamp_label: secondsToClock(start),
+      text,
+    });
+  }
+
+  const seen = new Set();
+  const uniqueSegments = segments.filter((segment) => {
+    const key = `${segment.start}|${segment.text}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
+
+  for (let i = 0; i < uniqueSegments.length; i++) {
+    const nextStart = uniqueSegments[i + 1]?.start;
+    if (Number.isFinite(nextStart) && nextStart > uniqueSegments[i].start) {
+      uniqueSegments[i].end = Number(nextStart.toFixed(3));
+      uniqueSegments[i].duration = Number((uniqueSegments[i].end - uniqueSegments[i].start).toFixed(3));
+    }
+  }
+
+  if (uniqueSegments.length) {
+    return {
+      ok: true,
+      segments: uniqueSegments,
+      format: 'visible-panel-direct',
+      rowNodes: rowNodes.length,
+      url: window.location.href,
+    };
+  }
+
+  return {
+    ok: false,
+    error: `Visible transcript panel parsed 0 lines. Row nodes: ${rowNodes.length}. URL: ${window.location.href}`,
+    rowNodes: rowNodes.length,
+    url: window.location.href,
+  };
 }
 
 function findTranscriptParamsInObject(value, seen = new Set()) {

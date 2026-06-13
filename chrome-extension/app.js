@@ -853,7 +853,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.9 — open-tab panel fallback';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.10 — direct visible-panel reader';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

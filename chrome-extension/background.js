@@ -861,7 +861,37 @@ async function findOpenWatchTab(videoId, excludeTabId = null) {
     .sort((a, b) => Number(b.active) - Number(a.active))[0] || null;
 }
 
+async function fetchTranscriptFromOpenWatchTab(videoId, excludeTabId = null) {
+  const openTab = await findOpenWatchTab(videoId, excludeTabId);
+  if (!openTab?.id) return null;
+
+  const visibleResult = await runInYouTubeTab('fetchTranscriptFromPanelInPage', [], openTab.id);
+  if (visibleResult?.ok && visibleResult.segments?.length) {
+    return {
+      ok: true,
+      language: visibleResult.language || 'unknown',
+      fileName: visibleResult.fileName || 'youtube-visible-panel',
+      segments: visibleResult.segments,
+      method: visibleResult.format || 'open-tab-panel',
+    };
+  }
+
+  return {
+    ok: false,
+    error: visibleResult?.error || `Open YouTube tab did not expose transcript lines for ${videoId}.`,
+  };
+}
+
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
+  let lastError = '';
+  try {
+    const openTabResult = await fetchTranscriptFromOpenWatchTab(videoId);
+    if (openTabResult?.ok && openTabResult.segments?.length) return openTabResult;
+    lastError = openTabResult?.error || '';
+  } catch (error) {
+    lastError = cleanError(error);
+  }
+
   const tabId = await ensureYouTubeTab();
   await prepareWorkerTab(tabId);
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
@@ -881,25 +911,7 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
     };
   }
 
-  let lastError = pageResult?.error || '';
-  const openTab = await findOpenWatchTab(videoId, tabId);
-  if (openTab?.id) {
-    try {
-      const visibleResult = await runInYouTubeTab('fetchTranscriptFromPanelInPage', [], openTab.id);
-      if (visibleResult?.ok && visibleResult.segments?.length) {
-        return {
-          ok: true,
-          language: visibleResult.language || 'unknown',
-          fileName: visibleResult.fileName || 'youtube-visible-panel',
-          segments: visibleResult.segments,
-          method: visibleResult.format || 'open-tab-panel',
-        };
-      }
-      lastError = visibleResult?.error || lastError;
-    } catch (error) {
-      lastError = cleanError(error) || lastError;
-    }
-  }
+  lastError = pageResult?.error || lastError;
 
   try {
     const html = await fetchTextViaYouTubeTab(videoUrl);
