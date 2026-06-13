@@ -6,7 +6,7 @@ compatibility_date = "2024-11-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "fruit-mandi"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "3e0380c4-93c1-4bc2-9d64-80a7aa40cdf8"
 
 # Optional: set SYNC_TOKEN in Cloudflare dashboard → Worker → Settings → Variables
 # Extension uses the same value in Settings → Sync token.

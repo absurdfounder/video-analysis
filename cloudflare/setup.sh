@@ -14,18 +14,29 @@ fi
 
 npm install
 
-if ! npx wrangler whoami >/dev/null 2>&1; then
+WHOAMI=$(npx wrangler whoami 2>&1 || true)
+if echo "$WHOAMI" | grep -qi "not authenticated"; then
   echo "==> Log in to Cloudflare (browser will open)"
   npx wrangler login
+  WHOAMI=$(npx wrangler whoami 2>&1)
 fi
 
 echo "==> Whoami:"
-npx wrangler whoami
+echo "$WHOAMI"
+if echo "$WHOAMI" | grep -qi "not authenticated"; then
+  echo "Login failed. Run:  cd cloudflare && npx wrangler login"
+  exit 1
+fi
 
 if grep -q '00000000-0000-0000-0000-000000000000' wrangler.toml; then
   echo "==> Creating D1 database 'fruit-mandi'..."
-  CREATE_OUT=$(npx wrangler d1 create fruit-mandi 2>&1)
+  CREATE_OUT=$(npx wrangler d1 create fruit-mandi 2>&1) || true
   echo "$CREATE_OUT"
+  if echo "$CREATE_OUT" | grep -qi "already exists"; then
+    echo "==> Database already exists — fetching id..."
+    CREATE_OUT=$(npx wrangler d1 list 2>&1)
+    echo "$CREATE_OUT"
+  fi
   DB_ID=$(echo "$CREATE_OUT" | sed -n 's/.*database_id = "\([^"]*\)".*/\1/p' | head -1)
   if [ -z "$DB_ID" ]; then
     DB_ID=$(echo "$CREATE_OUT" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
