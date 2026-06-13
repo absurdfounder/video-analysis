@@ -33,8 +33,22 @@ OPENAI_API_KEY=your_key_here
 OPENAI_MODEL=gpt-4o-mini
 ```
 
+If YouTube shows `Sign in to confirm you're not a bot` from Netlify, add YouTube cookies:
+
+```text
+YOUTUBE_COOKIES=your Netscape-format YouTube cookies text
+```
+
+You can also base64 encode the cookies file and use:
+
+```text
+YOUTUBE_COOKIES_BASE64=base64_encoded_cookies_file
+```
+
+Use a dedicated/throwaway YouTube account for cookies. Never commit cookies to GitHub.
+
 ## Notes
 
 Netlify is serverless, so use small batches first. Start with 5 to 10 videos. For large scraping jobs, local or a long-running server on Render/Railway/Fly is more reliable.
 
-`youtube-dl-exec` downloads/bundles the latest `yt-dlp` during build, but YouTube may throttle cloud IPs.
+The Netlify build downloads a standalone `yt-dlp` binary, but YouTube may still throttle or challenge cloud IPs.

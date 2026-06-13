@@ -1,4 +1,4 @@
-const { json, runYtdlp } = require('./_utils');
+const { json, runYtdlp, youtubeCookiesConfigured } = require('./_utils');
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json(204, {});
@@ -7,6 +7,7 @@ exports.handler = async (event) => {
     return json(200, {
       ok: true,
       ytdlpVersion: stdout.trim(),
+      youtubeCookiesConfigured: youtubeCookiesConfigured(),
       openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
       note: 'Netlify Functions are active. Start with small batches because serverless functions have time limits.',
     });

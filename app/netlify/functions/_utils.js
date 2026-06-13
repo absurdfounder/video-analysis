@@ -172,9 +172,53 @@ function getYtdlpPath() {
   return ytdlpPath;
 }
 
+function getYoutubeCookiesText() {
+  if (process.env.YOUTUBE_COOKIES_BASE64) {
+    return Buffer.from(process.env.YOUTUBE_COOKIES_BASE64, 'base64').toString('utf-8');
+  }
+  if (process.env.YOUTUBE_COOKIES) {
+    return process.env.YOUTUBE_COOKIES.replace(/\\n/g, '\n');
+  }
+  return '';
+}
+
+function youtubeCookiesConfigured() {
+  return Boolean(getYoutubeCookiesText().trim());
+}
+
+function writeYoutubeCookiesFile(options = {}) {
+  const cookies = getYoutubeCookiesText().trim();
+  if (!cookies) return '';
+  const dir = options.cwd || os.tmpdir();
+  const cookiePath = path.join(dir, 'youtube-cookies.txt');
+  fs.writeFileSync(cookiePath, `${cookies}\n`, { mode: 0o600 });
+  return cookiePath;
+}
+
+function cleanYtdlpError(errorText) {
+  const text = safeText(errorText);
+  if (/sign in to confirm.*not a bot/i.test(text)) {
+    return [
+      'YouTube blocked this Netlify server as bot-like traffic.',
+      'Add YouTube cookies in Netlify as YOUTUBE_COOKIES or YOUTUBE_COOKIES_BASE64, redeploy, then retry Pull transcripts.',
+      'Use a dedicated/throwaway YouTube account for cookies.',
+    ].join(' ');
+  }
+  if (/cookies.*authentication|cookies-from-browser|exporting-youtube-cookies/i.test(text)) {
+    return [
+      'YouTube needs login cookies for this video.',
+      'Add YouTube cookies in Netlify as YOUTUBE_COOKIES or YOUTUBE_COOKIES_BASE64, redeploy, then retry.',
+    ].join(' ');
+  }
+  return text || 'yt-dlp failed';
+}
+
 function runYtdlp(url, flags = {}, options = {}) {
   return new Promise((resolve, reject) => {
-    const args = [...flagsToArgs(flags), url].filter(Boolean);
+    const effectiveFlags = { ...flags };
+    const cookiePath = writeYoutubeCookiesFile(options);
+    if (cookiePath && !effectiveFlags.cookies) effectiveFlags.cookies = cookiePath;
+    const args = [...flagsToArgs(effectiveFlags), url].filter(Boolean);
     execFile(getYtdlpPath(), args, {
       timeout: options.timeout || 25000,
       killSignal: 'SIGKILL',
@@ -183,9 +227,10 @@ function runYtdlp(url, flags = {}, options = {}) {
       maxBuffer: options.maxBuffer || 1024 * 1024 * 80,
     }, (error, stdout, stderr) => {
       if (error) {
-        const e = new Error(stderr || error.message || 'yt-dlp failed');
+        const e = new Error(cleanYtdlpError(stderr || error.message));
         e.stdout = stdout;
-        e.stderr = stderr;
+        e.stderr = e.message;
+        e.rawStderr = stderr;
         return reject(e);
       }
       resolve({ stdout, stderr });
@@ -434,6 +479,6 @@ async function aiExtractForItem(item, options) {
 
 module.exports = {
   fs, os, path, crypto,
-  json, parseBody, safeText, parseVtt, languageScore, guessLanguage, runYtdlp,
+  json, parseBody, safeText, parseVtt, languageScore, guessLanguage, runYtdlp, youtubeCookiesConfigured,
   extractPricesFromSegments, aiExtractForItem,
 };

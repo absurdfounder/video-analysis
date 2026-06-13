@@ -321,8 +321,9 @@ $('checkBtn').addEventListener('click', async () => {
   try {
     const data = await api('/api/status');
     const ai = data.openaiConfigured ? 'OpenAI key found in server env' : 'OpenAI key not set in server env';
+    const cookies = data.youtubeCookiesConfigured ? 'YouTube cookies found' : 'YouTube cookies not set; Netlify may get bot checks';
     setStatus('ok', `yt-dlp ready: ${data.ytdlpVersion}`);
-    log(`yt-dlp ready: ${data.ytdlpVersion}. ${ai}.`);
+    log(`yt-dlp ready: ${data.ytdlpVersion}. ${cookies}. ${ai}.`);
   } catch (error) {
     setStatus('bad', 'yt-dlp missing');
     log(`Setup problem: ${error.message}`);
@@ -388,7 +389,7 @@ $('fetchTranscriptsBtn').addEventListener('click', async () => {
       log(`✓ ${video.title} (${data.segmentCount} timestamped segments, ${data.language})`);
     } catch (error) {
       video.status = 'failed';
-      video.error = error.message.slice(0, 500);
+      video.error = error.message.slice(0, 280);
       log(`× ${video.title}: ${error.message}`);
     }
 
