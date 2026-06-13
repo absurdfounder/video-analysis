@@ -1391,6 +1391,32 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       });
     }
 
+    function pollStoredTranscript(videoUrl, attemptsLeft) {
+      var id = extractVideoId(videoUrl);
+      if (!id) return Promise.reject(new Error('Could not determine the YouTube video ID.'));
+      var remaining = Number(attemptsLeft) || 72;
+      setTranscriptStatus('Audio is processing in the background. Waiting for transcript...', '');
+      return fetchJson('/api/transcripts/' + encodeURIComponent(id)).then(function (data) {
+        var status = data.job && data.job.status;
+        var count = Array.isArray(data.segments) ? data.segments.length : 0;
+        if (status === 'complete' && count) {
+          renderTranscript(data);
+          log('Background transcript completed with ' + count + ' segment(s).');
+          return runAnalysisForVideo(videoUrl, id).then(function () { return data; });
+        }
+        if (status === 'failed') throw new Error(data.job.error || 'Background transcript failed.');
+        if (remaining <= 1) throw new Error('Transcript is still processing. Use Load stored transcript shortly.');
+        setTranscriptStatus('Processing audio: ' + (status || 'starting') + '. Checking again...', '');
+        return new Promise(function (resolve) { setTimeout(resolve, 5000); })
+          .then(function () { return pollStoredTranscript(videoUrl, remaining - 1); });
+      }).catch(function (error) {
+        if (remaining <= 1 || /failed|Unauthorized/i.test(error.message)) throw error;
+        setTranscriptStatus('Downloader is still working. Checking again...', '');
+        return new Promise(function (resolve) { setTimeout(resolve, 5000); })
+          .then(function () { return pollStoredTranscript(videoUrl, remaining - 1); });
+      });
+    }
+
     function renderFruitPicker() {
       var values = uniqueValues(state.priceRows, produceLabel);
       if (!values.length) {
@@ -1688,6 +1714,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         if (data.job.segment_count) return runAnalysisForVideo(videoUrl, data.job.video_id);
         return null;
       }).catch(function (error) {
+        if (!file && !audioUrl && extractVideoId(videoUrl)) {
+          log('Initial request ended before the background job. Polling saved transcript...');
+          return pollStoredTranscript(videoUrl, 72);
+        }
         setTranscriptStatus(error.message, 'bad');
         log('ERROR: ' + error.message);
       }).finally(function () {

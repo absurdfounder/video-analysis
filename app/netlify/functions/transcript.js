@@ -91,8 +91,9 @@ function normalizeLanguage(value) {
 function normalizeSegments(data) {
   const rawSegments = Array.isArray(data?.segments) ? data.segments : [];
   const segments = rawSegments.map((segment, index) => {
-    const start = Number(segment.start || 0);
-    const end = segment.end == null ? null : Number(segment.end);
+    const start = Number(segment.start_seconds ?? segment.start ?? 0);
+    const endValue = segment.end_seconds ?? segment.end;
+    const end = endValue == null ? null : Number(endValue);
     return {
       start: Number.isFinite(start) ? Number(start.toFixed(3)) : 0,
       end: Number.isFinite(end) ? Number(end.toFixed(3)) : null,
@@ -165,6 +166,36 @@ async function transcribeWithOpenAI(audioPath, body) {
   };
 }
 
+async function transcribeWithWorker(audioPath, body, videoUrl, id) {
+  const endpoint = safeText(process.env.WORKER_TRANSCRIBE_URL || body.workerTranscribeUrl);
+  if (!endpoint) return null;
+  const buffer = fs.readFileSync(audioPath);
+  const form = new FormData();
+  form.append('videoId', id);
+  form.append('videoUrl', videoUrl);
+  form.append('language', normalizeLanguage(body.language || body.languages));
+  form.append('audio', new Blob([buffer], { type: mimeFromFile(audioPath) }), path.basename(audioPath));
+  const headers = {};
+  const token = safeText(process.env.WORKER_SYNC_TOKEN || body.workerSyncToken);
+  if (token) headers.authorization = `Bearer ${token}`;
+  const response = await fetch(endpoint, { method: 'POST', headers, body: form });
+  const text = await response.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch {}
+  if (!response.ok || data.ok === false) {
+    const error = new Error(data.error || `Worker transcription failed: ${response.status} ${text.slice(0, 300)}`);
+    error.stage = 'worker_transcription';
+    throw error;
+  }
+  const segments = normalizeSegments({ segments: data.segments, text: data.transcriptText });
+  return {
+    model: safeText(data.job?.model || data.model) || 'workers-ai-whisper',
+    language: safeText(data.job?.language || data.language) || normalizeLanguage(body.language || body.languages),
+    transcriptText: safeText(data.transcriptText) || segments.map(segment => segment.text).join(' '),
+    segments,
+  };
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return json(204, {});
   if (event.httpMethod !== 'POST') return json(405, { ok: false, error: 'POST required.' });
@@ -181,7 +212,8 @@ exports.handler = async (event) => {
 
     const audioPath = await downloadYoutubeAudio(videoUrl, tempRoot, body);
     const audioStat = fs.statSync(audioPath);
-    const transcription = await transcribeWithOpenAI(audioPath, body);
+    const transcription = await transcribeWithWorker(audioPath, body, videoUrl, id)
+      || await transcribeWithOpenAI(audioPath, body);
 
     return json(200, {
       ok: true,

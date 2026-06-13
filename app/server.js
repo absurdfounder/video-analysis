@@ -1,6 +1,7 @@
 const express = require('express');
 const { loadProjectData, saveProjectData, mergeProjectData, authorizeWrite } = require('./netlify/functions/_dataStore');
 const { classifyVideosHeuristic } = require('./netlify/functions/_classify');
+const { handler: transcriptHandler } = require('./netlify/functions/transcript');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -480,55 +481,16 @@ app.post('/api/list-videos', async (req, res) => {
 });
 
 app.post('/api/transcript', async (req, res) => {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fruit-ytdlp-'));
   try {
-    const videoUrl = safeText(req.body.videoUrl || req.body.url);
-    const id = safeText(req.body.id || crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, '');
-    const languages = safeText(req.body.languages || 'hi.*,hi,en.*');
-
-    if (!/^https?:\/\//i.test(videoUrl)) {
-      return res.status(400).json({ ok: false, error: 'Invalid video URL.' });
-    }
-
-    const outTemplate = path.join(tempRoot, '%(id)s.%(ext)s');
-    const args = [
-      '--skip-download',
-      '--write-subs',
-      '--write-auto-subs',
-      '--sub-langs', languages,
-      '--sub-format', 'vtt',
-      '--output', outTemplate,
-      '--no-warnings',
-      videoUrl,
-    ];
-
-    await run('yt-dlp', args, { timeout: 180000, maxBuffer: 1024 * 1024 * 80 });
-    const files = fs.readdirSync(tempRoot)
-      .filter(file => file.toLowerCase().endsWith('.vtt'))
-      .sort((a, b) => languageScore(a) - languageScore(b));
-
-    if (!files.length) {
-      return res.status(404).json({ ok: false, id, error: 'No transcript/caption file found for this video.' });
-    }
-
-    const selectedFile = files[0];
-    const vtt = fs.readFileSync(path.join(tempRoot, selectedFile), 'utf-8');
-    const segments = parseVtt(vtt);
-    const transcriptText = segments.map(s => s.text).join(' ');
-
-    res.json({
-      ok: true,
-      id,
-      language: guessLanguage(selectedFile),
-      fileName: selectedFile,
-      segmentCount: segments.length,
-      transcriptText,
-      segments,
+    const result = await transcriptHandler({
+      httpMethod: 'POST',
+      headers: req.headers,
+      body: JSON.stringify(req.body || {}),
     });
+    const payload = typeof result.body === 'string' ? JSON.parse(result.body) : result.body;
+    res.status(Number(result.statusCode) || 200).json(payload);
   } catch (error) {
     res.status(500).json({ ok: false, error: error.stderr || error.message });
-  } finally {
-    try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
   }
 });
 
