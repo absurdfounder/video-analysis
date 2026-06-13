@@ -177,6 +177,124 @@ function tag(text, cls) {
   return `<span class="badge ${cls}">${escapeHtml(text)}</span>`;
 }
 
+function tagLabel(text, cls = 'relevance-relevant') {
+  const label = englishLabel(text);
+  return label ? tag(label, cls) : '';
+}
+
+const PRODUCE_DISPLAY = new Map([
+  ['anar', 'Pomegranate'],
+  ['pomegranate', 'Pomegranate'],
+  ['अनार', 'Pomegranate'],
+  ['litchi', 'Lychee'],
+  ['lychee', 'Lychee'],
+  ['लीची', 'Lychee'],
+  ['mausambi', 'Sweet lime'],
+  ['mosambi', 'Sweet lime'],
+  ['मौसमी', 'Sweet lime'],
+  ['नारियल पानी', 'Coconut water'],
+  ['nariyal pani', 'Coconut water'],
+  ['coconut water', 'Coconut water'],
+  ['mango', 'Mango'],
+  ['aam', 'Mango'],
+  ['आम', 'Mango'],
+  ['apple', 'Apple'],
+  ['सेब', 'Apple'],
+  ['banana', 'Banana'],
+  ['केला', 'Banana'],
+  ['orange', 'Orange'],
+  ['संतरा', 'Orange'],
+  ['garlic', 'Garlic'],
+  ['lahsun', 'Garlic'],
+  ['लहसुन', 'Garlic'],
+  ['onion', 'Onion'],
+  ['pyaz', 'Onion'],
+  ['प्याज', 'Onion'],
+  ['potato', 'Potato'],
+  ['aloo', 'Potato'],
+  ['आलू', 'Potato'],
+  ['tomato', 'Tomato'],
+  ['टमाटर', 'Tomato'],
+  ['ginger', 'Ginger'],
+  ['adrak', 'Ginger'],
+  ['अदरक', 'Ginger'],
+  ['grapes', 'Grapes'],
+  ['अंगूर', 'Grapes'],
+  ['papaya', 'Papaya'],
+  ['पपीता', 'Papaya'],
+  ['watermelon', 'Watermelon'],
+  ['तरबूज', 'Watermelon'],
+  ['melon', 'Melon'],
+  ['kharbuja', 'Melon'],
+  ['खरबूजा', 'Melon'],
+]);
+
+const PRODUCE_EMOJI = new Map([
+  ['pomegranate', '🍎'],
+  ['lychee', '🍒'],
+  ['sweet lime', '🍋'],
+  ['coconut water', '🥥'],
+  ['mango', '🥭'],
+  ['apple', '🍎'],
+  ['banana', '🍌'],
+  ['orange', '🍊'],
+  ['garlic', '🧄'],
+  ['onion', '🧅'],
+  ['potato', '🥔'],
+  ['tomato', '🍅'],
+  ['ginger', '🫚'],
+  ['grapes', '🍇'],
+  ['papaya', '🟠'],
+  ['watermelon', '🍉'],
+  ['melon', '🍈'],
+]);
+
+const ENGLISH_LABELS = new Map([
+  ['चार नंबर', 'Grade 4'],
+  ['पांच नंबर', 'Grade 5'],
+  ['पाँच नंबर', 'Grade 5'],
+  ['तीन नंबर', 'Grade 3'],
+  ['दो नंबर', 'Grade 2'],
+  ['एक नंबर', 'Grade 1'],
+  ['मीडियम', 'Medium'],
+  ['बाबू जी', 'Babu Ji'],
+  ['राणा जी', 'Rana Ji'],
+  ['आरती फ्रूट कंपनी', 'Aarti Fruit Company'],
+  ['आजादपुर मंडी', 'Azadpur Mandi'],
+  ['पतनकोट', 'Pathankot'],
+  ['अंबेटा', 'Ambeta'],
+]);
+
+function stripHindiAlias(text) {
+  return String(text || '').split(/\s*[·/]\s*/).find((part) => !/[\u0900-\u097F]/.test(part)) || String(text || '');
+}
+
+function englishLabel(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  const mapped = ENGLISH_LABELS.get(raw) || PRODUCE_DISPLAY.get(raw.toLowerCase()) || PRODUCE_DISPLAY.get(raw);
+  if (mapped) return mapped;
+  const withoutHindiAlias = stripHindiAlias(raw).trim();
+  return /[\u0900-\u097F]/.test(withoutHindiAlias) ? '' : withoutHindiAlias;
+}
+
+function produceName(value, hindi = '') {
+  const raw = String(value || hindi || '').trim();
+  const normalized = PRODUCE_DISPLAY.get(raw.toLowerCase()) || PRODUCE_DISPLAY.get(raw) || englishLabel(raw);
+  return normalized || raw || 'Unknown produce';
+}
+
+function produceEmoji(value) {
+  const name = produceName(value).toLowerCase();
+  return PRODUCE_EMOJI.get(name) || '';
+}
+
+function produceLabel(value, hindi = '') {
+  const name = produceName(value, hindi);
+  const emoji = produceEmoji(name);
+  return emoji ? `${emoji} ${name}` : name;
+}
+
 function safeVideoId(value) {
   const text = String(value || '').trim();
   const direct = text.match(/^[a-zA-Z0-9_-]{6,}$/);
@@ -354,30 +472,31 @@ function renderVideoAnalysisBody(video, { compact = false } = {}) {
   if (!meta?.fruits?.length) return '';
 
   const partyTags = (meta.parties || []).slice(0, compact ? 4 : 8)
-    .map((party) => tag(party, 'relevance-relevant')).join('');
+    .map((party) => tagLabel(party)).join('');
   const areaTags = (meta.areas || []).slice(0, compact ? 4 : 8)
-    .map((area) => tag(area, 'relevance-relevant')).join('');
+    .map((area) => tagLabel(area)).join('');
 
   const fruitBlocks = meta.fruits.slice(0, compact ? 4 : 12).map((fruit) => {
     const mentionLinks = fruit.mentions.slice(0, compact ? 3 : 8).map((mention) => {
       const price = formatPriceRange(mention.min_price_inr, mention.max_price_inr);
-      const detail = [mention.quality_grade, mention.party_name, price !== 'Rate not stated' ? price : '']
+      const detail = [englishLabel(mention.quality_grade), englishLabel(mention.party_name), price !== 'Rate not stated' ? price : '']
         .filter(Boolean).join(' · ');
       return `<a class="timestamp-link" href="${escapeHtml(mention.timestamp_url)}" target="_blank" rel="noreferrer">▶ ${escapeHtml(mention.timestamp_label)}${detail ? ` · ${escapeHtml(detail)}` : ''}</a>`;
     }).join('');
 
-    const gradeTags = (fruit.quality_grades || []).map((grade) => tag(`Grade ${grade}`, 'relevance-relevant')).join('');
-    const fruitParties = (fruit.parties || []).slice(0, 3).map((party) => tag(party, 'relevance-relevant')).join('');
+    const gradeTags = (fruit.quality_grades || []).map((grade) => tagLabel(grade)).join('');
+    const fruitParties = (fruit.parties || []).slice(0, 3).map((party) => tagLabel(party)).join('');
+    const context = englishLabel(fruit.mentions[0]?.context || '');
 
     return `
       <section class="video-fruit-block">
         <div class="video-fruit-head">
-          <strong>${escapeHtml(fruit.fruit)}${fruit.fruit_hindi ? ` · ${escapeHtml(fruit.fruit_hindi)}` : ''}</strong>
+          <strong>${escapeHtml(produceLabel(fruit.fruit, fruit.fruit_hindi))}</strong>
           <span>${escapeHtml(formatPriceRange(fruit.min_price_inr, fruit.max_price_inr))}${fruit.unit && fruit.unit !== 'unknown' ? ` / ${escapeHtml(fruit.unit)}` : ''}</span>
         </div>
         <div class="card-tags">${gradeTags}${fruitParties}</div>
         ${mentionLinks ? `<div class="video-mention-links">${mentionLinks}</div>` : ''}
-        ${fruit.mentions[0]?.line ? `<div class="price-hindi">${escapeHtml(fruit.mentions[0].line)}</div>` : ''}
+        ${context ? `<div class="price-context">${escapeHtml(context)}</div>` : ''}
       </section>
     `;
   }).join('');
@@ -652,6 +771,7 @@ function renderAnalysisCard(video) {
   const marketDay = analysisMeta?.market_date || parseVideoDate(video).label;
   const fruitList = analysisMeta?.fruits?.map((fruit) => fruit.fruit)
     || (Array.isArray(video.analysisSummary?.fruits) ? video.analysisSummary.fruits : []);
+  const fruitDisplayList = fruitList.map((fruit) => produceLabel(fruit));
   const partyCount = analysisMeta?.parties?.length
     || (Array.isArray(video.analysisSummary?.parties) ? video.analysisSummary.parties.length : 0);
   const areaCount = analysisMeta?.areas?.length
@@ -687,13 +807,13 @@ function renderAnalysisCard(video) {
           ${tag(statusLabel, priceStatus === 'ok' ? 'ok' : priceStatus)}
           ${tag(`${segmentCount(video)} lines`, 'relevance-relevant')}
           ${shownRows ? tag(`${shownRows} mention${shownRows === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
-          ${fruitList.length ? tag(`${fruitList.length} fruit${fruitList.length === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
+          ${fruitDisplayList.length ? tag(`${fruitDisplayList.length} fruit${fruitDisplayList.length === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
           ${partyCount ? tag(`${partyCount} part${partyCount === 1 ? 'y' : 'ies'}`, 'relevance-relevant') : ''}
           ${areaCount ? tag(`${areaCount} area${areaCount === 1 ? '' : 's'}`, 'relevance-relevant') : ''}
           ${queuePos >= 0 && state.aiBatchRunning ? tag(`queue #${queuePos + 1}`, isCurrent ? 'running' : 'relevance-relevant') : ''}
           ${isCurrent ? tag(isSingleRunning ? 'OpenAI running' : 'processing now', 'running') : ''}
         </div>
-        ${fruitList.length && !analysisBody ? `<div class="analysis-summary-line">${fruitList.slice(0, 8).map((fruit) => tag(fruit, 'relevance-relevant')).join('')}</div>` : ''}
+        ${fruitDisplayList.length && !analysisBody ? `<div class="analysis-summary-line">${fruitDisplayList.slice(0, 8).map((fruit) => tag(fruit, 'relevance-relevant')).join('')}</div>` : ''}
         ${analysisBody}
         ${canAnalyzeOne ? `
           <div class="card-actions-row">
@@ -737,11 +857,11 @@ function groupPriceRows(rows) {
     }
     const group = byDate.get(sortKey);
     group.rows.push(row);
-    const fruitKey = [row.fruit, row.fruit_hindi].filter(Boolean).join(' / ').toLowerCase() || 'unknown';
+    const fruitKey = produceName(row.fruit, row.fruit_hindi).toLowerCase() || 'unknown';
     if (!group.fruits.has(fruitKey)) {
       group.fruits.set(fruitKey, {
         key: fruitKey,
-        fruit: row.fruit || row.fruit_hindi || 'unknown',
+        fruit: produceName(row.fruit, row.fruit_hindi),
         fruitHindi: row.fruit_hindi || '',
         rows: [],
       });
@@ -759,13 +879,13 @@ function renderRichPriceRow(row) {
   const timeLabel = row.timestamp_label || secondsToClock(row.timestamp_seconds);
   const timeUrl = row.timestamp_url || timestampUrl(row.video_url, row.timestamp_seconds);
   const detailBadges = [
-    row.quality_grade ? tag(`Grade ${row.quality_grade}`, 'relevance-relevant') : '',
-    row.quality_label ? tag(row.quality_label, 'relevance-relevant') : '',
-    row.party_name ? tag(row.party_name, 'relevance-relevant') : '',
-    row.area_name ? tag(row.area_name, 'relevance-relevant') : '',
-    row.mandi_name ? tag(row.mandi_name, 'relevance-relevant') : '',
-    row.variety ? tag(row.variety, 'relevance-relevant') : '',
-    row.origin ? tag(row.origin, 'relevance-relevant') : '',
+    row.quality_grade ? tagLabel(row.quality_grade) : '',
+    row.quality_label ? tagLabel(row.quality_label) : '',
+    row.party_name ? tagLabel(row.party_name) : '',
+    row.area_name ? tagLabel(row.area_name) : '',
+    row.mandi_name ? tagLabel(row.mandi_name) : '',
+    row.variety ? tagLabel(row.variety) : '',
+    row.origin ? tagLabel(row.origin) : '',
   ].filter(Boolean).join('');
 
   return `
@@ -775,9 +895,8 @@ function renderRichPriceRow(row) {
         <div class="card-tags">${detailBadges}</div>
       </div>
       <div class="price-amount">${escapeHtml(formatPriceRange(row.min_price_inr, row.max_price_inr))}${row.unit && row.unit !== 'unknown' ? ` <span class="price-unit">/ ${escapeHtml(row.unit)}</span>` : ''}</div>
-      ${row.price_notes ? `<div class="price-note">${escapeHtml(row.price_notes)}</div>` : ''}
-      ${row.clean_hindi_line || row.original_line ? `<div class="price-hindi">${escapeHtml(row.clean_hindi_line || row.original_line)}</div>` : ''}
-      ${row.context ? `<div class="price-context">${escapeHtml(row.context)}</div>` : ''}
+      ${row.price_notes ? `<div class="price-note">${escapeHtml(englishLabel(row.price_notes))}</div>` : ''}
+      ${row.context ? `<div class="price-context">${escapeHtml(englishLabel(row.context))}</div>` : ''}
       <div class="price-meta">
         <a href="${escapeHtml(row.video_url || '#')}" target="_blank" rel="noreferrer">${escapeHtml(row.video_title || row.video_id || 'Video')}</a>
         ${row.confidence ? ` · ${escapeHtml(row.confidence)} confidence` : ''}
@@ -797,7 +916,7 @@ function renderGroupedPrices(rows) {
       .map((fruitGroup) => `
         <section class="fruit-group">
           <h4 class="fruit-group-head">
-            ${escapeHtml(fruitGroup.fruit)}${fruitGroup.fruitHindi ? ` · ${escapeHtml(fruitGroup.fruitHindi)}` : ''}
+            ${escapeHtml(produceLabel(fruitGroup.fruit, fruitGroup.fruitHindi))}
             <span>${fruitGroup.rows.length} mention${fruitGroup.rows.length === 1 ? '' : 's'}</span>
           </h4>
           <div class="card-list">${fruitGroup.rows
@@ -2038,7 +2157,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.6 — fixed analysis loading';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.7 — English produce results';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
