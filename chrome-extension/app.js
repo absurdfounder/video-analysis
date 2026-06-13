@@ -229,6 +229,26 @@ const PRODUCE_DISPLAY = new Map([
   ['खरबूजा', 'Melon'],
 ]);
 
+const PRODUCE_HINGLISH = new Map([
+  ['pomegranate', 'Anar'],
+  ['lychee', 'Litchi'],
+  ['sweet lime', 'Mausambi'],
+  ['coconut water', 'Nariyal Pani'],
+  ['mango', 'Aam'],
+  ['apple', 'Seb'],
+  ['banana', 'Kela'],
+  ['orange', 'Santra'],
+  ['garlic', 'Lahsun'],
+  ['onion', 'Pyaz'],
+  ['potato', 'Aloo'],
+  ['tomato', 'Tamatar'],
+  ['ginger', 'Adrak'],
+  ['grapes', 'Angoor'],
+  ['papaya', 'Papita'],
+  ['watermelon', 'Tarbooj'],
+  ['melon', 'Kharbuja'],
+]);
+
 const PRODUCE_EMOJI = new Map([
   ['pomegranate', '🍎'],
   ['lychee', '🍒'],
@@ -258,7 +278,6 @@ const ENGLISH_LABELS = new Map([
   ['एक नंबर', 'Grade 1'],
   ['मीडियम', 'Medium'],
   ['बाबू जी', 'Babu Ji'],
-  ['राणा जी', 'Rana Ji'],
   ['आरती फ्रूट कंपनी', 'Aarti Fruit Company'],
   ['आजादपुर मंडी', 'Azadpur Mandi'],
   ['पतनकोट', 'Pathankot'],
@@ -272,16 +291,33 @@ function stripHindiAlias(text) {
 function englishLabel(text) {
   const raw = String(text || '').trim();
   if (!raw) return '';
+  if (isIgnoredParty(raw)) return '';
   const mapped = ENGLISH_LABELS.get(raw) || PRODUCE_DISPLAY.get(raw.toLowerCase()) || PRODUCE_DISPLAY.get(raw);
+  if (isIgnoredParty(mapped)) return '';
   if (mapped) return mapped;
   const withoutHindiAlias = stripHindiAlias(raw).trim();
   return /[\u0900-\u097F]/.test(withoutHindiAlias) ? '' : withoutHindiAlias;
+}
+
+function isIgnoredParty(text) {
+  const value = String(text || '').trim().toLowerCase();
+  return value === 'rana ji'
+    || value === 'rana'
+    || value === 'राणा जी'
+    || value === 'राणा'
+    || value.includes('rana ji')
+    || value.includes('राणा जी');
 }
 
 function produceName(value, hindi = '') {
   const raw = String(value || hindi || '').trim();
   const normalized = PRODUCE_DISPLAY.get(raw.toLowerCase()) || PRODUCE_DISPLAY.get(raw) || englishLabel(raw);
   return normalized || raw || 'Unknown produce';
+}
+
+function produceHinglish(value, hindi = '') {
+  const name = produceName(value, hindi).toLowerCase();
+  return PRODUCE_HINGLISH.get(name) || '';
 }
 
 function produceEmoji(value) {
@@ -291,8 +327,12 @@ function produceEmoji(value) {
 
 function produceLabel(value, hindi = '') {
   const name = produceName(value, hindi);
+  const hinglish = produceHinglish(name, hindi);
   const emoji = produceEmoji(name);
-  return emoji ? `${emoji} ${name}` : name;
+  const label = hinglish && hinglish.toLowerCase() !== name.toLowerCase()
+    ? `${name} / ${hinglish}`
+    : name;
+  return emoji ? `${emoji} ${label}` : label;
 }
 
 function safeVideoId(value) {
@@ -788,8 +828,7 @@ function renderAnalysisCard(video) {
   const fruitList = analysisMeta?.fruits?.map((fruit) => fruit.fruit)
     || (Array.isArray(video.analysisSummary?.fruits) ? video.analysisSummary.fruits : []);
   const fruitDisplayList = fruitList.map((fruit) => produceLabel(fruit));
-  const partyCount = analysisMeta?.parties?.length
-    || (Array.isArray(video.analysisSummary?.parties) ? video.analysisSummary.parties.length : 0);
+  const partyCount = visiblePartyValues(analysisMeta?.parties || video.analysisSummary?.parties || []).length;
   const areaCount = analysisMeta?.areas?.length
     || (Array.isArray(video.analysisSummary?.areas) ? video.analysisSummary.areas.length : 0);
   const statusLabel = priceStatus === 'ok'
@@ -891,6 +930,10 @@ function uniqueValues(rows, field) {
   return [...new Set(rows.map((row) => String(row[field] || '').trim()).filter(Boolean))];
 }
 
+function visiblePartyValues(values) {
+  return values.map(englishLabel).filter(Boolean);
+}
+
 function renderRichPriceRow(row) {
   const timeLabel = row.timestamp_label || secondsToClock(row.timestamp_seconds);
   const timeUrl = row.timestamp_url || timestampUrl(row.video_url, row.timestamp_seconds);
@@ -925,7 +968,7 @@ function renderGroupedPrices(rows) {
   const groups = groupPriceRows(rows);
   return groups.map((group) => {
     const fruitCount = group.fruits.size;
-    const partyCount = uniqueValues(group.rows, 'party_name').length;
+    const partyCount = visiblePartyValues(uniqueValues(group.rows, 'party_name')).length;
     const areaCount = uniqueValues(group.rows, 'area_name').length + uniqueValues(group.rows, 'mandi_name').length;
     const fruitSections = [...group.fruits.values()]
       .sort((a, b) => a.fruit.localeCompare(b.fruit))
@@ -955,12 +998,165 @@ function renderGroupedPrices(rows) {
   }).join('');
 }
 
+function averageRowPrice(row) {
+  const min = Number(row.min_price_inr);
+  const max = Number(row.max_price_inr);
+  if (Number.isFinite(min) && Number.isFinite(max)) return (min + max) / 2;
+  if (Number.isFinite(min)) return min;
+  if (Number.isFinite(max)) return max;
+  return null;
+}
+
+function trendDimensionLabel(row) {
+  const quality = englishLabel(row.quality_grade || row.quality_label || row.variety || 'Standard quality') || 'Standard quality';
+  const area = englishLabel(row.area_name || row.mandi_name || row.market_name || 'Market') || 'Market';
+  const unit = row.unit && row.unit !== 'unknown' ? row.unit : 'unit';
+  return `${quality} · ${area} · /${unit}`;
+}
+
+function buildPriceTrendSeries(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const price = averageRowPrice(row);
+    if (price === null) continue;
+    const date = parsePriceRowDate(row);
+    if (!date.sortKey || date.sortKey === '0000-00-00') continue;
+    const produce = produceLabel(row.fruit, row.fruit_hindi);
+    const dimension = trendDimensionLabel(row);
+    const key = `${produce}||${dimension}`;
+    if (!grouped.has(key)) grouped.set(key, { key, produce, dimension, pointsByDate: new Map(), rows: [] });
+    const series = grouped.get(key);
+    if (!series.pointsByDate.has(date.sortKey)) {
+      series.pointsByDate.set(date.sortKey, { sortKey: date.sortKey, label: date.label, values: [] });
+    }
+    series.pointsByDate.get(date.sortKey).values.push(price);
+    series.rows.push(row);
+  }
+
+  return [...grouped.values()]
+    .map((series) => {
+      const points = [...series.pointsByDate.values()]
+        .map((point) => ({
+          sortKey: point.sortKey,
+          label: point.label,
+          price: point.values.reduce((sum, value) => sum + value, 0) / point.values.length,
+        }))
+        .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+      const first = points[0]?.price || 0;
+      const last = points[points.length - 1]?.price || 0;
+      return {
+        ...series,
+        points,
+        change: points.length > 1 ? last - first : 0,
+        maxPrice: Math.max(...points.map((point) => point.price)),
+      };
+    })
+    .filter((series) => series.points.length >= 1)
+    .sort((a, b) => (b.points.length - a.points.length) || (b.maxPrice - a.maxPrice))
+    .slice(0, 12);
+}
+
+function renderTrendChart(rows) {
+  const target = $('priceTrendChart');
+  if (!target) return;
+  const series = buildPriceTrendSeries(rows);
+  const multiPointSeries = series.filter((item) => item.points.length > 1);
+  if (!series.length) {
+    target.innerHTML = '<div class="empty-state">No priced rows yet. Analyze more videos to build trend lines.</div>';
+    return;
+  }
+
+  const chartSeries = (multiPointSeries.length ? multiPointSeries : series).slice(0, 8);
+  const dates = [...new Set(chartSeries.flatMap((item) => item.points.map((point) => point.sortKey)))].sort();
+  const prices = chartSeries.flatMap((item) => item.points.map((point) => point.price));
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  const width = 920;
+  const height = 320;
+  const pad = { left: 58, right: 24, top: 28, bottom: 54 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const colors = ['#1a7a4c', '#2b5da6', '#b45309', '#7c3aed', '#be123c', '#0f766e', '#854d0e', '#4338ca'];
+  const xFor = (sortKey) => {
+    const index = dates.indexOf(sortKey);
+    return pad.left + (dates.length <= 1 ? plotW / 2 : (index / (dates.length - 1)) * plotW);
+  };
+  const yFor = (price) => {
+    if (maxPrice === minPrice) return pad.top + plotH / 2;
+    return pad.top + plotH - ((price - minPrice) / (maxPrice - minPrice)) * plotH;
+  };
+  const formatTrendPrice = (value) => `₹${Math.round(value)}`;
+
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const y = pad.top + ratio * plotH;
+    const value = maxPrice - ratio * (maxPrice - minPrice);
+    return `
+      <line x1="${pad.left}" y1="${y}" x2="${width - pad.right}" y2="${y}" class="trend-grid-line" />
+      <text x="${pad.left - 8}" y="${y + 4}" text-anchor="end" class="trend-axis-label">${escapeHtml(formatTrendPrice(value))}</text>
+    `;
+  }).join('');
+
+  const lines = chartSeries.map((item, index) => {
+    const color = colors[index % colors.length];
+    const coords = item.points.map((point) => `${xFor(point.sortKey)},${yFor(point.price)}`).join(' ');
+    const pointers = item.points.map((point) => {
+      const x = xFor(point.sortKey);
+      const y = yFor(point.price);
+      return `
+        <circle cx="${x}" cy="${y}" r="4.5" fill="${color}" />
+        <text x="${x}" y="${y - 8}" text-anchor="middle" class="trend-point-label">${escapeHtml(formatTrendPrice(point.price))}</text>
+      `;
+    }).join('');
+    return `<polyline points="${coords}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />${pointers}`;
+  }).join('');
+
+  const xLabels = dates.map((sortKey) => {
+    const x = xFor(sortKey);
+    const label = sortKey.slice(5).replace('-', '/');
+    return `<text x="${x}" y="${height - 24}" text-anchor="middle" class="trend-axis-label">${escapeHtml(label)}</text>`;
+  }).join('');
+
+  const legend = chartSeries.map((item, index) => {
+    const color = colors[index % colors.length];
+    const first = item.points[0]?.price || 0;
+    const last = item.points[item.points.length - 1]?.price || 0;
+    const change = last - first;
+    const changeClass = change > 0 ? 'up' : change < 0 ? 'down' : 'flat';
+    const changeText = `${change > 0 ? '+' : change < 0 ? '-' : ''}${formatTrendPrice(Math.abs(change))}`;
+    return `
+      <div class="trend-legend-item">
+        <span class="trend-swatch" style="background:${color}"></span>
+        <strong>${escapeHtml(item.produce)}</strong>
+        <span>${escapeHtml(item.dimension)}</span>
+        <em class="${changeClass}">${escapeHtml(changeText)}</em>
+      </div>
+    `;
+  }).join('');
+
+  target.innerHTML = `
+    <div class="trend-chart-head">
+      <strong>Price movement</strong>
+      <span>${chartSeries.length} series · grouped by produce, quality/size, area and unit</span>
+    </div>
+    <div class="trend-chart-scroll">
+      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Price trend chart">
+        ${grid}
+        ${lines}
+        ${xLabels}
+      </svg>
+    </div>
+    <div class="trend-legend">${legend}</div>
+    ${multiPointSeries.length ? '' : '<p class="hint">Only one market date is available for these series. Add more dated videos to see movement over time.</p>'}
+  `;
+}
+
 function renderPrices() {
   const list = $('priceList');
   if (!list) return;
 
   const q = ($('priceSearch')?.value || '').toLowerCase().trim();
   const rows = state.priceRows.filter(row => !q || Object.values(row).join(' ').toLowerCase().includes(q));
+  renderTrendChart(rows);
 
   if (!rows.length) {
     list.innerHTML = '<div class="empty-state">No prices yet. Complete step 3.</div>';
@@ -2173,7 +2369,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.8 — full AI metadata';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.9 — price trends';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);

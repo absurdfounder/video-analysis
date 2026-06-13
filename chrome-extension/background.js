@@ -450,7 +450,7 @@ function mergeAiVideoMetadata(existing, chunkMeta, item) {
   };
 
   if (chunkMeta.market_date) next.market_date = safeText(chunkMeta.market_date);
-  next.parties = mergeList(next.parties, chunkMeta.parties);
+  next.parties = mergeList(next.parties, (chunkMeta.parties || []).map(cleanPartyName).filter(Boolean));
   next.areas = mergeList(next.areas, chunkMeta.areas);
   next.qualities = mergeList(next.qualities, chunkMeta.qualities);
   if (chunkMeta.notes) next.notes = [next.notes, safeText(chunkMeta.notes)].filter(Boolean).join(' · ');
@@ -480,7 +480,7 @@ function mergeAiVideoMetadata(existing, chunkMeta, item) {
     const fruitEntry = fruitMap.get(key);
     if (rawFruit.notes) fruitEntry.notes = [fruitEntry.notes, safeText(rawFruit.notes)].filter(Boolean).join(' · ');
     for (const grade of rawFruit.quality_grades || []) addUniqueStrings(fruitEntry.quality_grades, grade);
-    for (const party of rawFruit.parties || []) addUniqueStrings(fruitEntry.parties, party);
+    for (const party of rawFruit.parties || []) addUniqueStrings(fruitEntry.parties, cleanPartyName(party));
     for (const area of rawFruit.areas || []) addUniqueStrings(fruitEntry.areas, area);
     for (const variety of rawFruit.varieties || []) addUniqueStrings(fruitEntry.varieties, variety);
 
@@ -504,7 +504,7 @@ function mergeAiVideoMetadata(existing, chunkMeta, item) {
         timestamp_url: timestampUrl(item?.url || '', timestamp === '' ? 0 : timestamp),
         quality_grade: safeText(mention.quality_grade),
         quality_label: safeText(mention.quality_label),
-        party_name: safeText(mention.party_name),
+        party_name: cleanPartyName(mention.party_name),
         area_name: safeText(mention.area_name),
         min_price_inr: mention.min_price_inr ?? '',
         max_price_inr: mention.max_price_inr ?? '',
@@ -567,7 +567,7 @@ function applyAiVideoMetadataToAnalysisMeta(base, item, aiMetadata) {
     }
     const fruitEntry = fruitMap.get(key);
     for (const grade of aiFruit.quality_grades || []) addUniqueStrings(fruitEntry.quality_grades, grade);
-    for (const party of aiFruit.parties || []) addUniqueStrings(fruitEntry.parties, party);
+    for (const party of aiFruit.parties || []) addUniqueStrings(fruitEntry.parties, cleanPartyName(party));
     for (const area of aiFruit.areas || []) addUniqueStrings(fruitEntry.areas, area);
     if (aiFruit.notes) fruitEntry.notes = [fruitEntry.notes, safeText(aiFruit.notes)].filter(Boolean).join(' · ');
     for (const mention of aiFruit.mentions || []) {
@@ -636,7 +636,7 @@ function buildVideoAnalysisMeta(item, rows, summary = {}, source = 'ai', aiMetad
     const fruitEntry = fruitMap.get(key);
     fruitEntry.mention_count += 1;
     addUniqueStrings(fruitEntry.quality_grades, row.quality_grade);
-    addUniqueStrings(fruitEntry.parties, row.party_name);
+    addUniqueStrings(fruitEntry.parties, cleanPartyName(row.party_name));
     addUniqueStrings(fruitEntry.areas, row.area_name || row.mandi_name || row.market_name);
     addUniqueStrings(fruitEntry.varieties, row.variety);
 
@@ -658,7 +658,7 @@ function buildVideoAnalysisMeta(item, rows, summary = {}, source = 'ai', aiMetad
       timestamp_url: row.timestamp_url || timestampUrl(item.url, row.timestamp_seconds),
       quality_grade: safeText(row.quality_grade),
       quality_label: safeText(row.quality_label),
-      party_name: safeText(row.party_name),
+      party_name: cleanPartyName(row.party_name),
       area_name: safeText(row.area_name || row.mandi_name || row.market_name),
       min_price_inr: row.min_price_inr ?? '',
       max_price_inr: row.max_price_inr ?? '',
@@ -679,8 +679,8 @@ function buildVideoAnalysisMeta(item, rows, summary = {}, source = 'ai', aiMetad
     .sort((a, b) => a.fruit.localeCompare(b.fruit));
 
   const parties = Array.isArray(summary.parties) && summary.parties.length
-    ? summary.parties
-    : uniqueRowValues(rows, 'party_name');
+    ? summary.parties.map(cleanPartyName).filter(Boolean)
+    : uniqueRowValues(rows, 'party_name').map(cleanPartyName).filter(Boolean);
   const areas = Array.isArray(summary.areas) && summary.areas.length
     ? summary.areas
     : [...new Set([
@@ -2232,6 +2232,8 @@ const PRICE_EXTRACTION_SYSTEM = [
   'Read noisy Hindi YouTube market-report captions carefully and write structured metadata the UI can render on video cards.',
   'Cover ALL commodities mentioned: fruits, vegetables, garlic, onion, potato, tomato, ginger, etc.',
   'All display fields MUST be English. Translate or transliterate Hindi words into English for fruit, variety, grade, party, area, market, notes, context, and video_metadata.',
+  'Always include both English and Hinglish/common mandi name mentally when identifying produce; fruit should stay English and fruit_hindi should preserve Hindi when spoken.',
+  'Rana Ji / राणा जी is the person recording/interviewing, not a trader, seller, area, or party. NEVER include Rana Ji in party_name, parties, areas, notes, or metadata.',
   'Use Hindi/Devanagari only in fruit_hindi, original_line, and clean_hindi_line. Do not put Hindi in fruit, quality_grade, quality_label, party_name, area_name, mandi_name, context, notes, price_notes, video_metadata.parties, video_metadata.areas, video_metadata.qualities, or video_metadata.fruits[].mentions[].line.',
   'For video_metadata.fruits[].mentions[].line, write a short English summary of the mention, not the raw Hindi caption.',
   'Return JSON only with this exact shape:',
@@ -2244,7 +2246,7 @@ const PRICE_EXTRACTION_SYSTEM = [
   '- fruit: English commodity only (garlic, onion, mango, potato, pomegranate, lychee, sweet lime). fruit_hindi: Hindi when spoken.',
   '- One row per distinct commodity + quality/grade + party + price (or quality discussion) mention.',
   '- quality_grade: English only: Grade 1, Grade 2, Grade 3, Grade 4, Grade 5, super, medium, ordinary, premium, second, third, etc. Translate "चार नंबर" to "Grade 4", "पांच नंबर" to "Grade 5", etc.',
-  '- party_name: trader/party/seller names transliterated into English, e.g. "Rana Ji", "Babu Ji", "Aarti Fruit Company".',
+  '- party_name: trader/party/seller names transliterated into English, e.g. "Babu Ji", "Aarti Fruit Company". Exclude Rana Ji because he is the recorder/interviewer.',
   '- area_name / mandi_name: English/transliterated names: Azadpur Mandi, Pathankot, Ambeta, yards, blocks, localities, godowns.',
   '- context, notes, price_notes: concise English explanation.',
   '- video_metadata.notes should summarize the whole chunk. fruit notes and mention notes should preserve useful non-price observations such as supply, demand, quality, arrivals, or market trend.',
@@ -2292,7 +2294,7 @@ function normalizeAiPriceRow(raw, item, fallbackTimestamp) {
   const hasPrice = min !== '' && max !== '';
   const hasDetail = safeText(raw.quality_grade)
     || safeText(raw.quality_label)
-    || safeText(raw.party_name)
+    || cleanPartyName(raw.party_name)
     || safeText(raw.area_name)
     || safeText(raw.mandi_name)
     || safeText(raw.market_name);
@@ -2305,7 +2307,7 @@ function normalizeAiPriceRow(raw, item, fallbackTimestamp) {
     variety: safeText(raw.variety),
     quality_grade: safeText(raw.quality_grade),
     quality_label: safeText(raw.quality_label),
-    party_name: safeText(raw.party_name),
+    party_name: cleanPartyName(raw.party_name),
     mandi_name: safeText(raw.mandi_name || raw.market_name),
     area_name: safeText(raw.area_name),
     origin: safeText(raw.origin),
@@ -3021,6 +3023,21 @@ function withCaptionFormat(baseUrl) {
 
 function safeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function isIgnoredPartyName(value) {
+  const text = safeText(value).toLowerCase();
+  return text === 'rana ji'
+    || text === 'rana'
+    || text === 'राणा जी'
+    || text === 'राणा'
+    || text.includes('rana ji')
+    || text.includes('राणा जी');
+}
+
+function cleanPartyName(value) {
+  const text = safeText(value);
+  return isIgnoredPartyName(text) ? '' : text;
 }
 
 function stripHtml(text) {
