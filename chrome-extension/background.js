@@ -12,7 +12,7 @@ const STORAGE_DEFAULTS = {
 chrome.runtime.onInstalled.addListener(async () => {
   const settings = await loadChannelSettings();
   await schedulePoll(settings.pollIntervalMinutes);
-  await stopTranscriptBatch({ reason: 'Extension loaded. Batch jobs now start only from the Start button.' });
+  await resumeTranscriptBatchIfNeeded();
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -312,6 +312,8 @@ async function transcriptBatchStatus() {
 }
 
 async function fetchTranscriptsBatch(body) {
+  const delayMs = Math.max(500, Number(body.delayMs || 1500));
+  const languages = safeText(body.languages || 'hi.*,hi,en.*');
   const project = await loadProjectState();
   const pending = (project.videos || []).filter(isBatchProcessable);
 
@@ -330,26 +332,29 @@ async function fetchTranscriptsBatch(body) {
   await chrome.storage.local.set({
     [TRANSCRIPT_BATCH_KEY]: {
       running: true,
-      mode: 'guided',
+      mode: 'auto',
       queue: pending.map(video => video.id),
+      delayMs,
+      languages,
       total: pending.length,
       done: 0,
-      currentId: pending[0].id,
-      currentTitle: pending[0].title || pending[0].id,
+      currentId: null,
+      currentTitle: null,
       startedAt: new Date().toISOString(),
     },
   });
 
-  await openBatchVideo(pending[0]);
-  broadcastTranscriptBatchEvent({
-    event: 'next',
-    videoId: pending[0].id,
-    title: pending[0].title || pending[0].id,
-    done: 0,
-    total: pending.length,
-  });
+  processNextTranscriptInBatch().catch(error => console.warn('Transcript batch failed:', error));
 
   return { ok: true, started: true, total: pending.length };
+}
+
+async function resumeTranscriptBatchIfNeeded() {
+  const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
+  const job = stored[TRANSCRIPT_BATCH_KEY];
+  if (job?.running && job.mode === 'auto' && job.queue?.length) {
+    processNextTranscriptInBatch().catch(error => console.warn('Transcript batch resume failed:', error));
+  }
 }
 
 async function openBatchVideo(video) {
@@ -362,6 +367,29 @@ async function openBatchVideo(video) {
   await chrome.tabs.create({ url: video.url, active: true });
 }
 
+async function saveTranscriptToProject(videoId, result) {
+  const project = await loadProjectState();
+  const videos = [...(project.videos || [])];
+  const index = videos.findIndex(video => video.id === videoId);
+  if (index === -1) return project;
+
+  const segments = result.segments || [];
+  videos[index] = {
+    ...videos[index],
+    status: 'ok',
+    language: result.language || videos[index].language || 'unknown',
+    transcriptText: segments.map(segment => segment.text).join(' '),
+    segments,
+    error: '',
+    isNew: false,
+    needsWork: false,
+  };
+
+  await saveProjectState({ videos, currentStep: 2 });
+  await markProcessed({ videoIds: [videoId] });
+  return { ...project, videos };
+}
+
 async function completeTranscriptBatchItem(body = {}) {
   const id = safeText(body.id);
   if (!id) return { ok: false, error: 'Missing completed video ID.' };
@@ -369,17 +397,41 @@ async function completeTranscriptBatchItem(body = {}) {
   const stored = await chrome.storage.local.get(TRANSCRIPT_BATCH_KEY);
   const job = stored[TRANSCRIPT_BATCH_KEY];
   if (!job?.running) return { ok: true, advanced: false, reason: 'No running batch.' };
-  if (job.currentId && job.currentId !== id) {
+
+  const queue = Array.isArray(job.queue) ? job.queue : [];
+  if (!queue.includes(id)) {
+    return { ok: true, advanced: false, reason: 'Video is not in the active batch queue.' };
+  }
+
+  if (job.mode === 'auto') {
+    const nextQueue = queue.filter(videoId => videoId !== id);
+    const done = (job.done || 0) + 1;
+    const nextJob = {
+      ...job,
+      queue: nextQueue,
+      done,
+      currentId: null,
+      currentTitle: null,
+      running: nextQueue.length > 0,
+    };
+    await chrome.storage.local.set({ [TRANSCRIPT_BATCH_KEY]: nextJob });
+    if (!nextQueue.length) {
+      await finishTranscriptBatch(nextJob, done);
+      return { ok: true, advanced: true, complete: true, done, total: job.total || done };
+    }
+    if (!batchProcessing) {
+      processNextTranscriptInBatch().catch(error => console.warn('Transcript batch continue failed:', error));
+    }
     return {
       ok: true,
-      advanced: false,
-      reason: `Batch is waiting for ${job.currentId}, not ${id}.`,
-      currentId: job.currentId,
+      advanced: true,
+      complete: false,
+      done,
+      total: job.total || done,
     };
   }
 
-  const queue = Array.isArray(job.queue) ? job.queue : [];
-  const nextQueue = queue[0] === id ? queue.slice(1) : queue.filter(videoId => videoId !== id);
+  const nextQueue = queue.filter(videoId => videoId !== id);
   const done = (job.done || 0) + 1;
 
   if (!nextQueue.length) {
@@ -569,7 +621,7 @@ async function processNextTranscriptInBatch() {
 }
 
 chrome.runtime.onStartup.addListener(() => {
-  stopTranscriptBatch({ reason: 'Browser restarted. Batch jobs now start only from the Start button.' }).catch(() => {});
+  resumeTranscriptBatchIfNeeded().catch(() => {});
 });
 
 async function listVideos(body) {
@@ -687,19 +739,43 @@ async function transcript(body) {
 async function captureVisibleTranscript(body) {
   const rawVideoUrl = safeText(body.videoUrl || body.url);
   const id = safeText(body.id || getVideoId(rawVideoUrl));
+  const videoUrl = normalizeWatchUrl(rawVideoUrl, id);
+  const languages = safeText(body.languages || 'hi.*,hi,en.*');
   if (!id) return { ok: false, error: 'Missing YouTube video ID.' };
 
-  const result = await fetchTranscriptFromMatchingOpenWatchTab(id);
+  let result = await fetchTranscriptFromMatchingOpenWatchTab(id);
+  let diagnostics = result?.diagnostics || [];
+
   if (!result?.ok || !result.segments?.length) {
+    try {
+      result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages);
+      diagnostics = [];
+    } catch (error) {
+      return {
+        ok: false,
+        id,
+        error: cleanError(error) || result?.error || 'Could not capture transcript from YouTube.',
+        diagnostics,
+      };
+    }
+  }
+
+  if (!result?.segments?.length) {
     return {
       ok: false,
       id,
-      error: result?.error || 'No open YouTube tab had a visible transcript panel.',
-      diagnostics: result?.diagnostics || [],
+      error: result?.error || 'Transcript returned zero caption lines.',
+      diagnostics,
     };
   }
 
-  return transcriptResponse(id, result);
+  await saveTranscriptToProject(id, result);
+  const batch = await completeTranscriptBatchItem({ id });
+
+  return {
+    ...transcriptResponse(id, result),
+    batch,
+  };
 }
 
 function transcriptResponse(id, result) {
@@ -1031,7 +1107,7 @@ async function fetchTranscriptFromMatchingOpenWatchTab(videoId, excludeTabId = n
     } catch (error) {
       diagnostics.push({
         url: tab.url || '',
-        exact,
+        exact: true,
         error: cleanError(error),
       });
     }
@@ -1116,9 +1192,21 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages) {
 }
 
 async function withBriefTabFocus(tabId, fn) {
-  await prepareWorkerTab(tabId);
-  await sleep(800);
-  return fn();
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  try {
+    await chrome.tabs.update(tabId, { active: true, autoDiscardable: false });
+    await prepareWorkerTab(tabId);
+    await sleep(1200);
+    return await fn();
+  } finally {
+    if (activeTab?.id && activeTab.id !== tabId) {
+      try {
+        await chrome.tabs.update(activeTab.id, { active: true });
+      } catch {
+        // Previous tab may have closed.
+      }
+    }
+  }
 }
 
 async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, methodPrefix) {

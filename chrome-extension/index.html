@@ -57,10 +57,10 @@
     </section>
 
     <section class="step-panel" id="panel-2">
-      <p class="step-desc" id="stepDesc2">Capture transcripts from YouTube pages with the transcript panel open.</p>
-      <p class="hint youtube-hint">Reliable mode: open the video on YouTube, click Show transcript, then return here and capture the visible transcript. Automatic background fetch is best-effort because YouTube often does not render transcript rows in hidden tabs.</p>
+      <p class="step-desc" id="stepDesc2">Fetch transcripts automatically in a muted YouTube worker tab.</p>
+      <p class="hint youtube-hint">Click Fetch all transcripts to process every pending video in the background. Capture now on a single video also opens the worker tab and fetches that transcript.</p>
       <div class="batch-controls">
-        <button id="stepBtn2" class="btn-primary btn-large" type="button">Start missing-gap fill</button>
+        <button id="stepBtn2" class="btn-primary btn-large" type="button">Fetch all transcripts</button>
         <button id="stopTranscriptBatchBtn" class="btn-ghost btn-large" type="button" disabled>Stop</button>
       </div>
       <div id="transcriptList" class="date-groups"></div>

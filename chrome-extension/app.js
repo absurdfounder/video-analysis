@@ -231,9 +231,13 @@ let modalVideoId = '';
 async function fetchTranscriptForVideo(video) {
   const previousStatus = video.status;
   const previousError = video.error;
-  let batch = null;
+  const languages = ($('languages')?.value || 'hi.*,hi,en.*').trim();
   try {
-    const data = await api('/api/capture-visible-transcript', { id: video.id, videoUrl: video.url });
+    const data = await api('/api/capture-visible-transcript', {
+      id: video.id,
+      videoUrl: video.url,
+      languages,
+    });
     if (!data.segments?.length) throw new Error('Transcript returned zero caption lines.');
     Object.assign(video, {
       status: 'ok',
@@ -244,12 +248,10 @@ async function fetchTranscriptForVideo(video) {
       isNew: false,
       needsWork: false,
     });
-    if (hasTranscriptData(video)) await markVideosProcessed([video.id]);
-    await saveLocal();
-    batch = await api('/api/complete-transcript-batch-item', { id: video.id }).catch(() => null);
+    const batch = data.batch || null;
     log(`Transcript captured: ${video.title} (${segmentCount(video)} lines${data.method ? ` · ${data.method}` : ''})`);
-    if (batch?.complete) log('Missing-gap fill complete.');
-    if (batch?.nextTitle) log(`Next video opened: ${batch.nextTitle}`);
+    if (batch?.complete) log('Transcript batch complete.');
+    else if (batch?.advanced) log(`Batch advanced (${batch.done || 0}/${batch.total || 0}).`);
     return { data, batch };
   } catch (error) {
     const message = /Unknown extension API route/i.test(error.message)
@@ -257,7 +259,7 @@ async function fetchTranscriptForVideo(video) {
       : error.message;
     video.status = previousStatus || 'pending';
     video.error = previousError || '';
-    log(`Visible transcript capture failed: ${video.title}: ${message}`);
+    log(`Transcript capture failed: ${video.title}: ${message}`);
     throw new Error(message);
   } finally {
     renderVideos();
@@ -292,12 +294,12 @@ function renderTranscriptModalState(video) {
     return;
   }
 
-  if ($('modalMeta')) $('modalMeta').textContent = 'Open the exact YouTube video, show transcript, then capture.';
+  if ($('modalMeta')) $('modalMeta').textContent = 'Capture opens a muted YouTube tab and fetches the transcript automatically.';
   if ($('modalCapture')) $('modalCapture').textContent = 'Capture now';
   if ($('modalSegments')) {
     $('modalSegments').innerHTML = `
       <div class="empty-state">
-        Open this exact video on YouTube, click Show transcript, then press Capture now.
+        Press Capture now to open the video in a muted YouTube tab and fetch its transcript.
       </div>
     `;
   }
@@ -310,7 +312,7 @@ async function captureTranscriptFromModal() {
     $('modalCapture').disabled = true;
     $('modalCapture').textContent = 'Capturing...';
   }
-  if ($('modalMeta')) $('modalMeta').textContent = 'Capturing visible YouTube transcript...';
+  if ($('modalMeta')) $('modalMeta').textContent = 'Opening YouTube worker tab and fetching transcript...';
   if ($('modalSegments')) $('modalSegments').innerHTML = '<div class="empty-state">Checking open YouTube tabs...</div>';
 
   try {
@@ -446,7 +448,7 @@ function deriveStepStatus() {
         : transcriptStats.running
           ? `${transcriptStats.running} transcript(s) currently fetching.`
           : `${transcriptStats.waiting} transcript(s) to fetch.`
-    : done ? 'All relevant transcripts fetched.' : 'Open each YouTube video, show transcript, then capture it here.';
+    : done ? 'All relevant transcripts fetched.' : 'Fetch all transcripts in the background worker tab.';
 
   return {
     1: { done: total > 0, meta: total ? `${total} videos` : 'Start here', desc: total ? `${total} videos loaded (${relevant} relevant).` : 'Pull latest videos from the channel.' },
@@ -497,8 +499,8 @@ function updateUI() {
       : transcriptStats.failed
         ? `Start retry for ${transcriptStats.failed} failed transcript${transcriptStats.failed === 1 ? '' : 's'}`
         : transcriptStats.waiting
-          ? `Start ${transcriptStats.waiting} transcript${transcriptStats.waiting === 1 ? '' : 's'}`
-          : 'Start missing-gap fill';
+          ? `Fetch ${transcriptStats.waiting} transcript${transcriptStats.waiting === 1 ? '' : 's'}`
+          : 'Fetch all transcripts';
   }
 
   document.querySelectorAll('.step').forEach(el => {
@@ -621,7 +623,7 @@ async function fetchTranscriptsStep() {
   }
 
   await saveLocal();
-  log(`Started missing-gap fill for ${pending.length} transcript(s). The first missing video will open; show its transcript, then Capture now.`);
+  log(`Fetching ${pending.length} transcript(s) in background — worker tab runs automatically.`);
 
   const data = await api('/api/fetch-transcripts-batch', {
     delayMs,
@@ -929,7 +931,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.17 — guided queue advance';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.5.18 — auto background batch';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
