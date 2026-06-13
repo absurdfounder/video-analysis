@@ -40,7 +40,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     a { color: inherit; }
 
     .app {
-      display: flex;
+      display: block;
       height: 100vh;
       width: 100%;
     }
@@ -115,18 +115,18 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     .main {
-      flex: 1;
       display: flex;
       flex-direction: column;
       min-width: 0;
+      height: 100vh;
     }
 
     .topbar {
-      height: 58px;
+      height: 54px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 22px;
+      padding: 0 18px;
       border-bottom: 1px solid #2f2f2f;
       background: rgba(33, 33, 33, 0.88);
       backdrop-filter: blur(16px);
@@ -185,11 +185,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .chat {
       flex: 1;
       overflow-y: auto;
-      padding: 28px 20px 36px;
+      padding: 14px 16px 24px;
     }
 
     .chat-inner {
-      max-width: 1180px;
+      max-width: 1380px;
       margin: 0 auto;
     }
 
@@ -244,8 +244,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         radial-gradient(circle at top left, rgba(16, 163, 127, 0.14), transparent 32%),
         radial-gradient(circle at 88% 16%, rgba(247, 183, 49, 0.09), transparent 28%),
         linear-gradient(180deg, #282828, #222222);
-      border-radius: var(--radius-xl);
-      padding: 20px;
+      border-radius: 20px;
+      padding: 14px;
       box-shadow: var(--shadow);
       position: relative;
       overflow: hidden;
@@ -313,8 +313,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .single-fruit-picker {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
-      margin: 16px 0;
+      gap: 8px;
+      margin: 0 0 12px;
+      min-height: 36px;
     }
 
     .fruit-pill, .badge, .tab-btn {
@@ -330,13 +331,13 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     .fruit-pill {
-      padding: 10px 13px;
+      padding: 8px 12px;
       font-size: 13px;
       font-weight: 800;
     }
 
     .badge, .tab-btn {
-      padding: 8px 11px;
+      padding: 7px 10px;
       font-size: 12px;
       font-weight: 780;
     }
@@ -358,9 +359,13 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     .filters-grid {
       display: grid;
-      grid-template-columns: 1.1fr 1.1fr 1.1fr 0.9fr 0.9fr;
-      gap: 12px;
-      margin-bottom: 16px;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1.2fr) 150px 150px;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 10px;
+      border: 1px solid #373737;
+      border-radius: 16px;
+      background: rgba(32, 32, 32, 0.78);
       align-items: start;
     }
 
@@ -368,17 +373,25 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       display: block;
       color: var(--muted);
       font-size: 11px;
-      margin-bottom: 8px;
+      margin-bottom: 7px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       font-weight: 800;
     }
 
+    .filter-group {
+      min-width: 0;
+      border: 1px solid #343434;
+      border-radius: 13px;
+      background: rgba(255, 255, 255, 0.025);
+      padding: 8px;
+    }
+
     .filter-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 7px;
-      max-height: 78px;
+      gap: 6px;
+      max-height: 86px;
       overflow: auto;
       padding-right: 2px;
     }
@@ -399,7 +412,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .chart-shell {
       position: relative;
       width: 100%;
-      height: 430px;
+      height: 410px;
       border: 1px solid #373737;
       background:
         linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
@@ -421,11 +434,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       inset: 0;
       display: none;
       place-items: center;
-      color: #aaa;
+      color: transparent;
       font-size: 14px;
       text-align: center;
       padding: 30px;
-      background: rgba(32, 32, 32, 0.78);
+      background: transparent;
     }
 
     .chart-empty.show { display: grid; }
@@ -433,7 +446,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .chart-help {
       color: #8d8d8d;
       font-size: 12px;
-      margin-top: 12px;
+      margin-top: 8px;
       text-align: center;
     }
 
@@ -528,9 +541,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .dashboard-tabs {
       display: flex;
       gap: 8px;
-      margin-top: 18px;
+      margin-top: 14px;
       border-top: 1px solid #363636;
-      padding-top: 16px;
+      padding-top: 12px;
       flex-wrap: wrap;
     }
 
@@ -963,7 +976,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     @media (max-width: 900px) {
       body { overflow: auto; height: auto; }
       .app { display: block; height: auto; }
-      .sidebar { display: none; }
       .main { min-height: 100vh; }
       .topbar { position: sticky; top: 0; }
       .chat { overflow: visible; padding: 18px 14px 28px; }
@@ -985,27 +997,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 </head>
 <body>
   <div class="app">
-    <aside class="sidebar">
-      <button class="new-chat" id="openTesterSide">＋ Test transcript</button>
-      <div class="history-title">Views</div>
-      <div class="chat-item active" data-focus="dashboard">Produce dashboard</div>
-      <div class="chat-item" data-focus="rates">Rate list</div>
-      <div class="chat-item" data-focus="sources">YouTube sources</div>
-      <div class="chat-item" data-focus="all">All extracted rows</div>
-      <div class="sidebar-footer">
-        <div class="profile">
-          <div class="avatar">V</div>
-          <div>
-            <div style="font-size:14px;">Vaibhav</div>
-            <div style="font-size:12px;color:#999;">Founder mode</div>
-          </div>
-        </div>
-      </div>
-    </aside>
-
     <main class="main">
       <header class="topbar">
-        <div class="model-pill">Produce Analyst ▾</div>
+        <div class="model-pill">Produce Intelligence</div>
         <div class="top-actions">
           <button class="secondary-btn" id="refreshBtn">Refresh data</button>
           <button class="share-btn" id="openTesterTop">Test transcript</button>
@@ -1014,32 +1008,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
       <section class="chat">
         <div class="chat-inner">
-          <div class="welcome">
-            <h1>Analyze YouTube market data</h1>
-            <p>Every rate is backed by video, timestamp, transcript context, quality, size, and area.</p>
-            <div class="suggestions">
-              <div class="suggestion-card"><strong>Watch price movement</strong><span>Compare grade, size, and area lines over time.</span></div>
-              <div class="suggestion-card"><strong>Build rate list</strong><span>Latest rates grouped by produce and market attributes.</span></div>
-              <div class="suggestion-card"><strong>Audit every source</strong><span>Open YouTube at the exact second the rate was said.</span></div>
-              <div class="suggestion-card"><strong>Transcribe new video</strong><span>Use the popup tester to send audio to Workers AI.</span></div>
-            </div>
-          </div>
-
           <section class="dashboard" id="dashboard">
-            <div class="dashboard-head">
-              <div>
-                <div class="dashboard-kicker">Produce price intelligence</div>
-                <div class="dashboard-title">Market rates from YouTube videos</div>
-                <div class="dashboard-subtitle">Select one fruit, then filter by grade, size, date, and area. Chart dots open the source video at the exact timestamp so every rate can be audited.</div>
-              </div>
-              <div class="dashboard-actions">
-                <div class="dashboard-stat"><span>Latest selected rate</span><strong id="latestRate">-</strong></div>
-                <div class="dashboard-stat"><span>Source updates</span><strong id="sourceCount">0</strong></div>
-                <div class="dashboard-stat"><span>Total rows</span><strong id="totalRows">0</strong></div>
-                <div class="dashboard-stat"><span>Worker AI</span><strong id="aiStatus">Off</strong></div>
-              </div>
-            </div>
-
             <div class="single-fruit-picker" id="fruitPicker"></div>
 
             <div class="filters-grid">
@@ -1067,7 +1036,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
             <div class="chart-shell" id="chartShell">
               <svg id="produceChart" viewBox="0 0 1000 430" preserveAspectRatio="none"></svg>
-              <div class="chart-empty" id="chartEmpty">No timestamped price rows match this filter combination. Sync data from the extension or loosen the filters.</div>
+              <div class="chart-empty" id="chartEmpty"></div>
               <div class="popup" id="chartPopup">
                 <div class="popup-top">
                   <div>
@@ -1090,7 +1059,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
             <div class="dashboard-tabs">
               <button class="tab-btn active" data-tab="rateList">Rate List</button>
               <button class="tab-btn" data-tab="allData">All Data</button>
-              <button class="tab-btn" data-tab="videos">Source Videos</button>
             </div>
 
             <div class="tab-panel active" id="rateListPanel">
@@ -1150,16 +1118,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
               </div>
             </div>
 
-            <div class="tab-panel" id="videosPanel">
-              <div class="panel-toolbar">
-                <div>
-                  <div class="panel-title">All analyzed YouTube videos</div>
-                  <div class="panel-note">Video thumbnails, titles, summaries, transcript snippets, and timestamped extractions.</div>
-                </div>
-                <input id="videoSearch" class="search-box" placeholder="Search videos, transcript, area..." />
-              </div>
-              <div class="video-list" id="videoList"></div>
-            </div>
           </section>
         </div>
       </section>
@@ -1210,8 +1168,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   <script>
     var state = {
       priceRows: [],
-      videos: [],
-      analysis: [],
       filteredRows: [],
       selectedFruit: '',
       selectedGrade: '',
@@ -1407,18 +1363,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     function loadAllData() {
       el('refreshBtn').disabled = true;
-      return Promise.all([
-        fetchJson('/api/health'),
-        fetchJson('/api/prices?limit=5000'),
-        fetchJson('/api/videos?limit=200'),
-        fetchJson('/api/analysis?limit=200')
-      ]).then(function (results) {
-        var health = results[0];
-        state.priceRows = Array.isArray(results[1].items) ? results[1].items : [];
-        state.videos = Array.isArray(results[2].items) ? results[2].items : [];
-        state.analysis = Array.isArray(results[3].items) ? results[3].items : [];
-        el('totalRows').textContent = state.priceRows.length.toLocaleString('en-IN');
-        el('aiStatus').textContent = health.features && health.features.transcription ? 'On' : 'Off';
+      return fetchJson('/api/prices?limit=5000').then(function (result) {
+        state.priceRows = Array.isArray(result.items) ? result.items : [];
         if (!state.selectedFruit) state.selectedFruit = uniqueValues(state.priceRows, produceLabel)[0] || '';
         renderEverything();
       }).catch(function (error) {
@@ -1432,7 +1378,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function renderFruitPicker() {
       var values = uniqueValues(state.priceRows, produceLabel);
       if (!values.length) {
-        el('fruitPicker').innerHTML = '<div class="empty-list">No synced price rows yet. Push data from the Chrome extension, then refresh.</div>';
+        el('fruitPicker').innerHTML = '';
         return;
       }
       el('fruitPicker').innerHTML = values.map(function (fruit, index) {
@@ -1511,8 +1457,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       if (!series.length) {
         svg.innerHTML = '';
         el('chartEmpty').classList.add('show');
-        el('latestRate').textContent = '-';
-        el('sourceCount').textContent = '0';
         return;
       }
       el('chartEmpty').classList.remove('show');
@@ -1582,8 +1526,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       });
       var allPoints = series.flatMap(function (item) { return item.points; });
       var latest = allPoints.slice().sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); })[0];
-      el('latestRate').textContent = latest ? money(latest.value) : '-';
-      el('sourceCount').textContent = filteredBaseRows().length.toLocaleString('en-IN');
     }
 
     function showPointPopup(index, event) {
@@ -1655,38 +1597,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       }).join('');
     }
 
-    function renderVideos() {
-      var q = el('videoSearch').value.trim().toLowerCase();
-      var grouped = {};
-      state.priceRows.forEach(function (row) {
-        var id = row.video_id || extractVideoId(row.video_url) || row.video_title || 'unknown';
-        if (!grouped[id]) grouped[id] = [];
-        grouped[id].push(row);
-      });
-      var cards = Object.keys(grouped).map(function (id) {
-        var rows = grouped[id].slice().sort(function (a, b) { return Number(a.timestamp_seconds || 0) - Number(b.timestamp_seconds || 0); });
-        var first = rows[0] || {};
-        return { id: id, rows: rows, first: first };
-      }).filter(function (card) {
-        if (!q) return true;
-        return [card.first.video_title, card.first.video_url, card.rows.map(function (row) { return [produceLabel(row), areaLabel(row), row.context, row.clean_hindi_line, row.price_notes].join(' '); }).join(' ')].join(' ').toLowerCase().indexOf(q) >= 0;
-      }).sort(function (a, b) {
-        return String(rowDate(b.first)).localeCompare(String(rowDate(a.first)));
-      }).slice(0, 80);
-      if (!cards.length) {
-        el('videoList').innerHTML = '<div class="empty-list">No source videos yet. Sync analyzed rows from the extension to populate this view.</div>';
-        return;
-      }
-      el('videoList').innerHTML = cards.map(function (card) {
-        var first = card.first;
-        var title = first.video_title || first.video_url || card.id;
-        var rowsHtml = card.rows.slice(0, 8).map(function (row) {
-          return '<div class="youtube-data-row"><a class="timestamp-chip" href="' + escapeHtml(timestampUrl(row)) + '" target="_blank" rel="noreferrer">' + escapeHtml(row.timestamp_label || secondsToClock(row.timestamp_seconds)) + '</a><div><div class="youtube-tags"><span>' + escapeHtml(produceLabel(row)) + '</span><span>' + escapeHtml(gradeLabel(row)) + '</span><span>' + escapeHtml(sizeLabel(row)) + '</span><span>' + escapeHtml(areaLabel(row)) + '</span></div><div class="youtube-note">' + escapeHtml(row.clean_hindi_line || row.context || row.original_line || row.price_notes || '') + '</div></div><div class="youtube-rate-box"><strong>' + escapeHtml(rateRange(row)) + '</strong><small>' + escapeHtml(confidenceLabel(row)) + '</small></div></div>';
-        }).join('');
-        return '<article class="youtube-video-card"><div class="youtube-video-head"><a class="youtube-thumb-wrap" href="' + escapeHtml(first.video_url || '#') + '" target="_blank" rel="noreferrer"><img class="youtube-thumb" src="' + escapeHtml(videoThumb(first)) + '" alt=""></a><div><a class="youtube-title" href="' + escapeHtml(first.video_url || '#') + '" target="_blank" rel="noreferrer">' + escapeHtml(title) + '</a><div class="youtube-meta">' + escapeHtml(rowDate(first) || 'Unknown date') + ' · ' + card.rows.length + ' extracted row(s)</div><div class="youtube-summary">' + escapeHtml(first.notes || first.price_notes || first.context || 'Timestamped rates extracted from this source video.') + '</div></div></div><div class="youtube-extractions">' + rowsHtml + '</div></article>';
-      }).join('');
-    }
-
     function renderEverything() {
       renderFruitPicker();
       renderFilters();
@@ -1694,7 +1604,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       drawChart();
       renderRateList();
       renderAllData();
-      renderVideos();
     }
 
     function setTranscriptStatus(message, kind) {
@@ -1799,7 +1708,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     function setupEvents() {
-      el('openTesterSide').addEventListener('click', openTester);
       el('openTesterTop').addEventListener('click', openTester);
       el('closeTesterBtn').addEventListener('click', closeTester);
       el('testModal').addEventListener('click', function (event) {
@@ -1815,7 +1723,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         el('transcriptMeta').textContent = 'No transcript loaded.';
         setTranscriptStatus('Ready.', '');
       });
-      ['dateFrom', 'dateTo', 'rateSearch', 'dataSearch', 'videoSearch'].forEach(function (id) {
+      ['dateFrom', 'dateTo', 'rateSearch', 'dataSearch'].forEach(function (id) {
         el(id).addEventListener('input', renderEverything);
       });
       document.querySelectorAll('.tab-btn').forEach(function (button) {
@@ -1824,17 +1732,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           document.querySelectorAll('.tab-panel').forEach(function (item) { item.classList.remove('active'); });
           button.classList.add('active');
           el(button.getAttribute('data-tab') + 'Panel').classList.add('active');
-        });
-      });
-      document.querySelectorAll('.chat-item[data-focus]').forEach(function (item) {
-        item.addEventListener('click', function () {
-          document.querySelectorAll('.chat-item').forEach(function (node) { node.classList.remove('active'); });
-          item.classList.add('active');
-          var focus = item.getAttribute('data-focus');
-          if (focus === 'rates') document.querySelector('[data-tab="rateList"]').click();
-          if (focus === 'all') document.querySelector('[data-tab="allData"]').click();
-          if (focus === 'sources') document.querySelector('[data-tab="videos"]').click();
-          document.getElementById('dashboard').scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
       });
       document.addEventListener('keydown', function (event) {
