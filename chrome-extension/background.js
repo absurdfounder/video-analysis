@@ -473,10 +473,12 @@ function mergeAiVideoMetadata(existing, chunkMeta, item) {
         min_price_inr: null,
         max_price_inr: null,
         unit: safeText(rawFruit.unit) || 'unknown',
+        notes: safeText(rawFruit.notes),
         mentions: [],
       });
     }
     const fruitEntry = fruitMap.get(key);
+    if (rawFruit.notes) fruitEntry.notes = [fruitEntry.notes, safeText(rawFruit.notes)].filter(Boolean).join(' · ');
     for (const grade of rawFruit.quality_grades || []) addUniqueStrings(fruitEntry.quality_grades, grade);
     for (const party of rawFruit.parties || []) addUniqueStrings(fruitEntry.parties, party);
     for (const area of rawFruit.areas || []) addUniqueStrings(fruitEntry.areas, area);
@@ -509,6 +511,7 @@ function mergeAiVideoMetadata(existing, chunkMeta, item) {
         unit: safeText(mention.unit),
         line: safeText(mention.line || mention.clean_hindi_line || mention.original_line),
         context: safeText(mention.context),
+        notes: safeText(mention.notes),
       });
     }
   }
@@ -554,6 +557,7 @@ function applyAiVideoMetadataToAnalysisMeta(base, item, aiMetadata) {
         min_price_inr: aiFruit.min_price_inr,
         max_price_inr: aiFruit.max_price_inr,
         unit: aiFruit.unit || 'unknown',
+        notes: aiFruit.notes || '',
         mentions: (aiFruit.mentions || []).map((mention) => ({
           ...mention,
           timestamp_url: mention.timestamp_url || timestampUrl(item.url, mention.timestamp_seconds),
@@ -565,6 +569,7 @@ function applyAiVideoMetadataToAnalysisMeta(base, item, aiMetadata) {
     for (const grade of aiFruit.quality_grades || []) addUniqueStrings(fruitEntry.quality_grades, grade);
     for (const party of aiFruit.parties || []) addUniqueStrings(fruitEntry.parties, party);
     for (const area of aiFruit.areas || []) addUniqueStrings(fruitEntry.areas, area);
+    if (aiFruit.notes) fruitEntry.notes = [fruitEntry.notes, safeText(aiFruit.notes)].filter(Boolean).join(' · ');
     for (const mention of aiFruit.mentions || []) {
       fruitEntry.mentions.push({
         ...mention,
@@ -594,12 +599,14 @@ function applyAiVideoMetadataToAnalysisMeta(base, item, aiMetadata) {
     parties,
     areas,
     qualities,
+    notes: merged.notes || base.notes || '',
     mention_count: Math.max(base.mention_count || 0, fruits.reduce((sum, fruit) => sum + (fruit.mentions?.length || 0), 0)),
     summary: {
       fruits: fruits.map((fruitEntry) => fruitEntry.fruit),
       parties,
       areas,
       qualities,
+      notes: merged.notes || base.notes || '',
     },
   };
 }
@@ -621,8 +628,9 @@ function buildVideoAnalysisMeta(item, rows, summary = {}, source = 'ai', aiMetad
         varieties: [],
         min_price_inr: null,
         max_price_inr: null,
-        unit: row.unit || 'unknown',
-        mentions: [],
+      unit: row.unit || 'unknown',
+      notes: '',
+      mentions: [],
       });
     }
     const fruitEntry = fruitMap.get(key);
@@ -657,6 +665,7 @@ function buildVideoAnalysisMeta(item, rows, summary = {}, source = 'ai', aiMetad
       unit: safeText(row.unit),
       line: safeText(row.clean_hindi_line || row.original_line),
       context: safeText(row.context),
+      notes: safeText(row.notes || row.price_notes),
     });
   }
 
@@ -697,11 +706,13 @@ function buildVideoAnalysisMeta(item, rows, summary = {}, source = 'ai', aiMetad
     parties,
     areas,
     qualities,
+    notes: safeText(summary.notes || ''),
     summary: {
       fruits: fruits.map((fruitEntry) => fruitEntry.fruit),
       parties,
       areas,
       qualities,
+      notes: safeText(summary.notes || ''),
     },
   };
 
@@ -2226,7 +2237,7 @@ const PRICE_EXTRACTION_SYSTEM = [
   'Return JSON only with this exact shape:',
   '{"rows":[{"fruit":"","fruit_hindi":"","variety":"","quality_grade":"","quality_label":"","party_name":"","mandi_name":"","area_name":"","origin":"","unit":"","min_price_inr":null,"max_price_inr":null,"price_notes":"","market_name":"","timestamp_seconds":0,"confidence":"high|medium|low","original_line":"","clean_hindi_line":"","context":"","notes":""}],',
   '"chunk_summary":{"fruits":[],"parties":[],"areas":[],"qualities":[]},',
-  '"video_metadata":{"market_date":"","parties":[],"areas":[],"qualities":[],"notes":"","fruits":[{"fruit":"","fruit_hindi":"","quality_grades":[],"parties":[],"areas":[],"varieties":[],"min_price_inr":null,"max_price_inr":null,"unit":"","mentions":[{"timestamp_seconds":0,"quality_grade":"","quality_label":"","party_name":"","area_name":"","min_price_inr":null,"max_price_inr":null,"unit":"","line":"","context":""}]}]}}',
+  '"video_metadata":{"market_date":"","parties":[],"areas":[],"qualities":[],"notes":"","fruits":[{"fruit":"","fruit_hindi":"","quality_grades":[],"parties":[],"areas":[],"varieties":[],"min_price_inr":null,"max_price_inr":null,"unit":"","notes":"","mentions":[{"timestamp_seconds":0,"quality_grade":"","quality_label":"","party_name":"","area_name":"","min_price_inr":null,"max_price_inr":null,"unit":"","line":"","context":"","notes":""}]}]}}',
   '',
   'Guidelines:',
   '- ALWAYS populate video_metadata from the transcript chunk — parties, areas, grades, commodities, and timestamped mentions for cards.',
@@ -2236,6 +2247,7 @@ const PRICE_EXTRACTION_SYSTEM = [
   '- party_name: trader/party/seller names transliterated into English, e.g. "Rana Ji", "Babu Ji", "Aarti Fruit Company".',
   '- area_name / mandi_name: English/transliterated names: Azadpur Mandi, Pathankot, Ambeta, yards, blocks, localities, godowns.',
   '- context, notes, price_notes: concise English explanation.',
+  '- video_metadata.notes should summarize the whole chunk. fruit notes and mention notes should preserve useful non-price observations such as supply, demand, quality, arrivals, or market trend.',
   '- min_price_inr/max_price_inr: use null if no price stated but commodity+quality+party still useful.',
   '- timestamp_seconds MUST match the [seconds] bracket on the source segment line.',
   '- rows and video_metadata must stay consistent; video_metadata is the structured rollup saved separately from flat rows.',

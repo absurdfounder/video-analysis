@@ -471,10 +471,19 @@ function renderVideoAnalysisBody(video, { compact = false } = {}) {
   const meta = getVideoAnalysisMeta(video);
   if (!meta?.fruits?.length) return '';
 
+  const metaStats = [
+    meta.market_date ? `Market: ${englishLabel(meta.market_date) || meta.market_date}` : '',
+    meta.source ? `Source: ${englishLabel(meta.source) || meta.source}` : '',
+    meta.mention_count ? `${meta.mention_count} mentions` : '',
+    meta.fruits?.length ? `${meta.fruits.length} produce` : '',
+  ].filter(Boolean);
+  const qualityTags = (meta.qualities || []).slice(0, compact ? 4 : 10)
+    .map((quality) => tagLabel(quality)).join('');
   const partyTags = (meta.parties || []).slice(0, compact ? 4 : 8)
     .map((party) => tagLabel(party)).join('');
   const areaTags = (meta.areas || []).slice(0, compact ? 4 : 8)
     .map((area) => tagLabel(area)).join('');
+  const notes = englishLabel(meta.notes || meta.summary?.notes || '');
 
   const fruitBlocks = meta.fruits.slice(0, compact ? 4 : 12).map((fruit) => {
     const mentionLinks = fruit.mentions.slice(0, compact ? 3 : 8).map((mention) => {
@@ -486,7 +495,10 @@ function renderVideoAnalysisBody(video, { compact = false } = {}) {
 
     const gradeTags = (fruit.quality_grades || []).map((grade) => tagLabel(grade)).join('');
     const fruitParties = (fruit.parties || []).slice(0, 3).map((party) => tagLabel(party)).join('');
+    const fruitAreas = (fruit.areas || []).slice(0, 3).map((area) => tagLabel(area)).join('');
+    const fruitVarieties = (fruit.varieties || []).slice(0, 3).map((variety) => tagLabel(variety)).join('');
     const context = englishLabel(fruit.mentions[0]?.context || '');
+    const fruitNotes = englishLabel(fruit.notes || fruit.mentions[0]?.notes || '');
 
     return `
       <section class="video-fruit-block">
@@ -494,8 +506,9 @@ function renderVideoAnalysisBody(video, { compact = false } = {}) {
           <strong>${escapeHtml(produceLabel(fruit.fruit, fruit.fruit_hindi))}</strong>
           <span>${escapeHtml(formatPriceRange(fruit.min_price_inr, fruit.max_price_inr))}${fruit.unit && fruit.unit !== 'unknown' ? ` / ${escapeHtml(fruit.unit)}` : ''}</span>
         </div>
-        <div class="card-tags">${gradeTags}${fruitParties}</div>
+        <div class="card-tags">${gradeTags}${fruitParties}${fruitAreas}${fruitVarieties}</div>
         ${mentionLinks ? `<div class="video-mention-links">${mentionLinks}</div>` : ''}
+        ${fruitNotes ? `<div class="price-note">${escapeHtml(fruitNotes)}</div>` : ''}
         ${context ? `<div class="price-context">${escapeHtml(context)}</div>` : ''}
       </section>
     `;
@@ -503,6 +516,9 @@ function renderVideoAnalysisBody(video, { compact = false } = {}) {
 
   return `
     <div class="video-analysis-body ${compact ? 'is-compact' : ''}">
+      ${metaStats.length ? `<div class="analysis-meta-grid">${metaStats.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : ''}
+      ${notes ? `<div class="analysis-notes">${escapeHtml(notes)}</div>` : ''}
+      ${qualityTags ? `<div class="analysis-meta-row"><span class="analysis-meta-label">Qualities</span><div class="card-tags">${qualityTags}</div></div>` : ''}
       ${partyTags ? `<div class="analysis-meta-row"><span class="analysis-meta-label">Parties</span><div class="card-tags">${partyTags}</div></div>` : ''}
       ${areaTags ? `<div class="analysis-meta-row"><span class="analysis-meta-label">Areas</span><div class="card-tags">${areaTags}</div></div>` : ''}
       <div class="video-fruit-list">${fruitBlocks}</div>
@@ -2157,7 +2173,7 @@ loadWatchSettings();
 (async () => {
   try {
     const data = await api('/api/status');
-    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.7 — English produce results';
+    if ($('statusText')) $('statusText').textContent = 'Transcript fetch v1.6.8 — full AI metadata';
   } catch (error) {
     if ($('statusText')) $('statusText').textContent = 'Reload extension at chrome://extensions';
     log(error.message);
