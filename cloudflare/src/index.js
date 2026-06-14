@@ -830,6 +830,97 @@ async function updateTranscriptJob(db, jobId, fields) {
   ).run();
 }
 
+async function updateTranscriptJobProgress(db, jobId, patch) {
+  const row = await db.prepare('SELECT payload_json FROM transcript_jobs WHERE id = ?').bind(jobId).first();
+  let payload = {};
+  try {
+    payload = JSON.parse(row?.payload_json || '{}');
+  } catch {
+    payload = {};
+  }
+  const next = {
+    ...payload,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+  await db.prepare(
+    `UPDATE transcript_jobs SET payload_json = ?, updated_at = datetime('now') WHERE id = ?`,
+  ).bind(JSON.stringify(next), jobId).run();
+  return next;
+}
+
+async function finalizeTranscriptJob(db, jobId, options) {
+  const videoId = safeText(options.videoId);
+  const language = safeText(options.language) || 'hi';
+  const source = safeText(options.source) || 'external-youtube-extractor';
+  const segments = Array.isArray(options.segments) ? options.segments : [];
+  const transcriptText = transcriptTextFromSegments(segments);
+  await replaceTranscriptSegments(db, jobId, videoId, segments, language, source);
+  await updateTranscriptJob(db, jobId, {
+    status: segments.length ? 'complete' : 'empty',
+    transcript_text: transcriptText,
+    segment_count: segments.length,
+    payload_json: JSON.stringify({
+      ...(options.payload || {}),
+      stage: segments.length ? 'complete' : 'empty',
+      message: segments.length ? `Saved ${segments.length} transcript line(s).` : 'No transcript lines returned.',
+      progress: 100,
+    }),
+  });
+}
+
+async function runExternalYouTubeTranscriptJob(db, env, options) {
+  const jobId = safeText(options.jobId);
+  const videoUrl = safeText(options.videoUrl);
+  const videoId = safeText(options.videoId) || extractYouTubeId(videoUrl);
+  const language = safeText(options.language) || 'hi';
+  try {
+    await updateTranscriptJobProgress(db, jobId, {
+      stage: 'download_audio',
+      message: 'Downloading YouTube audio on the extractor service (yt-dlp). This usually takes 30–90 seconds.',
+      progress: 20,
+    });
+    const external = await fetchExternalYouTubeTranscript(env, { videoUrl, videoId, language });
+    await updateTranscriptJobProgress(db, jobId, {
+      stage: 'openai_transcription',
+      message: 'Transcription finished on the extractor. Saving timestamped lines to D1...',
+      progress: 82,
+    });
+    const segments = external.segments || [];
+    await finalizeTranscriptJob(db, jobId, {
+      videoId: external.videoId || videoId,
+      language: external.language || language,
+      source: external.source,
+      segments,
+      payload: {
+        ...(external.payload || {}),
+        model: external.model,
+        extraction: 'external-youtube-extractor',
+      },
+    });
+  } catch (error) {
+    const stage = safeText(error?.extra?.extractorStage) || 'failed';
+    const message = error?.message || 'Background transcript failed.';
+    await updateTranscriptJob(db, jobId, {
+      status: 'failed',
+      error: message,
+      transcript_text: '',
+      segment_count: 0,
+      payload_json: JSON.stringify({
+        stage,
+        message,
+        progress: 100,
+        failedAt: new Date().toISOString(),
+      }),
+    });
+  }
+}
+
+function shouldRunYoutubeTranscriptInBackground(body) {
+  const videoUrl = safeText(body.videoUrl || body.video_url || body.youtubeUrl || body.youtube_url);
+  return Boolean(videoUrl) && !hasAudioInput(body);
+}
+
 async function replaceTranscriptSegments(db, jobId, videoId, segments, language, source) {
   await db.prepare('DELETE FROM transcript_segments WHERE job_id = ?').bind(jobId).run();
   for (const segment of segments) {
@@ -979,11 +1070,10 @@ function inferExternalExtractorStage(data, message) {
   return 'unknown';
 }
 
-async function transcribeWithWorkersAI(db, env, request) {
+async function transcribeWithWorkersAI(db, env, body) {
   if (!env.AI) {
     throw httpError('Workers AI binding is missing. Deploy with [ai] binding = "AI" in wrangler.toml.', 500);
   }
-  const body = await parseTranscriptRequest(request);
   const videoUrl = safeText(body.videoUrl || body.video_url || body.youtubeUrl || body.youtube_url);
   const videoId = safeText(body.videoId || body.video_id) || extractYouTubeId(videoUrl);
   const language = safeText(body.language) || 'hi';
@@ -1098,10 +1188,10 @@ async function getTranscriptByVideo(db, videoId) {
      WHERE job_id = ?
      ORDER BY segment_index ASC, start_seconds ASC`,
   ).bind(job.id).all();
-  return {
+  return enrichTranscriptPayload({
     job,
     segments: segmentRows.results || [],
-  };
+  });
 }
 
 async function getTranscriptJob(db, jobId) {
@@ -1113,10 +1203,24 @@ async function getTranscriptJob(db, jobId) {
      WHERE job_id = ?
      ORDER BY segment_index ASC, start_seconds ASC`,
   ).bind(job.id).all();
-  return {
+  return enrichTranscriptPayload({
     job,
     segments: segmentRows.results || [],
-  };
+  });
+}
+
+function enrichTranscriptPayload(item) {
+  if (!item?.job) return item;
+  let payload = {};
+  try {
+    payload = JSON.parse(item.job.payload_json || '{}');
+  } catch {
+    payload = {};
+  }
+  item.job.stage = safeText(payload.stage);
+  item.job.message = safeText(payload.message);
+  item.job.progress = Number(payload.progress) || 0;
+  return item;
 }
 
 async function callOpenAIExtractor(env, { videoId, videoUrl, title, segments, model }) {
@@ -1457,7 +1561,7 @@ async function analyzeStoredTranscript(db, env, body) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
@@ -1552,7 +1656,47 @@ export default {
         if (!authorize(request, env)) {
           return jsonResponse({ ok: false, error: 'Unauthorized. Set Authorization: Bearer <SYNC_TOKEN>.' }, 401, request);
         }
-        const result = await transcribeWithWorkersAI(env.DB, env, request);
+        const body = await parseTranscriptRequest(request);
+        if (shouldRunYoutubeTranscriptInBackground(body)) {
+          const videoUrl = safeText(body.videoUrl || body.video_url || body.youtubeUrl || body.youtube_url);
+          const videoId = safeText(body.videoId || body.video_id) || extractYouTubeId(videoUrl);
+          const language = safeText(body.language) || 'hi';
+          const jobId = shortId('tx');
+          await insertTranscriptJob(env.DB, {
+            id: jobId,
+            video_id: videoId,
+            video_url: videoUrl,
+            audio_url: '',
+            status: 'running',
+            language,
+            model: 'external-youtube-extractor',
+            source: 'background-youtube-extractor',
+            payload_json: JSON.stringify({
+              stage: 'queued',
+              message: 'Transcript job accepted. Starting YouTube audio download...',
+              progress: 8,
+            }),
+          });
+          ctx.waitUntil(runExternalYouTubeTranscriptJob(env.DB, env, {
+            jobId,
+            videoUrl,
+            videoId,
+            language,
+          }));
+          return jsonResponse({
+            ok: true,
+            accepted: true,
+            job: {
+              id: jobId,
+              video_id: videoId,
+              video_url: videoUrl,
+              status: 'running',
+              stage: 'queued',
+              message: 'Transcript job accepted. Poll /api/transcripts/:videoId for progress.',
+            },
+          }, 202, request);
+        }
+        const result = await transcribeWithWorkersAI(env.DB, env, body);
         return jsonResponse({ ok: true, ...result }, 200, request);
       }
 

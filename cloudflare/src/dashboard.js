@@ -550,7 +550,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .analysis-cards {
       display: grid;
       gap: 10px;
-      margin-top: 14px;
+      margin-bottom: 14px;
+    }
+
+    .all-data-panel .analysis-cards {
+      margin-top: 0;
     }
 
     .analysis-card {
@@ -723,6 +727,87 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       font-weight: 850;
       color: #fff;
       white-space: nowrap;
+    }
+
+    .rate-cell {
+      min-width: 150px;
+    }
+
+    .rate-freshness {
+      display: inline-block;
+      margin-bottom: 5px;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .rate-freshness.today {
+      background: rgba(16, 163, 127, 0.2);
+      color: #9dffd8;
+      border: 1px solid rgba(16, 163, 127, 0.45);
+    }
+
+    .rate-freshness.latest {
+      background: rgba(77, 171, 247, 0.14);
+      color: #b8ddff;
+      border: 1px solid rgba(77, 171, 247, 0.35);
+    }
+
+    .rate-proof-link {
+      display: inline-block;
+      color: #fff;
+      font-weight: 900;
+      font-size: 14px;
+      text-decoration: none;
+      border-bottom: 1px dotted rgba(255, 255, 255, 0.45);
+    }
+
+    .rate-proof-link:hover {
+      color: #9dffd8;
+      border-bottom-color: #9dffd8;
+    }
+
+    .tally-date {
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .tally-sub {
+      display: block;
+      margin-top: 3px;
+      color: #999;
+      font-size: 11px;
+    }
+
+    .proof-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border: 1px solid #4a4a4a;
+      background: #2f2f2f;
+      color: #fff;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 850;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .proof-btn:hover {
+      background: #3a3a3a;
+      border-color: #10a37f;
+    }
+
+    .proof-quote {
+      margin-top: 6px;
+      color: #bdbdbd;
+      font-size: 11px;
+      line-height: 1.4;
+      max-width: 280px;
     }
 
     .table-timestamp-link {
@@ -1080,6 +1165,51 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       white-space: pre-wrap;
     }
 
+    .transcript-progress {
+      display: none;
+      margin-top: 10px;
+      padding: 12px;
+      border: 1px solid #d8e8de;
+      border-radius: 12px;
+      background: #f6fbf8;
+    }
+
+    .transcript-progress.show {
+      display: block;
+    }
+
+    .transcript-progress-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+      color: #4a5d52;
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .transcript-progress-track {
+      height: 10px;
+      border-radius: 999px;
+      background: #d9ebe2;
+      overflow: hidden;
+    }
+
+    .transcript-progress-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #1f7a4f, #3cb371);
+      transition: width 0.45s ease;
+    }
+
+    .transcript-progress-detail {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #234;
+      line-height: 1.4;
+    }
+
     .rich-video-grid {
       display: grid;
       grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
@@ -1222,8 +1352,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
             <div class="chart-help">Each line is a variety + grade + size + area series. Click a dot for source video, transcript context, and confidence.</div>
 
-            <div class="analysis-cards" id="analysisCards"></div>
-
             <div class="dashboard-tabs">
               <button class="tab-btn active" data-tab="rateList">Rate List</button>
               <button class="tab-btn" data-tab="allData">All Data</button>
@@ -1233,7 +1361,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
               <div class="panel-toolbar">
                 <div>
                   <div class="panel-title">Latest rate list</div>
-                  <div class="panel-note">Grouped by fruit, grade, size, and area. Each row links back to the timestamped source.</div>
+                  <div class="panel-note">Latest or today&apos;s rate per fruit, grade, size, and area. Click the rate or Verify to open the exact YouTube timestamp.</div>
                 </div>
                 <input id="rateSearch" class="search-box" placeholder="Search grade, size, area, source..." />
               </div>
@@ -1246,10 +1374,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
                       <th>Grade</th>
                       <th>Size</th>
                       <th>Area</th>
-                      <th>Latest rate</th>
-                      <th>Min</th>
-                      <th>Max</th>
-                      <th>Source</th>
+                      <th>Rate</th>
+                      <th>Last tallied</th>
+                      <th>Proof</th>
                       <th>Confidence</th>
                     </tr>
                   </thead>
@@ -1258,7 +1385,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
               </div>
             </div>
 
-            <div class="tab-panel" id="allDataPanel">
+            <div class="tab-panel all-data-panel" id="allDataPanel">
+              <div class="analysis-cards" id="analysisCards"></div>
               <div class="panel-toolbar">
                 <div>
                   <div class="panel-title">All extracted price rows</div>
@@ -1297,7 +1425,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <div class="modal-head">
         <div>
           <h2 id="modalTitle">Test transcript worker</h2>
-          <p style="margin-top:5px;color:#666;font-size:13px;">Paste a YouTube URL and run it. The server extracts the video audio, sends it to Cloudflare Workers AI, then stores timestamped Hindi/Hinglish transcript lines.</p>
+          <p style="margin-top:5px;color:#666;font-size:13px;">Paste a YouTube URL and run it. The server queues a background job: yt-dlp audio download, Whisper transcription, then D1 storage. Progress updates appear while you wait.</p>
         </div>
         <button class="modal-close" id="closeTesterBtn">×</button>
       </div>
@@ -1323,6 +1451,16 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           <button class="secondary-btn" id="clearTranscriptBtn">Clear result</button>
         </div>
         <div id="transcriptStatus" class="status">Ready.</div>
+        <div id="transcriptProgress" class="transcript-progress" aria-live="polite">
+          <div class="transcript-progress-head">
+            <span id="transcriptProgressLabel">Starting...</span>
+            <span id="transcriptProgressMeta">0:00 · check 0/0</span>
+          </div>
+          <div class="transcript-progress-track">
+            <div id="transcriptProgressFill" class="transcript-progress-fill"></div>
+          </div>
+          <div id="transcriptProgressDetail" class="transcript-progress-detail"></div>
+        </div>
         <div class="log" id="log"></div>
         <div>
           <div style="font-weight:850;margin-bottom:8px;">Transcript result</div>
@@ -1376,7 +1514,18 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       selectedArea: '',
       pointRows: [],
       transcriptCache: {},
+      lastPollStage: '',
       colors: ['#10a37f', '#f7b731', '#4dabf7', '#eb4d4b', '#be2edd', '#badc58', '#ff9f43', '#00d2d3']
+    };
+
+    var TRANSCRIPT_STAGE_LABELS = {
+      queued: 'Queued',
+      download_audio: 'Downloading audio',
+      openai_transcription: 'Transcribing audio',
+      saving: 'Saving transcript',
+      complete: 'Complete',
+      empty: 'No lines returned',
+      failed: 'Failed'
     };
 
     var produceNames = {
@@ -1422,10 +1571,53 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function fetchJson(path, options) {
       return fetch(path, options || {}).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) {
-          if (!response.ok || data.ok === false) throw new Error(data.error || ('Request failed: ' + response.status));
+          var accepted = response.status === 202 && data.ok !== false;
+          if ((!response.ok && !accepted) || data.ok === false) throw new Error(data.error || ('Request failed: ' + response.status));
           return data;
         });
       });
+    }
+
+    function formatElapsed(ms) {
+      var total = Math.max(0, Math.floor(Number(ms) / 1000));
+      var minutes = Math.floor(total / 60);
+      var seconds = total % 60;
+      return minutes + ':' + String(seconds).padStart(2, '0');
+    }
+
+    function resetTranscriptProgress() {
+      state.lastPollStage = '';
+      el('transcriptProgress').classList.remove('show');
+      el('transcriptProgressFill').style.width = '0%';
+      el('transcriptProgressLabel').textContent = 'Starting...';
+      el('transcriptProgressMeta').textContent = '0:00';
+      el('transcriptProgressDetail').textContent = '';
+    }
+
+    function setTranscriptProgress(options) {
+      var percent = Math.max(0, Math.min(100, Number(options.percent) || 0));
+      var stage = options.stage || '';
+      var message = options.message || '';
+      var elapsed = options.elapsed || '';
+      var attempt = options.attempt || '';
+      el('transcriptProgress').classList.add('show');
+      el('transcriptProgressFill').style.width = percent + '%';
+      el('transcriptProgressLabel').textContent = (TRANSCRIPT_STAGE_LABELS[stage] || stage || 'Working') + ' · ' + percent + '%';
+      el('transcriptProgressMeta').textContent = [elapsed, attempt].filter(Boolean).join(' · ');
+      el('transcriptProgressDetail').textContent = message;
+    }
+
+    function effectiveTranscriptProgress(job, elapsedMs) {
+      var server = Number(job && job.progress) || 0;
+      var stage = job && job.stage;
+      if (stage === 'queued') return Math.max(server, 8);
+      if (stage === 'download_audio' || stage === 'openai_transcription' || job.status === 'running') {
+        var bump = Math.min(28, Math.floor(elapsedMs / 3500));
+        return Math.max(server, Math.min(88, server + bump));
+      }
+      if (stage === 'saving') return Math.max(server, 90);
+      if (job && job.status === 'complete') return 100;
+      return server;
     }
 
     function extractVideoId(value) {
@@ -1497,6 +1689,37 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     function rowDate(row) {
       return String(row.market_date_sort || row.upload_date || row.market_date || '').slice(0, 10);
+    }
+
+    function todayIso() {
+      var now = new Date();
+      return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    }
+
+    function formatTallyDate(row) {
+      var date = rowDate(row);
+      if (!date) return 'Unknown';
+      try {
+        return new Date(date + 'T12:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      } catch (error) {
+        return date;
+      }
+    }
+
+    function rateFreshnessLabel(row) {
+      var date = rowDate(row);
+      if (date && date === todayIso()) return "Today's rate";
+      return 'Latest rate';
+    }
+
+    function rateFreshnessClass(row) {
+      return rowDate(row) === todayIso() ? 'today' : 'latest';
+    }
+
+    function proofSnippet(row) {
+      var text = String(row.clean_english_line || row.clean_hindi_line || row.original_line || row.context || row.price_notes || '').trim();
+      if (!text) return '';
+      return text.length > 120 ? text.slice(0, 117) + '...' : text;
     }
 
     function money(value) {
@@ -1620,29 +1843,65 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       });
     }
 
-    function pollStoredTranscript(videoUrl, attemptsLeft) {
+    function pollStoredTranscript(videoUrl, attemptsLeft, startedAt) {
       var id = extractVideoId(videoUrl);
       if (!id) return Promise.reject(new Error('Could not determine the YouTube video ID.'));
-      var remaining = Number(attemptsLeft) || 72;
-      setTranscriptStatus('Audio is processing in the background. Waiting for transcript...', '');
+      var remaining = Number(attemptsLeft) || 90;
+      var totalAttempts = 90;
+      var pollStart = Number(startedAt) || Date.now();
+      var attemptNumber = totalAttempts - remaining + 1;
+      var delayMs = attemptNumber <= 12 ? 2000 : 5000;
+      setTranscriptStatus('Background transcript in progress. This usually takes 1–3 minutes for a full mandi video.', '');
       return fetchJson('/api/transcripts/' + encodeURIComponent(id)).then(function (data) {
-        var status = data.job && data.job.status;
+        var job = data.job || {};
+        var status = job.status;
+        var stage = job.stage || status || 'running';
         var count = Array.isArray(data.segments) ? data.segments.length : 0;
+        var elapsed = formatElapsed(Date.now() - pollStart);
+        var progress = effectiveTranscriptProgress(job, Date.now() - pollStart);
+        var detail = job.message || 'Waiting for the extractor to finish download + Whisper transcription.';
+        setTranscriptProgress({
+          percent: progress,
+          stage: stage,
+          message: detail,
+          elapsed: elapsed + ' elapsed',
+          attempt: 'check ' + attemptNumber + '/' + totalAttempts
+        });
+        if (stage !== state.lastPollStage) {
+          state.lastPollStage = stage;
+          log((TRANSCRIPT_STAGE_LABELS[stage] || stage) + ': ' + detail);
+        }
         if (status === 'complete' && count) {
+          resetTranscriptProgress();
           renderTranscript(data);
-          log('Background transcript completed with ' + count + ' segment(s).');
+          log('Background transcript completed with ' + count + ' segment(s) in ' + elapsed + '.');
+          setTranscriptStatus('Transcript ready: ' + count + ' segment(s). Running AI analysis...', 'ok');
           return runAnalysisForVideo(videoUrl, id).then(function () { return data; });
         }
-        if (status === 'failed') throw new Error(data.job.error || 'Background transcript failed.');
-        if (remaining <= 1) throw new Error('Transcript is still processing. Use Load stored transcript shortly.');
-        setTranscriptStatus('Processing audio: ' + (status || 'starting') + '. Checking again...', '');
-        return new Promise(function (resolve) { setTimeout(resolve, 5000); })
-          .then(function () { return pollStoredTranscript(videoUrl, remaining - 1); });
+        if (status === 'empty') {
+          resetTranscriptProgress();
+          renderTranscript(data);
+          throw new Error(job.message || 'Transcript finished but returned no lines.');
+        }
+        if (status === 'failed') throw new Error(job.error || job.message || 'Background transcript failed.');
+        if (remaining <= 1) throw new Error('Transcript is still processing after ~7 minutes. Try Load stored transcript in a minute.');
+        return new Promise(function (resolve) { setTimeout(resolve, delayMs); })
+          .then(function () { return pollStoredTranscript(videoUrl, remaining - 1, pollStart); });
       }).catch(function (error) {
-        if (remaining <= 1 || /failed|Unauthorized/i.test(error.message)) throw error;
-        setTranscriptStatus('Downloader is still working. Checking again...', '');
-        return new Promise(function (resolve) { setTimeout(resolve, 5000); })
-          .then(function () { return pollStoredTranscript(videoUrl, remaining - 1); });
+        if (remaining <= 1 || /failed|Unauthorized|no lines/i.test(error.message)) {
+          resetTranscriptProgress();
+          throw error;
+        }
+        var elapsed = formatElapsed(Date.now() - pollStart);
+        setTranscriptProgress({
+          percent: Math.min(40, 10 + attemptNumber),
+          stage: 'queued',
+          message: 'Job not visible yet or still warming up. Retrying...',
+          elapsed: elapsed + ' elapsed',
+          attempt: 'check ' + attemptNumber + '/' + totalAttempts
+        });
+        return new Promise(function (resolve) { setTimeout(resolve, delayMs); })
+          .then(function () { return pollStoredTranscript(videoUrl, remaining - 1, pollStart); });
       });
     }
 
@@ -1843,11 +2102,28 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         return String(rowDate(b)).localeCompare(String(rowDate(a))) || produceLabel(a).localeCompare(produceLabel(b));
       });
       if (!rows.length) {
-        el('rateListBody').innerHTML = '<tr><td colspan="10"><div class="empty-list">No rate rows match the current filters.</div></td></tr>';
+        el('rateListBody').innerHTML = '<tr><td colspan="9"><div class="empty-list">No rate rows match the current filters.</div></td></tr>';
         return;
       }
       el('rateListBody').innerHTML = rows.map(function (row) {
-        return '<tr><td>' + escapeHtml(produceLabel(row)) + '</td><td>' + escapeHtml(row.variety || '') + '</td><td>' + escapeHtml(gradeLabel(row)) + '</td><td>' + escapeHtml(sizeLabel(row)) + '</td><td>' + escapeHtml(areaLabel(row)) + '</td><td class="rate-price">' + escapeHtml(rateRange(row)) + '</td><td>' + escapeHtml(money(row.min_price_inr)) + '</td><td>' + escapeHtml(money(row.max_price_inr)) + '</td><td><div class="mini-source"><img class="mini-thumb" src="' + escapeHtml(videoThumb(row)) + '" alt=""><div><a class="table-timestamp-link" href="' + escapeHtml(timestampUrl(row)) + '" target="_blank" rel="noreferrer">' + escapeHtml(row.timestamp_label || secondsToClock(row.timestamp_seconds)) + '</a><div class="mini-title">' + escapeHtml(row.video_title || 'YouTube source') + '</div></div></div></td><td><span class="confidence-pill">' + escapeHtml(confidenceLabel(row)) + '</span></td></tr>';
+        var proofUrl = timestampUrl(row);
+        var proofTime = row.timestamp_label || secondsToClock(row.timestamp_seconds);
+        var quote = proofSnippet(row);
+        var freshness = rateFreshnessLabel(row);
+        var freshnessClass = rateFreshnessClass(row);
+        return '<tr>'
+          + '<td>' + escapeHtml(produceLabel(row)) + '</td>'
+          + '<td>' + escapeHtml(row.variety || '') + '</td>'
+          + '<td>' + escapeHtml(gradeLabel(row)) + '</td>'
+          + '<td>' + escapeHtml(sizeLabel(row)) + '</td>'
+          + '<td>' + escapeHtml(areaLabel(row)) + '</td>'
+          + '<td class="rate-cell"><span class="rate-freshness ' + freshnessClass + '">' + escapeHtml(freshness) + '</span><br><a class="rate-proof-link" href="' + escapeHtml(proofUrl) + '" target="_blank" rel="noreferrer">' + escapeHtml(rateRange(row)) + '</a></td>'
+          + '<td><span class="tally-date">' + escapeHtml(formatTallyDate(row)) + '</span><span class="tally-sub">at ' + escapeHtml(proofTime) + ' in video</span></td>'
+          + '<td><a class="proof-btn" href="' + escapeHtml(proofUrl) + '" target="_blank" rel="noreferrer">▶ Verify at ' + escapeHtml(proofTime) + '</a>'
+          + (quote ? '<div class="proof-quote">&ldquo;' + escapeHtml(quote) + '&rdquo;</div>' : '')
+          + '<div class="mini-source" style="margin-top:8px;"><img class="mini-thumb" src="' + escapeHtml(videoThumb(row)) + '" alt=""><div><div class="mini-title">' + escapeHtml(row.video_title || 'YouTube source') + '</div></div></div></td>'
+          + '<td><span class="confidence-pill">' + escapeHtml(confidenceLabel(row)) + '</span></td>'
+          + '</tr>';
       }).join('');
     }
 
@@ -1968,7 +2244,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('videoThumb').src = 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/hqdefault.jpg';
       el('videoIdLabel').textContent = 'Video ID: ' + id;
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
-      el('videoHint').textContent = 'The server will extract audio from this YouTube video and transcribe it with Cloudflare Workers AI.';
+      el('videoHint').textContent = 'YouTube URLs run in the background: yt-dlp download (~30–90s) then Whisper transcription (1–3 min). Progress updates appear below.';
     }
 
     function runTranscript() {
@@ -1977,8 +2253,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var file = el('audioFile').files[0];
       var language = el('language').value;
       el('runTranscriptBtn').disabled = true;
-      setTranscriptStatus(file || audioUrl ? 'Starting transcription...' : 'Extracting YouTube audio...', '');
-      log(file || audioUrl ? 'Starting transcript request.' : 'Extracting YouTube audio and sending it to Cloudflare Workers AI.');
+      resetTranscriptProgress();
+      setTranscriptStatus(file || audioUrl ? 'Starting transcription...' : 'Starting background YouTube transcript job...', '');
+      log(file || audioUrl ? 'Starting transcript request.' : 'Submitting YouTube URL for background transcription.');
       var request;
       if (file) {
         var form = new FormData();
@@ -1993,17 +2270,31 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           body: JSON.stringify({ videoUrl: videoUrl, audioUrl: audioUrl, language: language })
         });
       }
+      var pollStart = Date.now();
       request.then(function (data) {
+        if (data.accepted && data.job) {
+          log('Job ' + data.job.id + ' accepted. Polling every 2–5s for stage updates...');
+          setTranscriptProgress({
+            percent: 10,
+            stage: data.job.stage || 'queued',
+            message: data.job.message || 'Job accepted. Starting download...',
+            elapsed: '0:00 elapsed',
+            attempt: 'check 1/90'
+          });
+          return pollStoredTranscript(videoUrl, 90, pollStart);
+        }
+        resetTranscriptProgress();
         renderTranscript(data);
         setTranscriptStatus('Transcript run finished: ' + data.job.segment_count + ' segment(s).', data.job.segment_count ? 'ok' : '');
         log('Transcript job ' + data.job.id + ' finished with ' + data.job.segment_count + ' segment(s).');
         if (data.job.segment_count) return runAnalysisForVideo(videoUrl, data.job.video_id);
         return null;
       }).catch(function (error) {
-        if (!file && !audioUrl && extractVideoId(videoUrl)) {
-          log('Initial request ended before the background job. Polling saved transcript...');
-          return pollStoredTranscript(videoUrl, 72);
+        if (!file && !audioUrl && extractVideoId(videoUrl) && !/failed|Unauthorized|no lines/i.test(error.message)) {
+          log('Request ended early (older worker or timeout). Falling back to polling saved transcript...');
+          return pollStoredTranscript(videoUrl, 90, pollStart);
         }
+        resetTranscriptProgress();
         setTranscriptStatus(error.message, 'bad');
         log('ERROR: ' + error.message);
       }).finally(function () {
@@ -2127,6 +2418,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('clearTranscriptBtn').addEventListener('click', function () {
         el('transcriptBox').innerHTML = '<div class="status">Run a transcript or load a stored one.</div>';
         el('transcriptMeta').textContent = 'No transcript loaded.';
+        resetTranscriptProgress();
         setTranscriptStatus('Ready.', '');
       });
       ['dateFrom', 'dateTo', 'rateSearch', 'dataSearch'].forEach(function (id) {
