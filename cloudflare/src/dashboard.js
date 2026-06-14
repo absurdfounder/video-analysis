@@ -1212,9 +1212,247 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     .rich-video-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+      grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
       gap: 14px;
       align-items: start;
+    }
+
+    .modal-panel.rich-modal {
+      width: min(1280px, 96vw);
+      max-height: 92vh;
+      background: #161616;
+      color: #ececec;
+      border-color: #343434;
+    }
+
+    .modal-panel.rich-modal .modal-head {
+      background: rgba(22, 22, 22, 0.96);
+      border-bottom-color: #333;
+    }
+
+    .modal-panel.rich-modal .modal-head h2 {
+      color: #fff;
+      font-size: 18px;
+      line-height: 1.35;
+    }
+
+    .modal-panel.rich-modal .modal-head p {
+      color: #9a9a9a !important;
+    }
+
+    .modal-panel.rich-modal .modal-close {
+      color: #ddd;
+    }
+
+    .rich-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 18px 12px;
+      border-bottom: 1px solid #2d2d2d;
+    }
+
+    .rich-stat {
+      border: 1px solid #353535;
+      background: #222;
+      color: #ddd;
+      border-radius: 999px;
+      padding: 6px 11px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .rich-tabs {
+      display: flex;
+      gap: 8px;
+      padding: 12px 18px 0;
+      overflow-x: auto;
+    }
+
+    .rich-tab-btn {
+      border: 1px solid #3a3a3a;
+      background: #242424;
+      color: #bdbdbd;
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 850;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .rich-tab-btn.active {
+      background: #fff;
+      color: #111;
+      border-color: #fff;
+    }
+
+    .rich-modal-body {
+      padding-top: 12px;
+      max-height: calc(92vh - 170px);
+      overflow: auto;
+    }
+
+    .rich-tab-panel {
+      display: none;
+      gap: 12px;
+    }
+
+    .rich-tab-panel.active {
+      display: grid;
+    }
+
+    .rich-panel {
+      border: 1px solid #333;
+      border-radius: 15px;
+      background: #202020;
+      padding: 12px;
+    }
+
+    .modal-panel.rich-modal .rich-panel {
+      border-color: #333;
+      background: #202020;
+    }
+
+    .rich-panel-title {
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #8f8f8f;
+      margin-bottom: 8px;
+    }
+
+    .rich-summary-text {
+      color: #d7d7d7;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .rich-intel-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .rich-intel-card {
+      width: 100%;
+      border: 1px solid #353535;
+      background: #1a1a1a;
+      color: #ececec;
+      text-align: left;
+      border-radius: 12px;
+      padding: 10px 11px;
+      cursor: pointer;
+      line-height: 1.4;
+    }
+
+    .rich-intel-card:hover {
+      border-color: #10a37f;
+      background: #1f2623;
+    }
+
+    .rich-intel-card strong {
+      display: block;
+      color: #fff;
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+
+    .rich-intel-card span {
+      display: block;
+      color: #b7b7b7;
+      font-size: 12px;
+    }
+
+    .rich-intel-empty {
+      color: #777;
+      font-size: 12px;
+      padding: 4px 0;
+    }
+
+    .rich-rates-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .rich-rates-table th,
+    .rich-rates-table td {
+      padding: 10px 11px;
+      border-bottom: 1px solid #333;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .rich-rates-table th {
+      color: #9a9a9a;
+      font-weight: 800;
+      background: #1b1b1b;
+      position: sticky;
+      top: 0;
+    }
+
+    .rich-rates-table td { color: #ececec; }
+
+    .rich-rate-link {
+      color: #9dffd8;
+      font-weight: 900;
+      text-decoration: none;
+      border-bottom: 1px dotted rgba(157, 255, 216, 0.45);
+    }
+
+    .rich-list {
+      display: grid;
+      gap: 7px;
+      max-height: min(52vh, 520px);
+      overflow: auto;
+      padding-right: 3px;
+    }
+
+    .rich-row {
+      width: 100%;
+      border: 1px solid #353535;
+      background: #1a1a1a;
+      color: #ececec;
+      text-align: left;
+      border-radius: 12px;
+      padding: 8px 10px;
+      display: grid;
+      grid-template-columns: 58px 1fr;
+      gap: 8px;
+      line-height: 1.35;
+      cursor: pointer;
+    }
+
+    .rich-row:hover {
+      border-color: #10a37f;
+      background: #1f2623;
+    }
+
+    .rich-row time {
+      color: #9dffd8;
+      font-weight: 900;
+      font-size: 12px;
+    }
+
+    .modal-panel.rich-modal .small-chip {
+      background: #2a2a2a;
+      border-color: #404040;
+      color: #ddd;
+    }
+
+    .modal-panel.rich-modal .analysis-summary,
+    .modal-panel.rich-modal .rich-summary-text {
+      color: #d0d0d0;
+    }
+
+    @media (max-width: 1120px) {
+      .dashboard-head { flex-direction: column; }
+      .dashboard-actions { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .filters-grid { grid-template-columns: 1fr 1fr; }
+      .suggestions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .rich-intel-grid { grid-template-columns: 1fr; }
     }
 
     .video-frame {
@@ -1223,48 +1461,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       border: none;
       border-radius: 16px;
       background: #111;
-    }
-
-    .rich-panel {
-      border: 1px solid #dedede;
-      border-radius: 15px;
-      background: #fff;
-      padding: 12px;
-    }
-
-    .rich-list {
-      display: grid;
-      gap: 7px;
-      max-height: 360px;
-      overflow: auto;
-      padding-right: 3px;
-    }
-
-    .rich-row {
-      width: 100%;
-      border: 1px solid #e2e2e2;
-      background: #fafafa;
-      color: #111;
-      text-align: left;
-      border-radius: 12px;
-      padding: 8px 10px;
-      display: grid;
-      grid-template-columns: 58px 1fr;
-      gap: 8px;
-      line-height: 1.35;
-    }
-
-    .rich-row time {
-      color: #105834;
-      font-weight: 900;
-      font-size: 12px;
-    }
-
-    @media (max-width: 1120px) {
-      .dashboard-head { flex-direction: column; }
-      .dashboard-actions { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .filters-grid { grid-template-columns: 1fr 1fr; }
-      .suggestions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     @media (max-width: 900px) {
@@ -1472,7 +1668,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
   </div>
 
   <div class="modal" id="videoModal" aria-hidden="true">
-    <div class="modal-panel wide" role="dialog" aria-modal="true" aria-labelledby="videoModalTitle">
+    <div class="modal-panel wide rich-modal" role="dialog" aria-modal="true" aria-labelledby="videoModalTitle">
       <div class="modal-head">
         <div>
           <h2 id="videoModalTitle">Rich video</h2>
@@ -1480,24 +1676,78 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         </div>
         <button class="modal-close" id="closeVideoModalBtn">×</button>
       </div>
-      <div class="modal-body">
-        <div class="rich-video-grid">
-          <div>
-            <iframe id="richVideoFrame" class="video-frame" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
-            <div class="rich-panel" style="margin-top:12px;">
-              <div style="font-weight:850;margin-bottom:8px;">Metadata</div>
+      <div class="rich-stats" id="richStats"></div>
+      <div class="rich-tabs" id="richTabs">
+        <button class="rich-tab-btn active" data-rich-tab="overview">Overview</button>
+        <button class="rich-tab-btn" data-rich-tab="rates">Rates</button>
+        <button class="rich-tab-btn" data-rich-tab="intel">Intelligence</button>
+        <button class="rich-tab-btn" data-rich-tab="transcript">Transcript</button>
+      </div>
+      <div class="modal-body rich-modal-body">
+        <div class="rich-tab-panel active" id="richTabOverview">
+          <div class="rich-video-grid">
+            <div>
+              <iframe id="richVideoFrame" class="video-frame" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+              <div class="rich-panel" style="margin-top:12px;">
+                <div class="rich-panel-title">Summary</div>
+                <div id="richSummary" class="rich-summary-text"></div>
+              </div>
+            </div>
+            <div class="rich-panel">
+              <div class="rich-panel-title">Metadata</div>
               <div id="richMetaChips" class="chip-row"></div>
-              <div id="richSummary" class="analysis-summary"></div>
+              <div id="richOverviewMentions" class="rich-intel-grid" style="margin-top:10px;"></div>
             </div>
           </div>
+        </div>
+        <div class="rich-tab-panel" id="richTabRates">
           <div class="rich-panel">
-            <div style="font-weight:850;margin-bottom:8px;">Timestamped transcript</div>
-            <div id="richTranscript" class="rich-list"><div class="status">Loading transcript...</div></div>
+            <div class="rich-panel-title">All saved rate rows</div>
+            <div style="overflow:auto;max-height:min(58vh,560px);">
+              <table class="rich-rates-table">
+                <thead>
+                  <tr>
+                    <th>Fruit</th>
+                    <th>Variety</th>
+                    <th>Grade</th>
+                    <th>Rate</th>
+                    <th>Date</th>
+                    <th>Proof</th>
+                    <th>Context</th>
+                  </tr>
+                </thead>
+                <tbody id="richRatesBody"></tbody>
+              </table>
+            </div>
           </div>
         </div>
-        <div class="rich-panel">
-          <div style="font-weight:850;margin-bottom:8px;">Facts & guidance</div>
-          <div id="richFacts" class="mention-grid"></div>
+        <div class="rich-tab-panel" id="richTabIntel">
+          <div class="rich-panel">
+            <div class="rich-panel-title">Facts</div>
+            <div id="richFacts" class="rich-intel-grid"></div>
+          </div>
+          <div class="rich-panel">
+            <div class="rich-panel-title">Guidance</div>
+            <div id="richGuidance" class="rich-intel-grid"></div>
+          </div>
+          <div class="rich-panel">
+            <div class="rich-panel-title">Learnings</div>
+            <div id="richLearnings" class="rich-intel-grid"></div>
+          </div>
+          <div class="rich-panel">
+            <div class="rich-panel-title">Price mentions</div>
+            <div id="richMentions" class="rich-intel-grid"></div>
+          </div>
+          <div class="rich-panel">
+            <div class="rich-panel-title">Chapters / sections</div>
+            <div id="richChapters" class="rich-intel-grid"></div>
+          </div>
+        </div>
+        <div class="rich-tab-panel" id="richTabTranscript">
+          <div class="rich-panel">
+            <div class="rich-panel-title">Timestamped transcript</div>
+            <div id="richTranscript" class="rich-list"><div class="status">Loading transcript...</div></div>
+          </div>
         </div>
       </div>
     </div>
@@ -2164,6 +2414,154 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       return item.text_english || item.text_hinglish || item.title || item.summary || '';
     }
 
+    function renderMetaCards(items, url, limit) {
+      return items.slice(0, limit || items.length).map(function (item) {
+        var seconds = Number(item.timestamp_seconds) || 0;
+        return '<a class="small-chip warn" href="' + escapeHtml(timestampVideoUrl(url, seconds)) + '" target="_blank" rel="noreferrer">▶ ' + escapeHtml(secondsToClock(seconds) + ' · ' + itemText(item).slice(0, 110)) + '</a>';
+      }).join('');
+    }
+
+    function metaListAll(items) {
+      return (Array.isArray(items) ? items : []).filter(Boolean);
+    }
+
+    function dedupeIntel(items) {
+      var seen = {};
+      return items.filter(function (item) {
+        var text = itemText(item).toLowerCase();
+        if (!text) return false;
+        var key = String(item.timestamp_seconds || 0) + '|' + text.slice(0, 96);
+        if (seen[key]) return false;
+        seen[key] = true;
+        return true;
+      }).sort(function (a, b) {
+        return (Number(a.timestamp_seconds) || 0) - (Number(b.timestamp_seconds) || 0);
+      });
+    }
+
+    function buildVideoIntel(meta, rows) {
+      meta = meta || {};
+      rows = rows || [];
+      var facts = metaListAll(meta.facts);
+      var guidance = metaListAll(meta.guidance);
+      var learnings = metaListAll(meta.learnings || meta.key_takeaways);
+      var mentions = metaListAll(meta.price_mentions);
+      var chapters = metaListAll(meta.chapters);
+
+      metaListAll(meta.transcript_highlights).forEach(function (item) {
+        if (item.importance && item.importance !== 'transcript' && itemText(item)) learnings.push(item);
+      });
+
+      mentions.forEach(function (mention) {
+        if (!mention.min_price_inr && !mention.max_price_inr && itemText(mention)) {
+          facts.push(Object.assign({}, mention, { title: mention.title || 'Market mention' }));
+        }
+      });
+
+      chapters.forEach(function (chapter) {
+        if (itemText(chapter)) facts.push(Object.assign({}, chapter, { title: chapter.title || 'Section' }));
+      });
+
+      rows.forEach(function (row) {
+        mentions.push({
+          fruit_label: produceLabel(row),
+          variety: row.variety || '',
+          quality_grade: row.quality_grade || gradeLabel(row),
+          min_price_inr: row.min_price_inr,
+          max_price_inr: row.max_price_inr,
+          unit: row.unit,
+          timestamp_seconds: row.timestamp_seconds,
+          text_english: row.clean_english_line || row.context || row.price_notes,
+          text_hinglish: row.clean_hindi_line || row.original_line,
+          confidence: row.confidence,
+        });
+        if (row.context || row.price_notes || row.clean_hindi_line || row.clean_english_line) {
+          guidance.push({
+            timestamp_seconds: row.timestamp_seconds || 0,
+            title: produceLabel(row) + (row.variety ? ' · ' + row.variety : '') + ' · ' + rateRange(row),
+            text_english: row.clean_english_line || row.context || row.price_notes || '',
+            text_hinglish: row.clean_hindi_line || row.original_line || '',
+            importance: 'high',
+          });
+        }
+      });
+
+      metaListAll(meta.grouped_produce).forEach(function (group) {
+        var ts = Array.isArray(group.timestamps) && group.timestamps.length ? group.timestamps[0] : 0;
+        var range = group.min_price_inr || group.max_price_inr
+          ? money(group.min_price_inr || group.max_price_inr) + (group.max_price_inr && group.max_price_inr !== group.min_price_inr ? ' - ' + money(group.max_price_inr) : '')
+          : '';
+        learnings.push({
+          timestamp_seconds: ts,
+          title: (group.fruit_label || 'Produce') + ' summary',
+          text_english: (group.mention_count || 0) + ' mentions' + (range ? (' · ' + range) : ''),
+          text_hinglish: '',
+          importance: 'medium',
+        });
+      });
+
+      return {
+        facts: dedupeIntel(facts),
+        guidance: dedupeIntel(guidance),
+        learnings: dedupeIntel(learnings),
+        mentions: dedupeIntel(mentions),
+        chapters: dedupeIntel(chapters),
+      };
+    }
+
+    function renderRichIntelCards(container, items, emptyText) {
+      if (!items.length) {
+        container.innerHTML = '<div class="rich-intel-empty">' + escapeHtml(emptyText) + '</div>';
+        return;
+      }
+      container.innerHTML = items.map(function (item) {
+        var seconds = Number(item.timestamp_seconds) || 0;
+        return '<button class="rich-intel-card rich-jump" data-seconds="' + seconds + '"><strong>▶ ' + escapeHtml(secondsToClock(seconds) + ' · ' + (item.title || item.fruit_label || 'Note')) + '</strong><span>' + escapeHtml(itemText(item)) + '</span></button>';
+      }).join('');
+    }
+
+    function renderRichRatesTable(rows, url) {
+      if (!rows.length) {
+        el('richRatesBody').innerHTML = '<tr><td colspan="7"><div class="rich-intel-empty">No saved rate rows for this video yet.</div></td></tr>';
+        return;
+      }
+      el('richRatesBody').innerHTML = rows.slice().sort(function (a, b) {
+        return Number(a.timestamp_seconds || 0) - Number(b.timestamp_seconds || 0);
+      }).map(function (row) {
+        var proofUrl = timestampUrl(row);
+        var proofTime = row.timestamp_label || secondsToClock(row.timestamp_seconds);
+        return '<tr>'
+          + '<td>' + escapeHtml(produceLabel(row)) + '</td>'
+          + '<td>' + escapeHtml(row.variety || '') + '</td>'
+          + '<td>' + escapeHtml(gradeLabel(row)) + '</td>'
+          + '<td><a class="rich-rate-link" href="' + escapeHtml(proofUrl) + '" target="_blank" rel="noreferrer">' + escapeHtml(rateRange(row)) + '</a></td>'
+          + '<td>' + escapeHtml(formatTallyDate(row)) + '</td>'
+          + '<td><button class="rich-tab-btn rich-jump" data-seconds="' + Number(row.timestamp_seconds || 0) + '">▶ ' + escapeHtml(proofTime) + '</button></td>'
+          + '<td>' + escapeHtml(row.clean_english_line || row.clean_hindi_line || row.context || row.price_notes || row.original_line || '') + '</td>'
+          + '</tr>';
+      }).join('');
+    }
+
+    function switchRichTab(tabName) {
+      document.querySelectorAll('.rich-tab-btn').forEach(function (button) {
+        button.classList.toggle('active', button.getAttribute('data-rich-tab') === tabName);
+      });
+      document.querySelectorAll('.rich-tab-panel').forEach(function (panel) {
+        panel.classList.toggle('active', panel.id === 'richTab' + tabName.charAt(0).toUpperCase() + tabName.slice(1));
+      });
+    }
+
+    function bindRichJumps(videoId) {
+      function bindJump(button) {
+        button.addEventListener('click', function () {
+          var seconds = Number(button.getAttribute('data-seconds')) || 0;
+          el('richVideoFrame').src = embedUrl(videoId, seconds);
+          switchRichTab('overview');
+        });
+      }
+      document.querySelectorAll('#videoModal .rich-jump').forEach(bindJump);
+    }
+
     function renderAnalysisCards() {
       var container = el('analysisCards');
       if (!state.analysisItems.length) {
@@ -2184,7 +2582,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         var title = meta.video_title || (rows[0] && rows[0].video_title) || id;
         var url = meta.video_url || (rows[0] && rows[0].video_url) || ('https://www.youtube.com/watch?v=' + id);
         var groups = metaList(meta.grouped_produce, 5);
-        var facts = metaList([].concat(meta.facts || [], meta.guidance || [], meta.key_takeaways || []), 4);
+        var facts = metaList(meta.facts || [], 6);
+        var guidance = metaList(meta.guidance || [], 5);
+        var learnings = metaList(meta.learnings || meta.key_takeaways || [], 5);
         var mentions = metaList(meta.price_mentions, 6);
         var produceHtml = groups.length ? groups.map(function (group) {
           var range = group.min_price_inr || group.max_price_inr ? money(group.min_price_inr || group.max_price_inr) + (group.max_price_inr && group.max_price_inr !== group.min_price_inr ? ' - ' + money(group.max_price_inr) : '') : (group.mention_count || 0) + ' mention(s)';
@@ -2192,16 +2592,15 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         }).join('') : rows.slice(0, 5).map(function (row) {
           return '<span class="small-chip good">' + escapeHtml(produceLabel(row) + ' · ' + rateRange(row)) + '</span>';
         }).join('');
-        var factsHtml = facts.map(function (fact) {
-          var seconds = Number(fact.timestamp_seconds) || 0;
-          return '<a class="small-chip warn" href="' + escapeHtml(timestampVideoUrl(url, seconds)) + '" target="_blank" rel="noreferrer">▶ ' + escapeHtml(secondsToClock(seconds) + ' · ' + itemText(fact).slice(0, 86)) + '</a>';
-        }).join('');
+        var factsHtml = renderMetaCards(facts, url, 6);
+        var guidanceHtml = renderMetaCards(guidance, url, 5);
+        var learningsHtml = renderMetaCards(learnings, url, 5);
         var mentionHtml = mentions.length ? '<div class="mention-grid">' + mentions.slice(0, 4).map(function (mention) {
           var seconds = Number(mention.timestamp_seconds) || 0;
           var price = mention.min_price_inr || mention.max_price_inr ? money(mention.min_price_inr || mention.max_price_inr) + (mention.max_price_inr && mention.max_price_inr !== mention.min_price_inr ? ' - ' + money(mention.max_price_inr) : '') : 'Rate not stated';
           return '<div class="mention-card"><strong>' + escapeHtml((mention.fruit_emoji ? mention.fruit_emoji + ' ' : '') + (mention.fruit_label || mention.fruit || 'Produce') + ' · ' + price) + '</strong><span>' + escapeHtml(secondsToClock(seconds) + ' · ' + (mention.quality_grade || mention.quality_label || mention.size_label || mention.area_name || 'market mention')) + '</span></div>';
         }).join('') + '</div>' : '';
-        return '<article class="analysis-card"><img class="analysis-thumb" src="' + escapeHtml(videoThumbById(id)) + '" alt=""><div><div class="analysis-title-row"><div><div class="analysis-title">' + escapeHtml(title) + '</div><div class="analysis-summary">' + escapeHtml(meta.summary_english || ((rows.length || item.mention_count || 0) + ' saved price mention(s).')) + '</div></div><button class="secondary-btn rich-video-btn" data-video-id="' + escapeHtml(id) + '">Rich video</button></div><div class="chip-row"><span class="small-chip">' + escapeHtml(meta.market_date || item.market_date || 'Market date') + '</span><span class="small-chip">' + escapeHtml((meta.mention_count || item.mention_count || rows.length || 0) + ' mentions') + '</span><a class="small-chip" href="' + escapeHtml(url) + '" target="_blank" rel="noreferrer">Open YouTube</a></div><div class="analysis-section-title">Produce & prices</div><div class="chip-row">' + produceHtml + '</div>' + (factsHtml ? '<div class="analysis-section-title">Facts & guidance</div><div class="chip-row">' + factsHtml + '</div>' : '') + mentionHtml + '</div></article>';
+        return '<article class="analysis-card"><img class="analysis-thumb" src="' + escapeHtml(videoThumbById(id)) + '" alt=""><div><div class="analysis-title-row"><div><div class="analysis-title">' + escapeHtml(title) + '</div><div class="analysis-summary">' + escapeHtml(meta.summary_english || ((rows.length || item.mention_count || 0) + ' saved price mention(s).')) + '</div></div><button class="secondary-btn rich-video-btn" data-video-id="' + escapeHtml(id) + '">Rich video</button></div><div class="chip-row"><span class="small-chip">' + escapeHtml(meta.market_date || item.market_date || 'Market date') + '</span><span class="small-chip">' + escapeHtml((facts.length + guidance.length + learnings.length) + ' intel notes') + '</span><span class="small-chip">' + escapeHtml((meta.mention_count || item.mention_count || rows.length || 0) + ' price mentions') + '</span><a class="small-chip" href="' + escapeHtml(url) + '" target="_blank" rel="noreferrer">Open YouTube</a></div><div class="analysis-section-title">Produce & prices</div><div class="chip-row">' + produceHtml + '</div>' + (factsHtml ? '<div class="analysis-section-title">Facts</div><div class="chip-row">' + factsHtml + '</div>' : '') + (guidanceHtml ? '<div class="analysis-section-title">Guidance</div><div class="chip-row">' + guidanceHtml + '</div>' : '') + (learningsHtml ? '<div class="analysis-section-title">Learnings</div><div class="chip-row">' + learningsHtml + '</div>' : '') + mentionHtml + '</div></article>';
       }).join('');
       container.querySelectorAll('.rich-video-btn').forEach(function (button) {
         button.addEventListener('click', function () {
@@ -2340,62 +2739,90 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     function openRichVideo(videoId) {
-      var item = state.analysisItems.find(function (entry) { return entry.video_id === videoId || (entry.meta && entry.meta.video_id === videoId); }) || {};
-      var meta = item.meta || {};
+      var cachedItem = state.analysisItems.find(function (entry) { return entry.video_id === videoId || (entry.meta && entry.meta.video_id === videoId); }) || {};
       var rows = state.priceRows.filter(function (row) { return (row.video_id || extractVideoId(row.video_url)) === videoId; });
-      var url = meta.video_url || (rows[0] && rows[0].video_url) || ('https://www.youtube.com/watch?v=' + videoId);
-      var title = meta.video_title || (rows[0] && rows[0].video_title) || videoId;
+      var url = (cachedItem.meta && cachedItem.meta.video_url) || (rows[0] && rows[0].video_url) || ('https://www.youtube.com/watch?v=' + videoId);
+      var title = (cachedItem.meta && cachedItem.meta.video_title) || (rows[0] && rows[0].video_title) || videoId;
+
       el('videoModalTitle').textContent = title;
-      el('videoModalSub').textContent = [meta.market_date, (meta.mention_count || rows.length || 0) + ' mention(s)', rows.length + ' saved rate row(s)'].filter(Boolean).join(' · ');
+      el('videoModalSub').textContent = 'Loading extracted data...';
       el('richVideoFrame').src = embedUrl(videoId, 0);
-      var chipValues = []
-        .concat(meta.produce || [])
-        .concat(meta.qualities || [])
-        .concat(meta.areas || [])
-        .concat(meta.parties || [])
-        .slice(0, 28);
-      el('richMetaChips').innerHTML = chipValues.map(function (value) {
-        return '<span class="small-chip">' + escapeHtml(value) + '</span>';
-      }).join('') || '<span class="small-chip">No metadata yet</span>';
-      el('richSummary').textContent = meta.summary_english || '';
-      var facts = metaList([].concat(meta.facts || [], meta.guidance || [], meta.key_takeaways || [], meta.chapters || []), 18);
-      el('richFacts').innerHTML = facts.length ? facts.map(function (fact) {
-        var seconds = Number(fact.timestamp_seconds) || 0;
-        return '<button class="mention-card rich-jump" data-seconds="' + seconds + '"><strong>▶ ' + escapeHtml(secondsToClock(seconds) + ' · ' + (fact.title || 'Fact')) + '</strong><span>' + escapeHtml(itemText(fact)) + '</span></button>';
-      }).join('') : '<div class="empty-list">No facts or guidance saved for this video yet. Re-run analysis to refresh metadata.</div>';
-      el('richTranscript').innerHTML = '<div class="status">Loading transcript...</div>';
+      switchRichTab('overview');
       el('videoModal').classList.add('show');
       el('videoModal').setAttribute('aria-hidden', 'false');
+
+      function renderRichModal(meta) {
+        meta = meta || {};
+        var intel = buildVideoIntel(meta, rows);
+        var chipValues = metaListAll(meta.produce)
+          .concat(metaListAll(meta.qualities))
+          .concat(metaListAll(meta.areas))
+          .concat(metaListAll(meta.parties))
+          .concat(metaListAll(meta.mandi_names));
+
+        el('videoModalSub').textContent = [
+          meta.market_date || rowDate(rows[0] || {}),
+          rows.length + ' rate row(s)',
+          intel.mentions.length + ' mention(s)',
+          (intel.facts.length + intel.guidance.length + intel.learnings.length) + ' intel note(s)',
+        ].filter(Boolean).join(' · ');
+
+        el('richStats').innerHTML = [
+          rows.length + ' rates',
+          intel.mentions.length + ' mentions',
+          intel.facts.length + ' facts',
+          intel.guidance.length + ' guidance',
+          intel.learnings.length + ' learnings',
+          intel.chapters.length + ' chapters',
+        ].map(function (label) { return '<span class="rich-stat">' + escapeHtml(label) + '</span>'; }).join('');
+
+        el('richMetaChips').innerHTML = chipValues.length ? chipValues.map(function (value) {
+          return '<span class="small-chip">' + escapeHtml(value) + '</span>';
+        }).join('') : '<span class="small-chip">No metadata tags yet</span>';
+
+        el('richSummary').textContent = meta.summary_english || (rows.length
+          ? ('Saved wholesale rates for ' + uniqueValues(rows, produceLabel).join(', ') + '. Open the Rates tab for proof links and context lines.')
+          : 'No summary saved yet. Re-run analysis to refresh metadata.');
+
+        renderRichIntelCards(el('richOverviewMentions'), intel.mentions.slice(0, 8), 'No price mentions yet.');
+        renderRichRatesTable(rows, url);
+        renderRichIntelCards(el('richFacts'), intel.facts, 'No facts yet — re-run analysis, or check Rates tab for extracted rows.');
+        renderRichIntelCards(el('richGuidance'), intel.guidance, 'No guidance yet — context from saved rate rows will appear after analysis.');
+        renderRichIntelCards(el('richLearnings'), intel.learnings, 'No learnings yet — grouped produce summaries appear here after analysis.');
+        renderRichIntelCards(el('richMentions'), intel.mentions, 'No price mentions saved.');
+        renderRichIntelCards(el('richChapters'), intel.chapters, 'No chapter markers saved.');
+
+        bindRichJumps(videoId);
+      }
 
       function renderRichTranscript(data) {
         var segments = Array.isArray(data.segments) ? data.segments : [];
         if (!segments.length) {
-          el('richTranscript').innerHTML = '<div class="status">No transcript lines saved.</div>';
+          el('richTranscript').innerHTML = '<div class="rich-intel-empty">No transcript lines saved.</div>';
           return;
         }
         el('richTranscript').innerHTML = segments.map(function (segment) {
           var seconds = Number(segment.start_seconds) || 0;
           return '<button class="rich-row rich-jump" data-seconds="' + seconds + '"><time>' + escapeHtml(segment.timestamp_label || secondsToClock(seconds)) + '</time><span>' + escapeHtml(segment.text) + '</span></button>';
         }).join('');
-        el('richTranscript').querySelectorAll('.rich-jump').forEach(bindJump);
+        bindRichJumps(videoId);
       }
 
-      function bindJump(button) {
-        button.addEventListener('click', function () {
-          var seconds = Number(button.getAttribute('data-seconds')) || 0;
-          el('richVideoFrame').src = embedUrl(videoId, seconds);
-        });
-      }
+      fetchJson('/api/analysis/' + encodeURIComponent(videoId)).then(function (data) {
+        renderRichModal((data.item && data.item.meta) || cachedItem.meta || {});
+      }).catch(function () {
+        renderRichModal(cachedItem.meta || {});
+      });
 
-      el('richFacts').querySelectorAll('.rich-jump').forEach(bindJump);
       if (state.transcriptCache[videoId]) {
         renderRichTranscript(state.transcriptCache[videoId]);
       } else {
+        el('richTranscript').innerHTML = '<div class="status">Loading transcript...</div>';
         fetchJson('/api/transcripts/' + encodeURIComponent(videoId)).then(function (data) {
           state.transcriptCache[videoId] = data;
           renderRichTranscript(data);
         }).catch(function (error) {
-          el('richTranscript').innerHTML = '<div class="status bad">' + escapeHtml(error.message) + '</div>';
+          el('richTranscript').innerHTML = '<div class="rich-intel-empty">' + escapeHtml(error.message) + '</div>';
         });
       }
     }
@@ -2404,6 +2831,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('openTesterTop').addEventListener('click', openTester);
       el('closeTesterBtn').addEventListener('click', closeTester);
       el('closeVideoModalBtn').addEventListener('click', closeRichVideo);
+      el('richTabs').addEventListener('click', function (event) {
+        var button = event.target.closest('[data-rich-tab]');
+        if (!button) return;
+        switchRichTab(button.getAttribute('data-rich-tab'));
+      });
       el('testModal').addEventListener('click', function (event) {
         if (event.target === el('testModal')) closeTester();
       });

@@ -205,6 +205,337 @@ function removeRecorderName(value) {
     .trim();
 }
 
+const MANDI_PRODUCE = [
+  { name: 'mango', terms: ['आम', 'aam', 'mango', 'kesar', 'alphonso', 'hapus', 'dasheri', 'dusheri', 'dussehri', 'dishyari', 'दिश्यारी', 'langda', 'langra', 'लंगड़ा', 'chausa', 'chosa', 'चौसा', 'safeda', 'safed', 'सफेद', 'totapuri', 'tota', 'golden', 'गोल्डन', 'girnar', 'gujarat'] },
+  { name: 'onion', terms: ['प्याज', 'onion', 'pyaz', 'pyaaz'] },
+  { name: 'potato', terms: ['आलू', 'aloo', 'potato'] },
+  { name: 'garlic', terms: ['लहसुन', 'garlic', 'lehsun', 'lahsun'] },
+  { name: 'tomato', terms: ['टमाटर', 'tamatar', 'tomato'] },
+  { name: 'watermelon', terms: ['तरबूज', 'tarbuj', 'watermelon', 'tarbooj'] },
+  { name: 'pomegranate', terms: ['अनार', 'pomegranate', 'anar'] },
+  { name: 'lychee', terms: ['लीची', 'litchi', 'lychee'] },
+  { name: 'grapes', terms: ['अंगूर', 'grapes', 'angoor'] },
+  { name: 'banana', terms: ['केला', 'banana', 'kela'] },
+  { name: 'orange', terms: ['संतरा', 'orange', 'kinnow', 'santra', 'mausambi'] },
+];
+
+const MANGO_VARIETIES = [
+  ['दिश्यारी', 'Dussehri'], ['dussehri', 'Dussehri'], ['dusheri', 'Dussehri'], ['dishyari', 'Dussehri'],
+  ['लंगड़ा', 'Langda'], ['langda', 'Langda'], ['langra', 'Langda'],
+  ['गोल्डन', 'Golden'], ['golden', 'Golden'],
+  ['केसर', 'Kesar'], ['kesar', 'Kesar'], ['gir', 'Gir Kesar'], ['gujarat', 'Gujarat Kesar'],
+  ['चौसा', 'Chausa'], ['chausa', 'Chausa'], ['chosa', 'Chausa'],
+  ['सफेद', 'Safeda'], ['safeda', 'Safeda'], ['safed', 'Safeda'],
+  ['टोटापुरी', 'Totapuri'], ['totapuri', 'Totapuri'], ['tota', 'Totapuri'],
+];
+
+const MANDI_EXTRACTION_SYSTEM = [
+  'You are a Delhi/Azadpur-style Indian WHOLESALE mandi intelligence extractor.',
+  'Input is noisy Hindi/Hinglish live auction video — rapid bids, shortcuts, reporter summaries, trader talk, quality notes, and market learnings.',
+  'Your job is equally important for: (1) price rows, (2) facts, (3) guidance, (4) learnings/key_takeaways, (5) chapters.',
+  'Return English-first readable metadata. Keep Hinglish names where useful.',
+  'Fruit labels: English / Hinglish e.g. "Mango / Aam". Use produce emoji when obvious.',
+  'Never list Rana Ji / Rana / reporter / host as a trader party — only the recorder.',
+  '',
+  'Wholesale mandi shorthand — interpret correctly:',
+  '- rupee/rupay/rupaye/rupye/rupe/robe/rave/rs/₹/रुपे/रुपय/रोबे/रवे/रुपये => Indian Rupee wholesale price',
+  '- bhav/rate/रेट/भाव => mandi rate',
+  '- kilo/kg/प्रति किलो/per kg => per kg',
+  '- peti/box/carton/8 kilo/आठ किलो => per box/carton (NOT per kg unless stated)',
+  '- mal/maal/लाट/lot => produce lot being auctioned',
+  '- gadi/truck/लोड/load => arrival trucks/loads (FACT, not a price)',
+  '- safed/safeda/सफेद => white variety',
+  '- kacha/pakka/कच्छा/पक्का => raw vs ripe packing',
+  '- number grades: चार नंबर => Grade 4, पांच नंबर => Grade 5',
+  '- "X se Y" / "X lekar Y" => price RANGE in INR',
+  '',
+  'PRICE rows — auction rules:',
+  '- Extract SETTLED or SPOKEN wholesale rates, not every rapid bid comma-list.',
+  '- Separate rows per variety + quality + unit + area (Dussehri, Langda, Golden, Kesar, Chausa, Safeda, Totapuri, UP mango, etc.).',
+  '- Ranges => one row with min_price_inr and max_price_inr. Single rate => min=max.',
+  '- Ignore phone numbers, subscriber counts, and unrelated gold/silver.',
+  '- Truck/gadi counts and load notes are NOT prices — put them in facts.',
+  '',
+  'FACTS / GUIDANCE / LEARNINGS — mandatory intelligence (do NOT drop):',
+  '- facts: arrivals (55 gadi), weather/rain impact, season closing, supply left over, demand, quality issues, origin (Gujarat/UP/Bangalore), last truck of season.',
+  '- guidance: buyer/seller advice — clear stock, hold, check quality, packing (kacha/pakka box), rain-damaged mal handling, grading.',
+  '- key_takeaways + learnings: headline merchant learnings — what changed today, today vs yesterday/last week, which variety ended, where rates moved up/down, average market range.',
+  '- chapters: major video sections when variety/origin/lot changes (timestamp_seconds required).',
+  '- Each fact/guidance/learning MUST have: timestamp_seconds, title, text_english (clear English), text_hinglish (optional), importance.',
+  '- If a chunk has market discussion, return AT LEAST 3 facts/guidance/learnings combined — do not return only prices.',
+  '- Reporter summary lines without exact price still belong in facts or learnings.',
+  '',
+  'Return JSON only: {"meta": {...}, "rows": [...]}.',
+  'meta fields: video_id, video_title, video_url, market_date, market_date_sort, mandi_names, areas, parties, produce, qualities, summary_english, facts, guidance, key_takeaways, learnings, transcript_highlights, chapters, price_mentions, grouped_produce, mention_count, source.',
+  'price_mentions: preserve ALL useful mentions, even uncertain, with timestamp_seconds.',
+  'row fields: fruit, fruit_hindi, fruit_label, fruit_emoji, variety, quality_grade, quality_label, size_label, party_name, mandi_name, area_name, origin, unit, min_price_inr, max_price_inr, price_notes, market_name, market_date, market_date_sort, confidence, original_line, clean_english_line, clean_hinglish_line, context, notes, timestamp_seconds.',
+].join('\n');
+
+const MARKET_INSIGHT_RULES = [
+  { bucket: 'facts', kind: 'arrivals', title: 'Truck / load arrivals', test: (t) => /(गाड़ी|gadi|truck|लोड|load|record|पचास|पच्पन)/i.test(t) && /\d+/.test(t) },
+  { bucket: 'facts', kind: 'weather', title: 'Rain / weather impact', test: (t) => /(बारिश|बारिशी|rain|पानी|weather)/i.test(t) },
+  { bucket: 'facts', kind: 'season', title: 'Season status', test: (t) => /(सीजन|season|आखरी|closing|खत्म|band|क्लोज)/i.test(t) },
+  { bucket: 'facts', kind: 'supply', title: 'Supply / stock on ground', test: (t) => /(माल|maal|आवक|supply|पड़े|arrival|बच|left)/i.test(t) },
+  { bucket: 'facts', kind: 'demand', title: 'Demand / buyer interest', test: (t) => /(माँग|demand|ग्राहक|buyer|बिक|बिक्री|sell|खरीद)/i.test(t) },
+  { bucket: 'guidance', kind: 'quality', title: 'Quality / grading note', test: (t) => /(क्वालिटी|quality|grade|नंबर|safed|सफेद|कच्छा|पक्का|बारिशी|निशान)/i.test(t) },
+  { bucket: 'guidance', kind: 'trade', title: 'Trade / clearance advice', test: (t) => /(क्लियर|clear|बेच|खरीद|hold|रोक|खालो|बेचना|रोकेंगे)/i.test(t) },
+  { bucket: 'learnings', kind: 'trend', title: 'Rate trend / market movement', test: (t) => /(बाजार|market|रेट|rate|भाव).{0,60}(ऊपर|नीचे|up|down|कम|ज्यादा|सुधार|डाउन|बेहतर|खराब|औसत|average)/i.test(t) },
+  { bucket: 'learnings', kind: 'comparison', title: 'Today vs earlier market', test: (t) => /(आज|today|पहले|कल|yesterday|पिछले|last week|हफ्ता|सुधार)/i.test(t) && /(रेट|rate|भाव|market|बाजार|बिक)/i.test(t) },
+  { bucket: 'chapters', kind: 'variety_shift', title: 'Variety / origin section', test: (t) => /(लंगड़ा|langda|दिश्यारी|dussehri|dishyari|golden|केसर|kesar|chausa|chosa|totapuri|gujarat|गुजरात|यूपी|up mango|अगला|next lot|साथ)/i.test(t) },
+];
+
+function detectCommodities(text, title = '') {
+  const hay = `${title} ${text}`.toLowerCase();
+  const found = [];
+  const seen = new Set();
+  for (const item of MANDI_PRODUCE) {
+    if (item.terms.some((term) => hay.includes(term.toLowerCase()))) {
+      if (!seen.has(item.name)) {
+        seen.add(item.name);
+        found.push(item.name);
+      }
+    }
+  }
+  return found;
+}
+
+function detectVariety(text) {
+  const hay = safeText(text).toLowerCase();
+  for (const [needle, label] of MANGO_VARIETIES) {
+    if (hay.includes(needle)) return label;
+  }
+  return '';
+}
+
+function detectUnit(text) {
+  const lower = safeText(text).toLowerCase();
+  if (/(किलो|kg|kilo|kilogram|प्रति किलो|per kg)/i.test(lower)) return 'kg';
+  if (/(पेटी|peti|box|carton|8\s*किलो|आठ किलो|8\s*kilo)/i.test(lower)) return 'box';
+  if (/(क्रेट|crate)/i.test(lower)) return 'crate';
+  if (/(क्विंटल|quintal|qtl)/i.test(lower)) return 'quintal';
+  if (/(दर्जन|dozen)/i.test(lower)) return 'dozen';
+  return 'unknown';
+}
+
+function isYearLikePrice(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 1900 && n <= 2100;
+}
+
+function isAuctionBidSequence(text) {
+  const numbers = String(text || '').match(/\b\d{1,4}\b/g) || [];
+  if (numbers.length < 6) return false;
+  return !/(रुप|rs|₹|किलो|kg|भाव|रेट|price|रुपे|रुपय)/i.test(text);
+}
+
+function isPlausibleMandiPrice(low, high, unit) {
+  const u = safeText(unit).toLowerCase();
+  if (u === 'kg' || u.includes('kilo')) return low >= 5 && high <= 400;
+  if (u.includes('box') || u.includes('peti') || u.includes('crate')) return low >= 20 && high <= 10000;
+  return low >= 5 && high <= 10000;
+}
+
+function chunkTranscriptSegments(segments, maxChars = 9000) {
+  const chunks = [];
+  let current = [];
+  let size = 0;
+  for (const segment of segments) {
+    const seconds = Math.max(0, Math.floor(Number(segment.start_seconds) || 0));
+    const line = `[${seconds}s | ${segment.timestamp_label || secondsToClock(seconds)}] ${safeText(segment.text)}`;
+    if (current.length && size + line.length > maxChars) {
+      chunks.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(segment);
+    size += line.length + 1;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
+}
+
+function formatSegmentsForPrompt(segments) {
+  return segments.map((segment) => {
+    const seconds = Math.max(0, Math.floor(Number(segment.start_seconds) || 0));
+    return `[${seconds}s | ${segment.timestamp_label || secondsToClock(seconds)}] ${safeText(segment.text)}`;
+  }).join('\n');
+}
+
+function extractPricesFromSegments({ segments, title, videoId, videoUrl, uploadDate, marketDate }) {
+  const rows = [];
+  const titleCommodities = detectCommodities('', title || '');
+  const marketSort = marketDateSort(marketDate || title || uploadDate);
+  const priceRe = /(?:₹|rs\.?|inr|रुप(?:ए|ये|या)?|रुपे|रोबे|रवे|रुपय|ups?|upe|भाव|rate|price|रेट)\s*(\d{1,4})(?:\s*(?:से|to|तक|-|–|—|lekar|लेकर)\s*(?:₹|rs\.?|inr|रुप(?:ए|ये|या)?)?\s*(\d{1,4}))?/gi;
+  const list = Array.isArray(segments) ? segments : [];
+
+  for (let i = 0; i < list.length; i += 1) {
+    const windowText = safeText([
+      list[i - 1]?.text || '',
+      list[i]?.text || '',
+      list[i + 1]?.text || '',
+    ].join(' '));
+    if (isAuctionBidSequence(windowText)) continue;
+
+    let match;
+    while ((match = priceRe.exec(windowText)) !== null) {
+      const min = normalizeNumber(match[1]);
+      const max = normalizeNumber(match[2] || match[1]);
+      if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max <= 0) continue;
+      if (isYearLikePrice(min) || isYearLikePrice(max)) continue;
+      const low = Math.min(min, max);
+      const high = Math.max(min, max);
+      const unit = detectUnit(windowText);
+      if (!isPlausibleMandiPrice(low, high, unit)) continue;
+
+      const commodities = detectCommodities(windowText, title);
+      const targets = commodities.length ? commodities : titleCommodities;
+      if (!targets.length) continue;
+
+      const seconds = Math.max(0, Math.floor(Number(list[i].start_seconds) || 0));
+      const variety = detectVariety(windowText);
+      for (const commodity of targets) {
+        const info = produceInfo(commodity);
+        rows.push({
+          fruit: info?.english || commodity,
+          fruit_hindi: info?.hinglish || '',
+          fruit_label: info?.label || commodity,
+          fruit_emoji: info?.emoji || '',
+          variety,
+          quality_grade: '',
+          quality_label: '',
+          size_label: '',
+          party_name: '',
+          mandi_name: '',
+          area_name: '',
+          origin: '',
+          unit,
+          min_price_inr: low,
+          max_price_inr: high,
+          price_notes: '',
+          market_name: '',
+          market_date: marketDate || '',
+          market_date_sort: marketSort,
+          confidence: match[2] ? 'medium' : 'low',
+          original_line: safeText(list[i].text),
+          clean_english_line: '',
+          clean_hinglish_line: safeText(list[i].text),
+          context: windowText,
+          notes: '',
+          source: 'regex-supplement',
+          timestamp_seconds: seconds,
+          timestamp_label: secondsToClock(seconds),
+          timestamp_url: videoUrl ? `${videoUrl}${videoUrl.includes('?') ? '&' : '?'}t=${seconds}s` : '',
+          video_id: videoId,
+          video_title: title,
+          video_url: videoUrl,
+          upload_date: uploadDate,
+        });
+      }
+    }
+  }
+  return rows;
+}
+
+function dedupeRawRows(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = [
+      row.video_id,
+      row.fruit_label || row.fruit,
+      row.variety,
+      row.quality_grade,
+      row.unit,
+      row.min_price_inr,
+      row.max_price_inr,
+      row.timestamp_seconds,
+      row.original_line,
+    ].join('|').toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function extractMarketInsightsFromSegments(segments, title = '') {
+  const buckets = {
+    facts: [],
+    guidance: [],
+    learnings: [],
+    chapters: [],
+  };
+  const list = Array.isArray(segments) ? segments : [];
+  for (const segment of list) {
+    const text = safeText(segment.text);
+    if (text.length < 16) continue;
+    const seconds = Math.max(0, Math.floor(Number(segment.start_seconds) || 0));
+    for (const rule of MARKET_INSIGHT_RULES) {
+      if (!rule.test(text)) continue;
+      buckets[rule.bucket].push({
+        timestamp_seconds: seconds,
+        timestamp_label: secondsToClock(seconds),
+        title: rule.title,
+        kind: rule.kind,
+        text_english: '',
+        text_hinglish: text.slice(0, 320),
+        importance: rule.bucket === 'learnings' ? 'high' : 'medium',
+        source: 'insight-supplement',
+      });
+      break;
+    }
+  }
+  if (!buckets.facts.length && title) {
+    const titleFacts = detectCommodities(title);
+    if (titleFacts.length) {
+      buckets.facts.push({
+        timestamp_seconds: 0,
+        timestamp_label: '0:00',
+        title: 'Video topic',
+        kind: 'topic',
+        text_english: `Wholesale market report covering ${titleFacts.join(', ')}.`,
+        text_hinglish: title.slice(0, 200),
+        importance: 'medium',
+        source: 'insight-supplement',
+      });
+    }
+  }
+  return buckets;
+}
+
+function dedupeMetaItems(items) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const text = safeText(item.text_english || item.text_hinglish || item.title).toLowerCase();
+    if (!text) return false;
+    const key = `${item.timestamp_seconds || 0}|${safeText(item.title).toLowerCase()}|${text.slice(0, 96)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => (a.timestamp_seconds || 0) - (b.timestamp_seconds || 0));
+}
+
+function mergeExtractionMeta(base, chunk) {
+  const next = { ...(base && typeof base === 'object' ? base : {}) };
+  const listKeys = ['facts', 'guidance', 'key_takeaways', 'learnings', 'transcript_highlights', 'chapters', 'price_mentions'];
+  for (const key of listKeys) {
+    next[key] = [...(Array.isArray(next[key]) ? next[key] : []), ...(Array.isArray(chunk?.[key]) ? chunk[key] : [])];
+  }
+  if (Array.isArray(chunk?.learnings) && chunk.learnings.length) {
+    next.key_takeaways = [...(Array.isArray(next.key_takeaways) ? next.key_takeaways : []), ...chunk.learnings];
+  }
+  const uniqueKeys = ['mandi_names', 'areas', 'parties', 'qualities', 'produce'];
+  for (const key of uniqueKeys) {
+    next[key] = [...(Array.isArray(next[key]) ? next[key] : []), ...(Array.isArray(chunk?.[key]) ? chunk[key] : [])];
+  }
+  if (chunk?.summary_english) {
+    next.summary_english = next.summary_english
+      ? `${next.summary_english} ${chunk.summary_english}`.trim()
+      : chunk.summary_english;
+  }
+  if (chunk?.market_date) next.market_date = chunk.market_date;
+  if (chunk?.market_date_sort) next.market_date_sort = chunk.market_date_sort;
+  return next;
+}
+
 function slimVideo(video, channelUrl = '') {
   const segments = Array.isArray(video?.segments) ? video.segments : [];
   const analysisMeta = video?.analysisMeta || null;
@@ -1223,13 +1554,10 @@ function enrichTranscriptPayload(item) {
   return item;
 }
 
-async function callOpenAIExtractor(env, { videoId, videoUrl, title, segments, model }) {
+async function callOpenAIExtractorChunk(env, { videoId, videoUrl, title, segments, model, chunkIndex, chunkTotal, uploadDate }) {
   const apiKey = safeText(env.OPENAI_API_KEY);
   if (!apiKey) throw httpError('OPENAI_API_KEY is not configured on the Worker.', 500);
-  const transcript = segments.map((segment) => {
-    const seconds = Math.max(0, Math.floor(Number(segment.start_seconds) || 0));
-    return `[${seconds}s | ${segment.timestamp_label || secondsToClock(seconds)}] ${safeText(segment.text)}`;
-  }).join('\n').slice(0, 45000);
+  const transcript = formatSegmentsForPrompt(segments);
 
   const response = await fetch(OPENAI_CHAT_URL, {
     method: 'POST',
@@ -1240,37 +1568,22 @@ async function callOpenAIExtractor(env, { videoId, videoUrl, title, segments, mo
     body: JSON.stringify({
       model: safeText(model) || 'gpt-4o-mini',
       temperature: 0,
+      max_tokens: 8000,
       response_format: { type: 'json_object' },
       messages: [
-        {
-          role: 'system',
-          content: [
-            'You extract wholesale fruit/produce mandi rates from noisy Hindi/Hinglish transcripts.',
-            'Return English-first metadata even when the transcript is Hindi. Keep useful Hinglish names beside English names.',
-            'Fruit labels must always be English / Hinglish, for example "Watermelon / Tarbooj", "Onion / Pyaz", "Mango / Aam".',
-            'Use a produce emoji whenever obvious, for example 🍉 Watermelon / Tarbooj, 🧅 Onion / Pyaz, 🥭 Mango / Aam.',
-            'Do not include Rana Ji, Rana, reporter, host, or interviewer as a party/person; Rana Ji is the recorder and must be removed.',
-            'Keep timestamps tied to the transcript line where the price is spoken.',
-            'Extract every distinct price mention, including different grades, sizes, quality types, lots, areas, origins, parties, and price ranges.',
-            'If one spoken line lists multiple grades or qualities with different prices, return multiple rows and mention objects.',
-            'Include non-price useful facts and guidance separately when the speaker gives advice, market guidance, supply notes, demand notes, quality guidance, buyer/seller instructions, or factual observations.',
-            'Extract only real produce prices. Ignore dates, counts, vehicle counts, phone numbers, subscriber counts, and unrelated gold/silver rates.',
-            'Return JSON only with: {"meta": {...}, "rows": [...]}.',
-            'meta fields: video_id, video_title, video_url, market_date, market_date_sort, mandi_names, areas, parties, produce, qualities, summary_english, key_takeaways, facts, guidance, transcript_highlights, chapters, price_mentions, grouped_produce, mention_count, source.',
-            'facts/guidance/transcript_highlights/chapters items should include timestamp_seconds, title, text_english, text_hinglish, importance when possible.',
-            'price_mentions items should preserve all mentions, even if price is unclear: fruit_label, fruit_emoji, variety, quality_grade, quality_label, size_label, party_name, mandi_name, area_name, unit, min_price_inr, max_price_inr, timestamp_seconds, text_english, text_hinglish, confidence.',
-            'grouped_produce should group by fruit_label and include fruit_emoji, varieties, qualities, areas, parties, mention_count, min_price_inr, max_price_inr, and representative timestamp_seconds values.',
-            'row fields: fruit, fruit_hindi, fruit_label, fruit_emoji, variety, quality_grade, quality_label, size_label, party_name, mandi_name, area_name, origin, unit, min_price_inr, max_price_inr, price_notes, market_name, market_date, market_date_sort, confidence, original_line, clean_english_line, clean_hinglish_line, context, notes, timestamp_seconds.',
-          ].join('\n'),
-        },
+        { role: 'system', content: MANDI_EXTRACTION_SYSTEM },
         {
           role: 'user',
           content: [
             `Video ID: ${videoId}`,
             `Video URL: ${videoUrl}`,
             `Title: ${title || ''}`,
+            `Upload date: ${uploadDate || ''}`,
+            `Chunk ${chunkIndex + 1} of ${chunkTotal}`,
+            'Context: Indian wholesale mandi auction. Speakers use rupee/rupay/robe/rave shortcuts and Hindi variety names.',
             '',
-            'Transcript:',
+            'Return price rows AND rich meta (facts, guidance, learnings, chapters). Do not omit market intelligence.',
+            'Transcript segment lines (timestamp_seconds must match bracket seconds):',
             transcript,
           ].join('\n'),
         },
@@ -1284,6 +1597,69 @@ async function callOpenAIExtractor(env, { videoId, videoUrl, title, segments, mo
     throw httpError(error, 502, { provider: 'openai' });
   }
   return extractJsonObject(data?.choices?.[0]?.message?.content || text);
+}
+
+async function callOpenAIExtractor(env, { videoId, videoUrl, title, segments, model, uploadDate }) {
+  const chunks = chunkTranscriptSegments(segments, 9000);
+  let mergedMeta = {};
+  let allRows = [];
+
+  for (let i = 0; i < chunks.length; i += 1) {
+    const result = await callOpenAIExtractorChunk(env, {
+      videoId,
+      videoUrl,
+      title,
+      segments: chunks[i],
+      model,
+      chunkIndex: i,
+      chunkTotal: chunks.length,
+      uploadDate,
+    });
+    mergedMeta = mergeExtractionMeta(mergedMeta, result.meta || {});
+    if (Array.isArray(result.rows)) allRows.push(...result.rows);
+  }
+
+  const regexRows = extractPricesFromSegments({
+    segments,
+    title,
+    videoId,
+    videoUrl,
+    uploadDate,
+    marketDate: mergedMeta.market_date,
+  });
+
+  const aiKeys = new Set(allRows.map((row) => [
+    safeText(row.variety),
+    row.min_price_inr,
+    row.max_price_inr,
+    row.timestamp_seconds,
+  ].join('|').toLowerCase()));
+
+  for (const row of regexRows) {
+    const key = [
+      safeText(row.variety),
+      row.min_price_inr,
+      row.max_price_inr,
+      row.timestamp_seconds,
+    ].join('|').toLowerCase();
+    if (!aiKeys.has(key)) {
+      allRows.push(row);
+      aiKeys.add(key);
+    }
+  }
+
+  const insights = extractMarketInsightsFromSegments(segments, title);
+  mergedMeta = mergeExtractionMeta(mergedMeta, {
+    facts: insights.facts,
+    guidance: insights.guidance,
+    learnings: insights.learnings,
+    chapters: insights.chapters,
+  });
+
+  return {
+    meta: mergedMeta,
+    rows: dedupeRawRows(allRows),
+  };
 }
 
 function uniqueClean(values) {
@@ -1360,11 +1736,16 @@ function normalizeAnalysisMeta({ videoId, videoUrl, title, uploadDate, meta, row
     const info = produceInfo(item);
     return info ? `${info.emoji} ${info.label}` : item;
   });
-  normalized.facts = normalizeMetaList(normalized.facts);
-  normalized.guidance = normalizeMetaList(normalized.guidance);
-  normalized.key_takeaways = normalizeMetaList(normalized.key_takeaways);
-  normalized.transcript_highlights = normalizeMetaList(normalized.transcript_highlights);
-  normalized.chapters = normalizeMetaList(normalized.chapters);
+  normalized.facts = dedupeMetaItems(normalizeMetaList(normalized.facts));
+  normalized.guidance = dedupeMetaItems(normalizeMetaList(normalized.guidance));
+  const learningItems = [
+    ...(Array.isArray(normalized.key_takeaways) ? normalized.key_takeaways : []),
+    ...(Array.isArray(normalized.learnings) ? normalized.learnings : []),
+  ];
+  normalized.learnings = dedupeMetaItems(normalizeMetaList(learningItems));
+  normalized.key_takeaways = normalized.learnings;
+  normalized.transcript_highlights = dedupeMetaItems(normalizeMetaList(normalized.transcript_highlights));
+  normalized.chapters = dedupeMetaItems(normalizeMetaList(normalized.chapters));
 
   const rowMentions = (Array.isArray(rows) ? rows : []).map((row) => normalizePriceMention(row, row));
   const aiMentions = (Array.isArray(normalized.price_mentions) ? normalized.price_mentions : []).map((item) => normalizePriceMention(item));
@@ -1448,9 +1829,20 @@ function normalizeAnalysisRows({ videoId, videoUrl, title, uploadDate, meta, row
     const min = normalizeNumber(row.min_price_inr);
     const max = normalizeNumber(row.max_price_inr);
     const seconds = Math.max(0, Math.floor(normalizeNumber(row.timestamp_seconds) || 0));
-    if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max <= 0) return null;
-    const low = Math.min(min, max);
-    const high = Math.max(min, max);
+    let low = null;
+    let high = null;
+    if (Number.isFinite(min) && min > 0 && Number.isFinite(max) && max > 0) {
+      low = Math.min(min, max);
+      high = Math.max(min, max);
+    } else if (Number.isFinite(min) && min > 0) {
+      low = high = min;
+    } else if (Number.isFinite(max) && max > 0) {
+      low = high = max;
+    } else {
+      return null;
+    }
+    const unit = safeText(row.unit) || 'unknown';
+    if (!isPlausibleMandiPrice(low, high, unit)) return null;
     const timestampLabel = secondsToClock(seconds);
     const cleanEnglish = safeText(row.clean_english_line);
     const cleanHinglish = safeText(row.clean_hinglish_line);
@@ -1481,7 +1873,7 @@ function normalizeAnalysisRows({ videoId, videoUrl, title, uploadDate, meta, row
       clean_hindi_line: cleanHinglish || cleanEnglish,
       context: safeText(row.context),
       notes: safeText(row.notes),
-      source: 'worker-openai',
+      source: safeText(row.source) || 'worker-openai',
       timestamp_seconds: seconds,
       timestamp_label: timestampLabel,
       timestamp_url: videoUrl ? `${videoUrl}${videoUrl.includes('?') ? '&' : '?'}t=${seconds}s` : '',
@@ -1511,6 +1903,7 @@ async function analyzeStoredTranscript(db, env, body) {
     title,
     segments: stored.segments,
     model: body.model,
+    uploadDate,
   });
   const meta = normalizeAnalysisMeta({
     videoId,
