@@ -3,7 +3,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Wholesale Mandi</title>
+  <title>Krishi Kal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -3803,7 +3803,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       .test-preview { grid-template-columns: 1fr; }
     }
 
-    /* ── Wholesale Mandi design system ── */
+    /* ── Krishi Kal design system ── */
     :root {
       --space-1: 4px;
       --space-2: 8px;
@@ -4971,6 +4971,219 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         height: 36px;
       }
     }
+
+    /* ── Krishi Kal app shell ── */
+    .app-nav {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 0 24px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--topbar-bg);
+      position: sticky;
+      top: 72px;
+      z-index: 3;
+      backdrop-filter: blur(12px);
+    }
+
+    .app-nav-btn {
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--soft);
+      padding: 9px 16px;
+      border-radius: var(--radius-pill);
+      font-size: 14px;
+      font-weight: 600;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .app-nav-btn:hover {
+      background: var(--hover);
+      color: var(--text);
+    }
+
+    .app-nav-btn.active {
+      background: var(--accent-soft);
+      color: var(--accent-text);
+      border-color: rgba(0, 138, 108, 0.25);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .app-view { display: none; }
+    .app-view.active { display: block; }
+
+    .mandi-hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: var(--space-5);
+      padding: var(--space-5);
+      border-radius: var(--radius-xl);
+      border: 1px solid rgba(0, 138, 108, 0.18);
+      background: linear-gradient(135deg, var(--accent-soft) 0%, var(--white) 55%);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .mandi-hero h1 {
+      font-size: clamp(24px, 3vw, 34px);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-top: 4px;
+    }
+
+    .mandi-hero-sub {
+      color: var(--muted);
+      font-size: 14px;
+      margin-top: 6px;
+    }
+
+    .mandi-hero-stat {
+      display: grid;
+      gap: 4px;
+      text-align: right;
+      min-width: 120px;
+    }
+
+    .mandi-hero-stat strong {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--accent-text);
+    }
+
+    .mandi-hero-stat span {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .section-hero {
+      margin-bottom: var(--space-5);
+    }
+
+    .section-hero h1 {
+      font-size: clamp(22px, 2.8vw, 30px);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin: 4px 0 8px;
+    }
+
+    .section-hero p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+      max-width: 62ch;
+    }
+
+    .krishi-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: var(--space-4);
+    }
+
+    .krishi-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--white);
+      padding: var(--space-4);
+      box-shadow: var(--shadow-sm);
+      display: grid;
+      gap: 8px;
+    }
+
+    .krishi-card-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .krishi-card h3 {
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+
+    .krishi-card-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .krishi-card-body {
+      font-size: 14px;
+      line-height: 1.45;
+      color: var(--soft);
+    }
+
+    .krishi-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      background: var(--panel-3);
+      border: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--soft);
+      white-space: nowrap;
+    }
+
+    .krishi-empty {
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      text-align: center;
+      color: var(--muted);
+      background: var(--panel-2);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .krishi-directory-list {
+      display: grid;
+      gap: var(--space-3);
+    }
+
+    .krishi-directory-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 14px 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--white);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .krishi-directory-row strong {
+      font-size: 15px;
+    }
+
+    .krishi-directory-row span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 900px) {
+      .app-nav {
+        top: auto;
+        padding: 0 14px 12px;
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+      }
+      .mandi-hero-stat { text-align: left; }
+    }
+
   </style>
 </head>
 <body>
@@ -4978,10 +5191,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     <main class="main">
       <header class="topbar">
         <div class="site-brand">
-          <span class="site-brand-mark" aria-hidden="true">WM</span>
+          <span class="site-brand-mark" aria-hidden="true">KK</span>
           <div class="site-brand-copy">
-            <strong>Wholesale Mandi</strong>
-            <span>Daily wholesale rates from mandi videos</span>
+            <strong>Krishi Kal</strong>
+            <span>Mandi rates, market news & trade network</span>
           </div>
         </div>
         <div class="top-actions">
@@ -4994,6 +5207,14 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           <button class="share-btn" id="openTesterTop" type="button">Test</button>
         </div>
       </header>
+
+      <nav class="app-nav" id="appNav" aria-label="Krishi Kal sections">
+        <button class="app-nav-btn active" type="button" data-app-view="mandi">Mandi today</button>
+        <button class="app-nav-btn" type="button" data-app-view="news">News</button>
+        <button class="app-nav-btn" type="button" data-app-view="aadthi">Aadthi</button>
+        <button class="app-nav-btn" type="button" data-app-view="exporters">Exporters</button>
+        <button class="app-nav-btn" type="button" data-app-view="transport">Transport</button>
+      </nav>
 
       <section class="chat">
         <div class="chat-inner">
@@ -5013,7 +5234,67 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           </div>
           <div class="reanalyze-status" id="reanalyzeStatus" hidden></div>
 
+          <div class="app-view active" id="viewMandi" data-app-view="mandi">
+          <div class="mandi-hero">
+            <div>
+              <p class="eyebrow">Mandi rates today</p>
+              <h1 id="mandiHeroTitle">Today's wholesale rates</h1>
+              <p class="mandi-hero-sub" id="mandiHeroDate">Loading latest mandi data…</p>
+            </div>
+            <div class="mandi-hero-stat" id="mandiHeroStat"><strong id="mandiHeroCount">—</strong><span>rate lines today</span></div>
+          </div>
           <div class="page-stack">
+            <section class="surface surface-data" id="dashboard">
+              <div class="surface-header surface-header-tabs">
+                <div class="dashboard-tabs" role="tablist" aria-label="Data views">
+                  <button class="tab-btn active" data-tab="rateList" type="button" role="tab">Rate list</button>
+                  <button class="tab-btn" data-tab="allData" type="button" role="tab">All data</button>
+                </div>
+              </div>
+
+              <div class="tab-panel active" id="rateListPanel">
+                <div class="panel-toolbar">
+                  <div>
+                    <h3 class="panel-title">Latest rates</h3>
+                    <p class="panel-note">Wholesale mandi rates for the selected date. Tap a proof chip to verify in source video.</p>
+                  </div>
+                  <input id="rateSearch" class="search-box" type="search" placeholder="Search variety, grade, area..." aria-label="Search rates" />
+                </div>
+                <div class="rate-list-wrap">
+                  <div id="rateListContent" class="rate-list-groups"></div>
+                </div>
+              </div>
+
+              <div class="tab-panel all-data-panel" id="allDataPanel">
+                <div class="analysis-cards" id="analysisCards"></div>
+                <div class="panel-toolbar">
+                  <div>
+                    <h3 class="panel-title">All extracted rates</h3>
+                    <p class="panel-note">All produce in the selected date range (ignores chart filters). Click a thumbnail or timestamp to open the report.</p>
+                  </div>
+                  <input id="dataSearch" class="search-box" type="search" placeholder="Search rows, transcript, area..." aria-label="Search all data" />
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Video</th>
+                        <th>Date</th>
+                        <th>Fruit</th>
+                        <th>Grade</th>
+                        <th>Size</th>
+                        <th>Area</th>
+                        <th>Party</th>
+                        <th>Rate</th>
+                        <th>Source</th>
+                      </tr>
+                    </thead>
+                    <tbody id="allDataBody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
             <section class="surface surface-chart surface-chart-collapsed" id="surfaceChart">
               <div class="surface-header surface-chart-header">
                 <div class="surface-heading">
@@ -5066,58 +5347,45 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
               </div>
               </div>
             </section>
-
-            <section class="surface surface-data" id="dashboard">
-              <div class="surface-header surface-header-tabs">
-                <div class="dashboard-tabs" role="tablist" aria-label="Data views">
-                  <button class="tab-btn active" data-tab="rateList" type="button" role="tab">Rate list</button>
-                  <button class="tab-btn" data-tab="allData" type="button" role="tab">All data</button>
-                </div>
-              </div>
-
-              <div class="tab-panel active" id="rateListPanel">
-                <div class="panel-toolbar">
-                  <div>
-                    <h3 class="panel-title">Latest rates</h3>
-                    <p class="panel-note">All produce for the selected date range. The chart above filters one produce at a time.</p>
-                  </div>
-                  <input id="rateSearch" class="search-box" type="search" placeholder="Search variety, grade, area..." aria-label="Search rates" />
-                </div>
-                <div class="rate-list-wrap">
-                  <div id="rateListContent" class="rate-list-groups"></div>
-                </div>
-              </div>
-
-              <div class="tab-panel all-data-panel" id="allDataPanel">
-                <div class="analysis-cards" id="analysisCards"></div>
-                <div class="panel-toolbar">
-                  <div>
-                    <h3 class="panel-title">All extracted rates</h3>
-                    <p class="panel-note">All produce in the selected date range (ignores chart filters). Click a thumbnail or timestamp to open the report.</p>
-                  </div>
-                  <input id="dataSearch" class="search-box" type="search" placeholder="Search rows, transcript, area..." aria-label="Search all data" />
-                </div>
-                <div class="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Video</th>
-                        <th>Date</th>
-                        <th>Fruit</th>
-                        <th>Grade</th>
-                        <th>Size</th>
-                        <th>Area</th>
-                        <th>Party</th>
-                        <th>Rate</th>
-                        <th>Source</th>
-                      </tr>
-                    </thead>
-                    <tbody id="allDataBody"></tbody>
-                  </table>
-                </div>
-              </div>
-            </section>
           </div>
+          </div>
+
+          <div class="app-view" id="viewNews" data-app-view="news">
+            <div class="section-hero">
+              <p class="eyebrow">Market news</p>
+              <h1>Mandi intelligence & updates</h1>
+              <p>Facts, guidance, and learnings pulled from analyzed mandi videos — arrivals, weather, demand, and trade notes.</p>
+            </div>
+            <div class="krishi-card-grid" id="newsFeed"></div>
+          </div>
+
+          <div class="app-view" id="viewAadthi" data-app-view="aadthi">
+            <div class="section-hero">
+              <p class="eyebrow">Aadthi · Wholesalers</p>
+              <h1>Wholesalers & commission agents</h1>
+              <p>Parties and traders mentioned in verified mandi rate extractions. Names come from transcript context in source videos.</p>
+            </div>
+            <div class="krishi-directory-list" id="aadthiDirectory"></div>
+          </div>
+
+          <div class="app-view" id="viewExporters" data-app-view="exporters">
+            <div class="section-hero">
+              <p class="eyebrow">Exporters</p>
+              <h1>Export buyers & shipping desks</h1>
+              <p>Directory for export-facing buyers, packhouses, and shipping contacts. Listings will expand as Krishi Kal adds verified exporter profiles.</p>
+            </div>
+            <div class="krishi-card-grid" id="exportersDirectory"></div>
+          </div>
+
+          <div class="app-view" id="viewTransport" data-app-view="transport">
+            <div class="section-hero">
+              <p class="eyebrow">Transport</p>
+              <h1>Cold chain, trucking & logistics</h1>
+              <p>Transport partners for mandi pickup, line-haul, and cold storage. Verified transporter listings coming soon.</p>
+            </div>
+            <div class="krishi-card-grid" id="transportDirectory"></div>
+          </div>
+
         </div>
       </section>
     </main>
@@ -5534,6 +5802,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       lastOngoingCount: 0,
       settingsChannels: [],
       settingsPage: 'hub',
+      appView: 'mandi',
       chartExpanded: false,
       colors: ['#10a37f', '#f7b731', '#4dabf7', '#eb4d4b', '#be2edd', '#badc58', '#ff9f43', '#00d2d3']
     };
@@ -6500,8 +6769,17 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     function applyDefaultDateRange() {
       var dates = state.priceRows.map(rowDate).filter(Boolean).sort();
-      el('dateFrom').value = dates.length ? dates[0] : '';
-      el('dateTo').value = todayIso();
+      var today = todayIso();
+      if (dates.indexOf(today) >= 0) {
+        el('dateFrom').value = today;
+        el('dateTo').value = today;
+      } else if (dates.length) {
+        el('dateFrom').value = dates[dates.length - 1];
+        el('dateTo').value = dates[dates.length - 1];
+      } else {
+        el('dateFrom').value = today;
+        el('dateTo').value = today;
+      }
     }
 
     function setReanalyzeStatus(message, kind) {
@@ -7348,6 +7626,145 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       }).join('');
     }
 
+
+    var KRISHI_PLACEHOLDER_EXPORTERS = [
+      { name: 'Export desk listings', note: 'Verified exporter profiles with produce focus, ports, and contact routes.', tag: 'Coming soon' },
+      { name: 'Packhouse network', note: 'Sorting, grading, and export-ready packing for fruits and vegetables.', tag: 'Coming soon' },
+    ];
+
+    var KRISHI_PLACEHOLDER_TRANSPORT = [
+      { name: 'Mandi pickup & line-haul', note: 'Refrigerated and dry trucks from Azadpur-style mandis to city hubs.', tag: 'Coming soon' },
+      { name: 'Cold storage partners', note: 'Short-stay cold rooms and hub storage for perishable loads.', tag: 'Coming soon' },
+    ];
+
+    function switchAppView(view) {
+      view = view || 'mandi';
+      state.appView = view;
+      document.querySelectorAll('.app-nav-btn').forEach(function (btn) {
+        btn.classList.toggle('active', btn.getAttribute('data-app-view') === view);
+      });
+      document.querySelectorAll('.app-view').forEach(function (panel) {
+        panel.classList.toggle('active', panel.getAttribute('data-app-view') === view);
+      });
+      if (location.hash.replace('#', '') !== view) {
+        try { history.replaceState(null, '', '#' + view); } catch (e) {}
+      }
+      hidePopup();
+    }
+
+    function renderMandiHero() {
+      var today = todayIso();
+      var todayRows = state.priceRows.filter(function (row) { return rowDate(row) === today && priceValue(row) != null; });
+      var activeDate = el('dateFrom') && el('dateFrom').value ? el('dateFrom').value : today;
+      var activeRows = filteredByDate(state.priceRows);
+      var titleNode = el('mandiHeroTitle');
+      var dateNode = el('mandiHeroDate');
+      var countNode = el('mandiHeroCount');
+      if (!titleNode) return;
+      if (activeDate === today && todayRows.length) {
+        titleNode.textContent = "Today's wholesale rates";
+        dateNode.textContent = formatTallyDate({ market_date: today }) + ' · ' + uniqueValues(todayRows, produceLabel).length + ' produce tracked';
+        if (countNode) countNode.textContent = String(todayRows.length);
+      } else if (activeRows.length) {
+        titleNode.textContent = 'Mandi rates · ' + formatChartDateLabel(activeDate);
+        dateNode.textContent = activeRows.length + ' rate lines · ' + uniqueValues(activeRows, produceLabel).length + ' produce';
+        if (countNode) countNode.textContent = String(activeRows.length);
+      } else {
+        titleNode.textContent = 'Mandi rates today';
+        dateNode.textContent = 'No rates for the selected date yet. Try Refresh or widen the date range below.';
+        if (countNode) countNode.textContent = '0';
+      }
+    }
+
+    function renderNewsFeed() {
+      var node = el('newsFeed');
+      if (!node) return;
+      var items = [];
+      (state.analysisItems || []).forEach(function (item) {
+        var meta = item.meta || {};
+        var title = meta.video_title || item.video_id || 'Mandi video';
+        var date = meta.market_date || meta.market_date_sort || '';
+        ['facts', 'guidance', 'learnings', 'key_takeaways'].forEach(function (bucket) {
+          (Array.isArray(meta[bucket]) ? meta[bucket] : []).forEach(function (entry) {
+            var text = entry.text_english || entry.text_hinglish || entry.title || entry.summary || '';
+            if (!text) return;
+            items.push({
+              title: entry.title || (bucket === 'guidance' ? 'Trade guidance' : bucket === 'facts' ? 'Market fact' : 'Market learning'),
+              body: text,
+              date: date,
+              videoTitle: title,
+              videoId: item.video_id || meta.video_id,
+              bucket: bucket,
+            });
+          });
+        });
+      });
+      items.sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+      if (!items.length) {
+        node.innerHTML = '<div class="krishi-empty">No market news yet. Run analysis on mandi videos — facts, guidance, and learnings will appear here.</div>';
+        return;
+      }
+      node.innerHTML = items.slice(0, 48).map(function (item) {
+        return '<article class="krishi-card">'
+          + '<div class="krishi-card-top"><h3>' + escapeHtml(item.title) + '</h3><span class="krishi-pill">' + escapeHtml(item.bucket) + '</span></div>'
+          + '<div class="krishi-card-body">' + escapeHtml(item.body.slice(0, 260)) + (item.body.length > 260 ? '…' : '') + '</div>'
+          + '<div class="krishi-card-meta">' + escapeHtml([item.date, item.videoTitle].filter(Boolean).join(' · ')) + '</div>'
+          + (item.videoId ? '<button type="button" class="text-btn rich-video-btn" data-video-id="' + escapeHtml(item.videoId) + '">Open video report →</button>' : '')
+          + '</article>';
+      }).join('');
+    }
+
+    function renderAadthiDirectory() {
+      var node = el('aadthiDirectory');
+      if (!node) return;
+      var parties = {};
+      filteredByDate(state.priceRows).forEach(function (row) {
+        var name = String(row.party_name || '').trim()
+          .replace(/\bRana\s*Ji\b/ig, '')
+          .replace(/\bRana\b/ig, '')
+          .replace(/\s{2,}/g, ' ')
+          .trim();
+        if (!name) return;
+        if (!parties[name]) parties[name] = { areas: {}, produce: {}, count: 0 };
+        parties[name].count += 1;
+        if (areaLabel(row)) parties[name].areas[areaLabel(row)] = true;
+        if (produceLabel(row)) parties[name].produce[produceLabel(row)] = true;
+      });
+      var list = Object.keys(parties).sort(function (a, b) { return parties[b].count - parties[a].count || a.localeCompare(b); });
+      if (!list.length) {
+        node.innerHTML = '<div class="krishi-empty">No wholesaler names extracted yet. Party names appear when transcripts mention traders during rate calls.</div>';
+        return;
+      }
+      node.innerHTML = list.slice(0, 80).map(function (name) {
+        var entry = parties[name];
+        var meta = Object.keys(entry.produce).slice(0, 4).map(produceDisplayLabel).join(', ');
+        var areas = Object.keys(entry.areas).slice(0, 3).join(', ');
+        return '<div class="krishi-directory-row"><div><strong>' + escapeHtml(name) + '</strong><br><span>' + escapeHtml([meta, areas].filter(Boolean).join(' · ')) + '</span></div><span class="krishi-pill">' + entry.count + ' mention' + (entry.count === 1 ? '' : 's') + '</span></div>';
+      }).join('');
+    }
+
+    function renderPlaceholderCards(nodeId, items) {
+      var node = el(nodeId);
+      if (!node) return;
+      node.innerHTML = items.map(function (item) {
+        return '<article class="krishi-card"><div class="krishi-card-top"><h3>' + escapeHtml(item.name) + '</h3><span class="krishi-pill">' + escapeHtml(item.tag) + '</span></div><div class="krishi-card-body">' + escapeHtml(item.note) + '</div></article>';
+      }).join('') + '<div class="krishi-empty" style="grid-column:1/-1;">Want your business listed? Contact the Krishi Kal team to add verified exporter and transport profiles.</div>';
+    }
+
+    function renderKrishiSections() {
+      renderMandiHero();
+      renderNewsFeed();
+      renderAadthiDirectory();
+      renderPlaceholderCards('exportersDirectory', KRISHI_PLACEHOLDER_EXPORTERS);
+      renderPlaceholderCards('transportDirectory', KRISHI_PLACEHOLDER_TRANSPORT);
+    }
+
+    function initAppViewFromHash() {
+      var hash = (location.hash || '').replace('#', '').trim();
+      var allowed = ['mandi', 'news', 'aadthi', 'exporters', 'transport'];
+      switchAppView(allowed.indexOf(hash) >= 0 ? hash : 'mandi');
+    }
+
     function renderEverything() {
       renderChartFilters();
       updateChartFilterSummary();
@@ -7356,6 +7773,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       renderRateList();
       renderAllData();
       renderAnalysisCards();
+      renderKrishiSections();
     }
 
     function metaList(items, limit) {
@@ -8523,6 +8941,13 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     function setupEvents() {
+      initAppViewFromHash();
+      window.addEventListener('hashchange', initAppViewFromHash);
+      el('appNav').addEventListener('click', function (event) {
+        var btn = event.target.closest('.app-nav-btn');
+        if (!btn) return;
+        switchAppView(btn.getAttribute('data-app-view') || 'mandi');
+      });
       el('openSettingsBtn').addEventListener('click', openSettings);
       el('openActivityBtn').addEventListener('click', function () { openActivityPanel(); });
       el('closeActivityBtn').addEventListener('click', closeActivityPanel);
