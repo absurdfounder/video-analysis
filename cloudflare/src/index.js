@@ -11,6 +11,9 @@ const WHISPER_MODEL = '@cf/openai/whisper-large-v3-turbo';
 const AUDIO_LIMIT_BYTES = 24 * 1024 * 1024;
 const MAX_TRANSCRIPT_CHUNKS = 12;
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+const EXTERNAL_EXTRACTOR_TIMEOUT_MS = 6 * 60 * 1000;
+const STALE_TRANSCRIPT_JOB_MS = 8 * 60 * 1000;
+const D1_BATCH_SIZE = 100;
 
 function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '*';
@@ -1186,6 +1189,14 @@ async function finalizeTranscriptJob(db, jobId, options) {
   const source = safeText(options.source) || 'external-youtube-extractor';
   const segments = Array.isArray(options.segments) ? options.segments : [];
   const transcriptText = transcriptTextFromSegments(segments);
+  await updateTranscriptJobProgress(db, jobId, {
+    stage: 'saving',
+    message: segments.length
+      ? `Fetched ${segments.length} caption line(s). Saving to D1...`
+      : 'No transcript lines returned. Finalizing job...',
+    progress: 90,
+    segmentCount: segments.length,
+  });
   await replaceTranscriptSegments(db, jobId, videoId, segments, language, source);
   await updateTranscriptJob(db, jobId, {
     status: segments.length ? 'complete' : 'empty',
@@ -1212,6 +1223,11 @@ async function runExternalYouTubeTranscriptJob(db, env, options) {
       progress: 20,
     });
     const external = await fetchExternalYouTubeTranscript(env, { videoUrl, videoId, language });
+    if (!external) {
+      throw httpError('Configure YOUTUBE_EXTRACTOR_URL to extract YouTube audio before starting background transcript jobs.', 500, {
+        extractorStage: 'configuration',
+      });
+    }
     await updateTranscriptJobProgress(db, jobId, {
       stage: 'openai_transcription',
       message: 'Transcription finished on the extractor. Saving timestamped lines to D1...',
@@ -1254,8 +1270,8 @@ function shouldRunYoutubeTranscriptInBackground(body) {
 
 async function replaceTranscriptSegments(db, jobId, videoId, segments, language, source) {
   await db.prepare('DELETE FROM transcript_segments WHERE job_id = ?').bind(jobId).run();
-  for (const segment of segments) {
-    await db.prepare(
+  const rows = (Array.isArray(segments) ? segments : []).map((segment) => (
+    db.prepare(
       `INSERT INTO transcript_segments (
         id, job_id, video_id, segment_index, start_seconds, end_seconds, timestamp_label,
         text, language, source, payload_json, created_at
@@ -1272,7 +1288,18 @@ async function replaceTranscriptSegments(db, jobId, videoId, segments, language,
       language,
       source,
       JSON.stringify(segment.raw || {}),
-    ).run();
+    )
+  ));
+
+  if (typeof db.batch === 'function') {
+    for (let index = 0; index < rows.length; index += D1_BATCH_SIZE) {
+      await db.batch(rows.slice(index, index + D1_BATCH_SIZE));
+    }
+    return;
+  }
+
+  for (const statement of rows) {
+    await statement.run();
   }
 }
 
@@ -1345,18 +1372,35 @@ async function fetchExternalYouTubeTranscript(env, options) {
   const token = safeText(env?.YOUTUBE_EXTRACTOR_TOKEN);
   if (token) headers.authorization = `Bearer ${token}`;
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      videoUrl: options.videoUrl,
-      id: options.videoId,
-      language: options.language || 'hi',
-      languages: 'hi.*,hi',
-      preferAudio: true,
-      openAiApiKey: safeText(env?.OPENAI_API_KEY),
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), EXTERNAL_EXTRACTOR_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        videoUrl: options.videoUrl,
+        id: options.videoId,
+        language: options.language || 'hi',
+        languages: 'hi.*,hi',
+        preferAudio: true,
+        openAiApiKey: safeText(env?.OPENAI_API_KEY),
+      }),
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw httpError(
+        `External YouTube extractor timed out after ${Math.round(EXTERNAL_EXTRACTOR_TIMEOUT_MS / 1000)} seconds.`,
+        504,
+        { extractorStage: 'timeout' },
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) {
     const message = data.error || response.statusText;
@@ -1506,13 +1550,14 @@ async function transcribeWithWorkersAI(db, env, body) {
 }
 
 async function getTranscriptByVideo(db, videoId) {
-  const job = await db.prepare(
+  let job = await db.prepare(
     `SELECT * FROM transcript_jobs
      WHERE video_id = ?
      ORDER BY updated_at DESC
      LIMIT 1`,
   ).bind(videoId).first();
   if (!job) return null;
+  job = await markStaleTranscriptJobIfNeeded(db, job);
   const segmentRows = await db.prepare(
     `SELECT segment_index, start_seconds, end_seconds, timestamp_label, text, language, source
      FROM transcript_segments
@@ -1526,8 +1571,9 @@ async function getTranscriptByVideo(db, videoId) {
 }
 
 async function getTranscriptJob(db, jobId) {
-  const job = await db.prepare('SELECT * FROM transcript_jobs WHERE id = ?').bind(jobId).first();
+  let job = await db.prepare('SELECT * FROM transcript_jobs WHERE id = ?').bind(jobId).first();
   if (!job) return null;
+  job = await markStaleTranscriptJobIfNeeded(db, job);
   const segmentRows = await db.prepare(
     `SELECT segment_index, start_seconds, end_seconds, timestamp_label, text, language, source
      FROM transcript_segments
@@ -1538,6 +1584,73 @@ async function getTranscriptJob(db, jobId) {
     job,
     segments: segmentRows.results || [],
   });
+}
+
+async function markStaleTranscriptJobIfNeeded(db, job) {
+  if (!job || safeText(job.status) !== 'running') return job;
+  const touchedAt = Date.parse(job.updated_at || job.created_at || '');
+  if (!Number.isFinite(touchedAt) || Date.now() - touchedAt < STALE_TRANSCRIPT_JOB_MS) return job;
+
+  let payload = {};
+  try {
+    payload = JSON.parse(job.payload_json || '{}');
+  } catch {
+    payload = {};
+  }
+  const stage = safeText(payload.stage);
+  const saved = await db.prepare('SELECT COUNT(*) AS count FROM transcript_segments WHERE job_id = ?').bind(job.id).first();
+  const savedCount = Number(saved?.count) || 0;
+  const expectedCount = Number(job.segment_count) || Number(payload.segmentCount) || Number(payload.captionLineCount) || Number(payload.lineCount) || 0;
+  if (savedCount > 0 && (stage === 'saving' || !expectedCount || savedCount >= expectedCount)) {
+    const completePayload = {
+      ...payload,
+      stage: 'complete',
+      message: `Recovered stale save. Found ${savedCount} transcript line(s) in D1.`,
+      progress: 100,
+      recoveredAt: new Date().toISOString(),
+      staleAfterSeconds: Math.round(STALE_TRANSCRIPT_JOB_MS / 1000),
+    };
+    await updateTranscriptJob(db, job.id, {
+      status: 'complete',
+      error: '',
+      transcript_text: job.transcript_text || '',
+      segment_count: savedCount,
+      payload_json: JSON.stringify(completePayload),
+    });
+    return {
+      ...job,
+      status: 'complete',
+      error: '',
+      segment_count: savedCount,
+      payload_json: JSON.stringify(completePayload),
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  const message = stage === 'saving'
+    ? 'Transcript save timed out before D1 confirmed the rows. Retry this video.'
+    : 'Transcript job timed out before the background worker could finish. Retry this video.';
+  const failedPayload = {
+    stage: 'failed',
+    message,
+    progress: 100,
+    timedOutAt: new Date().toISOString(),
+    staleAfterSeconds: Math.round(STALE_TRANSCRIPT_JOB_MS / 1000),
+  };
+  await updateTranscriptJob(db, job.id, {
+    status: 'failed',
+    error: message,
+    transcript_text: job.transcript_text || '',
+    segment_count: Number(job.segment_count) || 0,
+    payload_json: JSON.stringify(failedPayload),
+  });
+  return {
+    ...job,
+    status: 'failed',
+    error: message,
+    payload_json: JSON.stringify(failedPayload),
+    updated_at: new Date().toISOString(),
+  };
 }
 
 function enrichTranscriptPayload(item) {
