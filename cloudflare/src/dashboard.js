@@ -5372,7 +5372,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
               <h1 id="mandiHeroTitle">Today's wholesale rates</h1>
               <p class="mandi-hero-sub" id="mandiHeroDate">Loading latest mandi data…</p>
             </div>
-            <div class="mandi-hero-stat" id="mandiHeroStat"><strong id="mandiHeroCount">—</strong><span>rate lines today</span></div>
+            <div class="mandi-hero-stat" id="mandiHeroStat"><strong id="mandiHeroCount">—</strong><span>produce tracked</span></div>
           </div>
           <div class="page-stack">
             <section class="surface surface-data" id="dashboard">
@@ -5387,7 +5387,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
                 <div class="panel-toolbar">
                   <div>
                     <h3 class="panel-title">Latest rates</h3>
-                    <p class="panel-note">Wholesale mandi rates for the selected date. Tap a proof chip to verify in source video.</p>
+                    <p class="panel-note">All produce with the latest extracted wholesale rates. The chart below filters one produce at a time.</p>
                   </div>
                   <input id="rateSearch" class="search-box" type="search" placeholder="Search variety, grade, area..." aria-label="Search rates" />
                 </div>
@@ -6900,17 +6900,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     function applyDefaultDateRange() {
       var dates = state.priceRows.map(rowDate).filter(Boolean).sort();
-      var today = todayIso();
-      if (dates.indexOf(today) >= 0) {
-        el('dateFrom').value = today;
-        el('dateTo').value = today;
-      } else if (dates.length) {
-        el('dateFrom').value = dates[dates.length - 1];
-        el('dateTo').value = dates[dates.length - 1];
-      } else {
-        el('dateFrom').value = today;
-        el('dateTo').value = today;
-      }
+      el('dateFrom').value = dates.length ? dates[0] : '';
+      el('dateTo').value = todayIso();
     }
 
     function setReanalyzeStatus(message, kind) {
@@ -7787,25 +7778,19 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     function renderMandiHero() {
-      var today = todayIso();
-      var todayRows = state.priceRows.filter(function (row) { return rowDate(row) === today && priceValue(row) != null; });
-      var activeDate = el('dateFrom') && el('dateFrom').value ? el('dateFrom').value : today;
-      var activeRows = filteredByDate(state.priceRows);
+      var listRows = filteredRateListRows().filter(function (row) { return priceValue(row) != null; });
+      var produceCount = uniqueValues(listRows, produceLabel).length;
       var titleNode = el('mandiHeroTitle');
       var dateNode = el('mandiHeroDate');
       var countNode = el('mandiHeroCount');
       if (!titleNode) return;
-      if (activeDate === today && todayRows.length) {
-        titleNode.textContent = "Today's wholesale rates";
-        dateNode.textContent = formatTallyDate({ market_date: today }) + ' · ' + uniqueValues(todayRows, produceLabel).length + ' produce tracked';
-        if (countNode) countNode.textContent = String(todayRows.length);
-      } else if (activeRows.length) {
-        titleNode.textContent = 'Mandi rates · ' + formatChartDateLabel(activeDate);
-        dateNode.textContent = activeRows.length + ' rate lines · ' + uniqueValues(activeRows, produceLabel).length + ' produce';
-        if (countNode) countNode.textContent = String(activeRows.length);
+      titleNode.textContent = "Today's wholesale rates";
+      if (listRows.length) {
+        var range = chartDateRangeLabel();
+        dateNode.textContent = (range ? range + ' · ' : '') + 'Latest mandi rates for every tracked produce';
+        if (countNode) countNode.textContent = String(produceCount);
       } else {
-        titleNode.textContent = 'Mandi rates today';
-        dateNode.textContent = 'No rates for the selected date yet. Try Refresh or widen the date range below.';
+        dateNode.textContent = 'No rates loaded yet. Tap Refresh to pull the latest mandi data.';
         if (countNode) countNode.textContent = '0';
       }
     }
