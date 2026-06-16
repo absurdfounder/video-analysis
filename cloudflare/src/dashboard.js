@@ -4976,7 +4976,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     /* ── Krishi Kal app shell ── */
-    .app-nav {
+    .app-nav-desktop {
       display: flex;
       gap: 6px;
       flex-wrap: wrap;
@@ -5000,40 +5000,12 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
       white-space: nowrap;
       display: inline-flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 3px;
       min-width: 0;
     }
 
-    .app-nav-icon {
-      display: none;
-      width: 22px;
-      height: 22px;
-      line-height: 1;
-    }
-
-    .app-nav-icon svg {
-      display: block;
-      width: 22px;
-      height: 22px;
-      stroke: currentColor;
-      fill: none;
-      stroke-width: 1.8;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-    }
-
-    .app-nav-label {
-      line-height: 1.2;
-    }
-
-    @media (min-width: 901px) {
-      .app-nav-btn {
-        flex-direction: row;
-      }
-    }
+    .app-nav-label { line-height: 1.2; }
 
     .app-nav-btn:hover {
       background: var(--hover);
@@ -5045,6 +5017,73 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       color: var(--accent-text);
       border-color: rgba(0, 138, 108, 0.25);
       box-shadow: var(--shadow-sm);
+    }
+
+    .app-tabbar {
+      display: none;
+    }
+
+    .app-tabbar-btn {
+      appearance: none;
+      -webkit-appearance: none;
+      border: none;
+      background: transparent;
+      color: #8a8f98;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-height: 52px;
+      padding: 6px 2px 4px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      line-height: 1;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      user-select: none;
+    }
+
+    .app-tabbar-icon {
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+
+    .app-tabbar-icon svg {
+      width: 24px;
+      height: 24px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .app-tabbar-label {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .app-tabbar-btn.active {
+      color: var(--accent-text);
+    }
+
+    .app-tabbar-btn.active .app-tabbar-icon::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      bottom: -5px;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--accent);
+      transform: translateX(-50%);
     }
 
     .app-view { display: none; }
@@ -5212,93 +5251,93 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     @media (max-width: 900px) {
       :root {
-        --bottom-nav-height: calc(62px + env(safe-area-inset-bottom, 0px));
+        --bottom-nav-height: calc(64px + env(safe-area-inset-bottom, 0px));
       }
 
       body {
         padding-bottom: var(--bottom-nav-height);
+        background: var(--bg);
       }
 
-      .app-nav {
+      .app-nav-desktop {
+        display: none !important;
+      }
+
+      .app-tabbar {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         position: fixed;
         left: 0;
         right: 0;
         bottom: 0;
-        top: auto;
-        z-index: 40;
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 0;
-        padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
-        border-bottom: none;
-        border-top: 1px solid var(--border);
-        background: rgba(255, 255, 255, 0.94);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.08);
-        overflow: visible;
-        flex-wrap: nowrap;
-      }
-
-      .app-nav-btn {
-        flex-direction: column;
-        padding: 6px 4px;
-        border-radius: 14px;
-        font-size: 10px;
-        font-weight: 700;
-        gap: 4px;
-        white-space: normal;
-        text-align: center;
-        min-height: 52px;
-        border: none;
-        box-shadow: none;
-      }
-
-      .app-nav-btn .app-nav-icon {
-        display: block;
-      }
-
-      .app-nav-btn .app-nav-label {
-        font-size: 10px;
-        letter-spacing: 0.01em;
-        max-width: 100%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      .app-nav-btn:hover {
-        background: var(--hover);
-      }
-
-      .app-nav-btn.active {
-        background: var(--accent-soft);
-        color: var(--accent-text);
-        border: none;
-        box-shadow: none;
-      }
-
-      .app-nav-btn.active .app-nav-icon svg {
-        stroke: var(--accent-text);
+        z-index: 60;
+        margin: 0;
+        padding: 0;
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+        min-height: var(--bottom-nav-height);
+        background: rgba(255, 255, 255, 0.98);
+        border-top: 1px solid rgba(0, 0, 0, 0.08);
+        box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.04), 0 -10px 30px rgba(0, 0, 0, 0.06);
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
       }
 
       .topbar {
-        padding-bottom: 10px;
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        min-height: 56px;
+        height: auto;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+        box-shadow: none;
+        background: rgba(255, 255, 255, 0.98);
       }
 
-      .site-brand-copy span {
-        display: none;
+      .site-brand-copy span { display: none; }
+
+      .site-brand-mark {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        font-size: 13px;
+      }
+
+      .site-brand-copy strong {
+        font-size: 17px;
+      }
+
+      .top-actions {
+        gap: 4px;
+      }
+
+      .top-actions .secondary-btn,
+      .top-actions .share-btn,
+      #reanalyzeAllBtn,
+      #openTesterTop {
+        display: none !important;
+      }
+
+      .top-actions .text-btn {
+        min-height: 36px;
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+
+      .main {
+        min-height: calc(100dvh - var(--bottom-nav-height));
+      }
+
+      .chat {
+        padding: 12px 12px calc(16px + var(--bottom-nav-height));
       }
 
       .mandi-hero-stat { text-align: left; }
 
-      .chat {
-        padding-bottom: calc(28px + var(--bottom-nav-height));
-      }
-
       .modal {
         padding-bottom: var(--bottom-nav-height);
       }
-    }
+    }    }
 
   </style>
 </head>
@@ -5324,25 +5363,20 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         </div>
       </header>
 
-      <nav class="app-nav" id="appNav" aria-label="Krishi Kal sections">
+      <nav class="app-nav app-nav-desktop" id="appNav" aria-label="Krishi Kal sections">
         <button class="app-nav-btn active" type="button" data-app-view="mandi" aria-current="page">
-          <span class="app-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 17v-6"/><path d="M12 17V7"/><path d="M16 17v-3"/></svg></span>
-          <span class="app-nav-label">Mandi</span>
+          <span class="app-nav-label">Mandi today</span>
         </button>
         <button class="app-nav-btn" type="button" data-app-view="news">
-          <span class="app-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg></span>
           <span class="app-nav-label">News</span>
         </button>
         <button class="app-nav-btn" type="button" data-app-view="aadthi">
-          <span class="app-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 11a4 4 0 1 0-8 0"/><path d="M3 20a9 9 0 0 1 18 0"/></svg></span>
           <span class="app-nav-label">Aadthi</span>
         </button>
         <button class="app-nav-btn" type="button" data-app-view="exporters">
-          <span class="app-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18"/><path d="M12 3a15 15 0 0 0 0 18"/></svg></span>
-          <span class="app-nav-label">Export</span>
+          <span class="app-nav-label">Exporters</span>
         </button>
         <button class="app-nav-btn" type="button" data-app-view="transport">
-          <span class="app-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7h11v8H3z"/><path d="M14 10h3l3 4v1h-6"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg></span>
           <span class="app-nav-label">Transport</span>
         </button>
       </nav>
@@ -5521,6 +5555,29 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </section>
     </main>
   </div>
+
+  <nav class="app-tabbar" id="appTabbar" aria-label="Krishi Kal tabs">
+    <button class="app-tabbar-btn active" type="button" data-app-view="mandi" aria-current="page" aria-label="Mandi today">
+      <span class="app-tabbar-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 17v-6"/><path d="M12 17V7"/><path d="M16 17v-3"/></svg></span>
+      <span class="app-tabbar-label">Mandi</span>
+    </button>
+    <button class="app-tabbar-btn" type="button" data-app-view="news" aria-label="News">
+      <span class="app-tabbar-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4h12a2 2 0 0 1 2 2v12l-4-2-4 2-4-2-4 2V6a2 2 0 0 1 2-2z"/><path d="M8 8h8"/><path d="M8 12h5"/></svg></span>
+      <span class="app-tabbar-label">News</span>
+    </button>
+    <button class="app-tabbar-btn" type="button" data-app-view="aadthi" aria-label="Aadthi">
+      <span class="app-tabbar-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 11a4 4 0 1 0-8 0"/><path d="M3 20a9 9 0 0 1 18 0"/></svg></span>
+      <span class="app-tabbar-label">Aadthi</span>
+    </button>
+    <button class="app-tabbar-btn" type="button" data-app-view="exporters" aria-label="Exporters">
+      <span class="app-tabbar-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18"/><path d="M12 3a15 15 0 0 0 0 18"/></svg></span>
+      <span class="app-tabbar-label">Export</span>
+    </button>
+    <button class="app-tabbar-btn" type="button" data-app-view="transport" aria-label="Transport">
+      <span class="app-tabbar-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7h11v8H3z"/><path d="M14 10h3l3 4v1h-6"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg></span>
+      <span class="app-tabbar-label">Transit</span>
+    </button>
+  </nav>
 
   <div id="chartPopupHost" aria-live="polite"><div class="popup" id="chartPopup">
                   <div class="popup-top">
@@ -7762,7 +7819,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function switchAppView(view) {
       view = view || 'mandi';
       state.appView = view;
-      document.querySelectorAll('.app-nav-btn').forEach(function (btn) {
+      document.querySelectorAll('.app-nav-btn, .app-tabbar-btn').forEach(function (btn) {
         var active = btn.getAttribute('data-app-view') === view;
         btn.classList.toggle('active', active);
         if (active) btn.setAttribute('aria-current', 'page');
@@ -9062,11 +9119,13 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function setupEvents() {
       initAppViewFromHash();
       window.addEventListener('hashchange', initAppViewFromHash);
-      el('appNav').addEventListener('click', function (event) {
-        var btn = event.target.closest('.app-nav-btn');
+      function handleAppNavClick(event) {
+        var btn = event.target.closest('.app-nav-btn, .app-tabbar-btn');
         if (!btn) return;
         switchAppView(btn.getAttribute('data-app-view') || 'mandi');
-      });
+      }
+      el('appNav').addEventListener('click', handleAppNavClick);
+      el('appTabbar').addEventListener('click', handleAppNavClick);
       el('openSettingsBtn').addEventListener('click', openSettings);
       el('openActivityBtn').addEventListener('click', function () { openActivityPanel(); });
       el('closeActivityBtn').addEventListener('click', closeActivityPanel);
