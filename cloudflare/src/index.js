@@ -6,6 +6,11 @@ import {
   indexVectorDatabase,
 } from './vectors.js';
 import { DASHBOARD_HTML } from './dashboard.js';
+import {
+  buildExtractionSystemPrompt,
+  detectProduceNames,
+  lookupProduce,
+} from './produce-dictionary.js';
 
 const WHISPER_MODEL = '@cf/openai/whisper-large-v3-turbo';
 const AUDIO_LIMIT_BYTES = 24 * 1024 * 1024;
@@ -189,6 +194,8 @@ const PRODUCE_INFO = [
 ];
 
 function produceInfo(value) {
+  const fromDictionary = lookupProduce(value);
+  if (fromDictionary) return fromDictionary;
   const raw = safeText(value).toLowerCase();
   const found = PRODUCE_INFO.find(([needle]) => raw.includes(needle));
   if (!found) return null;
@@ -237,7 +244,8 @@ const MANDI_EXTRACTION_SYSTEM = [
   'Input is noisy Hindi/Hinglish live auction video — rapid bids, shortcuts, reporter summaries, trader talk, quality notes, and market learnings.',
   'Your job is equally important for: (1) price rows, (2) facts, (3) guidance, (4) learnings/key_takeaways, (5) chapters.',
   'Return English-first readable metadata. Keep Hinglish names where useful.',
-  'Fruit labels: English / Hinglish e.g. "Mango / Aam". Use produce emoji when obvious.',
+  'Produce labels: use the INDIA PRODUCE DICTIONARY below — exact "English / Hindi" label for each row.',
+  'Use produce emoji when obvious (fruits/vegetables/grains). Respect each entry standard unit and normalize notes.',
   'Never list Rana Ji / Rana / reporter / host as a trader party — only the recorder.',
   '',
   'Wholesale mandi shorthand — interpret correctly:',
@@ -288,6 +296,8 @@ const MARKET_INSIGHT_RULES = [
 ];
 
 function detectCommodities(text, title = '') {
+  const fromDictionary = detectProduceNames(text, title);
+  if (fromDictionary.length) return fromDictionary;
   const hay = `${title} ${text}`.toLowerCase();
   const found = [];
   const seen = new Set();
@@ -1684,7 +1694,7 @@ async function callOpenAIExtractorChunk(env, { videoId, videoUrl, title, segment
       max_tokens: 8000,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: MANDI_EXTRACTION_SYSTEM },
+        { role: 'system', content: buildExtractionSystemPrompt(MANDI_EXTRACTION_SYSTEM) },
         {
           role: 'user',
           content: [
