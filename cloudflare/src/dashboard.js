@@ -2,7 +2,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#008a6c" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Krishi Kal" />
   <title>Krishi Kal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -4996,6 +4999,40 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       font-weight: 600;
       transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
       white-space: nowrap;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .app-nav-icon {
+      display: none;
+      width: 22px;
+      height: 22px;
+      line-height: 1;
+    }
+
+    .app-nav-icon svg {
+      display: block;
+      width: 22px;
+      height: 22px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .app-nav-label {
+      line-height: 1.2;
+    }
+
+    @media (min-width: 901px) {
+      .app-nav-btn {
+        flex-direction: row;
+      }
     }
 
     .app-nav-btn:hover {
@@ -5174,14 +5211,93 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     @media (max-width: 900px) {
-      .app-nav {
-        top: auto;
-        padding: 0 14px 12px;
-        overflow-x: auto;
-        flex-wrap: nowrap;
-        -webkit-overflow-scrolling: touch;
+      :root {
+        --bottom-nav-height: calc(62px + env(safe-area-inset-bottom, 0px));
       }
+
+      body {
+        padding-bottom: var(--bottom-nav-height);
+      }
+
+      .app-nav {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        top: auto;
+        z-index: 40;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0;
+        padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
+        border-bottom: none;
+        border-top: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.94);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.08);
+        overflow: visible;
+        flex-wrap: nowrap;
+      }
+
+      .app-nav-btn {
+        flex-direction: column;
+        padding: 6px 4px;
+        border-radius: 14px;
+        font-size: 10px;
+        font-weight: 700;
+        gap: 4px;
+        white-space: normal;
+        text-align: center;
+        min-height: 52px;
+        border: none;
+        box-shadow: none;
+      }
+
+      .app-nav-btn .app-nav-icon {
+        display: block;
+      }
+
+      .app-nav-btn .app-nav-label {
+        font-size: 10px;
+        letter-spacing: 0.01em;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .app-nav-btn:hover {
+        background: var(--hover);
+      }
+
+      .app-nav-btn.active {
+        background: var(--accent-soft);
+        color: var(--accent-text);
+        border: none;
+        box-shadow: none;
+      }
+
+      .app-nav-btn.active .app-nav-icon svg {
+        stroke: var(--accent-text);
+      }
+
+      .topbar {
+        padding-bottom: 10px;
+      }
+
+      .site-brand-copy span {
+        display: none;
+      }
+
       .mandi-hero-stat { text-align: left; }
+
+      .chat {
+        padding-bottom: calc(28px + var(--bottom-nav-height));
+      }
+
+      .modal {
+        padding-bottom: var(--bottom-nav-height);
+      }
     }
 
   </style>
@@ -5209,11 +5325,26 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       </header>
 
       <nav class="app-nav" id="appNav" aria-label="Krishi Kal sections">
-        <button class="app-nav-btn active" type="button" data-app-view="mandi">Mandi today</button>
-        <button class="app-nav-btn" type="button" data-app-view="news">News</button>
-        <button class="app-nav-btn" type="button" data-app-view="aadthi">Aadthi</button>
-        <button class="app-nav-btn" type="button" data-app-view="exporters">Exporters</button>
-        <button class="app-nav-btn" type="button" data-app-view="transport">Transport</button>
+        <button class="app-nav-btn active" type="button" data-app-view="mandi" aria-current="page">
+          <span class="app-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 17v-6"/><path d="M12 17V7"/><path d="M16 17v-3"/></svg></span>
+          <span class="app-nav-label">Mandi</span>
+        </button>
+        <button class="app-nav-btn" type="button" data-app-view="news">
+          <span class="app-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg></span>
+          <span class="app-nav-label">News</span>
+        </button>
+        <button class="app-nav-btn" type="button" data-app-view="aadthi">
+          <span class="app-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 11a4 4 0 1 0-8 0"/><path d="M3 20a9 9 0 0 1 18 0"/></svg></span>
+          <span class="app-nav-label">Aadthi</span>
+        </button>
+        <button class="app-nav-btn" type="button" data-app-view="exporters">
+          <span class="app-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18"/><path d="M12 3a15 15 0 0 0 0 18"/></svg></span>
+          <span class="app-nav-label">Export</span>
+        </button>
+        <button class="app-nav-btn" type="button" data-app-view="transport">
+          <span class="app-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7h11v8H3z"/><path d="M14 10h3l3 4v1h-6"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg></span>
+          <span class="app-nav-label">Transport</span>
+        </button>
       </nav>
 
       <section class="chat">
@@ -7641,7 +7772,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       view = view || 'mandi';
       state.appView = view;
       document.querySelectorAll('.app-nav-btn').forEach(function (btn) {
-        btn.classList.toggle('active', btn.getAttribute('data-app-view') === view);
+        var active = btn.getAttribute('data-app-view') === view;
+        btn.classList.toggle('active', active);
+        if (active) btn.setAttribute('aria-current', 'page');
+        else btn.removeAttribute('aria-current');
       });
       document.querySelectorAll('.app-view').forEach(function (panel) {
         panel.classList.toggle('active', panel.getAttribute('data-app-view') === view);
