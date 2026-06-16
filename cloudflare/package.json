@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "CLOUDFLARE_ACCOUNT_ID=1fbabfe04c39df8f27c8cbf69121313e wrangler dev --var YOUTUBE_EXTRACTOR_URL:http://127.0.0.1:3000/api/transcript --var WORKER_TRANSCRIBE_URL:http://127.0.0.1:8787/api/transcripts/transcribe",
     "deploy": "wrangler deploy",
     "db:create": "wrangler d1 create fruit-mandi",
     "db:migrate": "wrangler d1 execute fruit-mandi --remote --file=./schema.sql",

@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "install-ytdlp": "node scripts/install-ytdlp.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "start:local": "WORKER_TRANSCRIBE_URL=http://127.0.0.1:8787/api/transcripts/transcribe node server.js"
   },
   "engines": {
     "node": ">=20"

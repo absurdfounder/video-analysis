@@ -55,6 +55,13 @@ function safeText(value) {
   return String(value ?? '').trim();
 }
 
+function parseSqliteUtc(value) {
+  const text = safeText(value);
+  if (!text) return NaN;
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(text)) return Date.parse(text);
+  return Date.parse(text.includes('T') ? `${text}Z` : `${text.replace(' ', 'T')}Z`);
+}
+
 function httpError(message, status = 500, extra = {}) {
   const error = new Error(message);
   error.status = status;
@@ -1397,6 +1404,8 @@ async function fetchExternalYouTubeTranscript(env, options) {
         languages: 'hi.*,hi',
         preferAudio: true,
         openAiApiKey: safeText(env?.OPENAI_API_KEY),
+        workerTranscribeUrl: safeText(env?.WORKER_TRANSCRIBE_URL),
+        workerSyncToken: safeText(env?.SYNC_TOKEN),
       }),
     });
   } catch (error) {
@@ -1598,7 +1607,7 @@ async function getTranscriptJob(db, jobId) {
 
 async function markStaleTranscriptJobIfNeeded(db, job) {
   if (!job || safeText(job.status) !== 'running') return job;
-  const touchedAt = Date.parse(job.updated_at || job.created_at || '');
+  const touchedAt = parseSqliteUtc(job.updated_at || job.created_at || '');
   if (!Number.isFinite(touchedAt) || Date.now() - touchedAt < STALE_TRANSCRIPT_JOB_MS) return job;
 
   let payload = {};

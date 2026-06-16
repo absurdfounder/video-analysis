@@ -4,6 +4,7 @@ app/data/project.json
 # Cloudflare Worker
 cloudflare/node_modules/
 cloudflare/.wrangler/
+cloudflare/.dev.vars
 cloudflare/data/india_produce_dictionary.json
 
 # Local Netlify folder

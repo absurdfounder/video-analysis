@@ -5602,7 +5602,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       <div class="modal-head">
         <div>
           <h2 id="modalTitle">Test transcript worker</h2>
-          <p style="margin-top:5px;color:var(--muted);font-size:13px;">Paste a YouTube URL. The Worker fetches captions via YouTube innertube (ANDROID / IOS / VR clients). If YouTube throttles the datacenter IP, it auto-retries for up to ~45s.</p>
+          <p style="margin-top:5px;color:var(--muted);font-size:13px;">Paste a YouTube URL, or upload a downloaded audio file (best when cloud extractors are blocked). YouTube-only jobs call your configured extractor (<code>YOUTUBE_EXTRACTOR_URL</code>); locally that should be <code>http://127.0.0.1:3000/api/transcript</code> with <code>npm start</code> running in <code>app/</code>.</p>
           <p id="transcriptSetupStatus" class="status" style="margin-top:8px;"></p>
         </div>
         <button class="modal-close" id="closeTesterBtn">×</button>
@@ -8893,6 +8893,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     function updatePreview() {
       var videoUrl = el('videoUrl').value.trim();
+      var audioUrl = el('audioUrl').value.trim();
+      var file = el('audioFile').files[0];
       var id = extractVideoId(videoUrl);
       if (!id) {
         el('videoPreview').classList.remove('show');
@@ -8902,7 +8904,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('videoThumb').src = 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/hqdefault.jpg';
       el('videoIdLabel').textContent = 'Video ID: ' + id;
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
-      el('videoHint').textContent = 'Worker tries ANDROID, ANDROID_VR, and IOS innertube clients. Throttled videos auto-retry up to 10 times (~60s) — wait before assuming failure.';
+      el('videoHint').textContent = file
+        ? 'Audio upload will transcribe on the Worker (Workers AI) and skip YouTube download.'
+        : (audioUrl
+          ? 'Direct audio URL will be fetched and transcribed on the Worker.'
+          : 'YouTube-only jobs download audio via the extractor service. If blocked on Netlify, run app/ locally or upload audio here.');
     }
 
     function runTranscript() {
