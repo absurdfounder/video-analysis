@@ -378,6 +378,29 @@ exports.handler = async (event) => {
       return json(400, { ok: false, error: 'Invalid video URL.' });
     }
 
+    const imported = normalizeSegments({ segments: body.segments, text: body.transcriptText });
+    if (imported.length && (body.fromExtension === true || body.skipFetch === true)) {
+      const language = normalizeLanguage(body.language || body.languages);
+      const method = safeText(body.method) || 'chrome-extension';
+      const methodLabel = safeText(body.methodLabel) || 'Chrome extension (browser session)';
+      return json(200, {
+        ok: true,
+        id,
+        source: EXTRACTOR_SOURCE,
+        version: EXTRACTOR_VERSION,
+        method,
+        methodLabel,
+        model: 'chrome-extension',
+        language,
+        fileName: '',
+        audioBytes: 0,
+        subtitleError: '',
+        segmentCount: imported.length,
+        transcriptText: safeText(body.transcriptText) || imported.map((segment) => segment.text).join(' '),
+        segments: imported,
+      });
+    }
+
     let transcription = null;
     if (body.preferAudio !== true && body.skipSubtitles !== true) {
       try {

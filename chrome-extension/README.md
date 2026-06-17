@@ -2,6 +2,18 @@
 
 This extension avoids Netlify server IP blocking by using your own Chrome YouTube session.
 
+## Netlify / Railway website bridge
+
+When you open the hosted dashboard (`videostudy.netlify.app`), the extension can fetch YouTube captions from **your browser** instead of Railway's blocked server IP.
+
+1. Load this extension in Chrome (`chrome://extensions` → Load unpacked).
+2. Stay signed in to YouTube in the same Chrome profile.
+3. Open the Netlify dashboard in Chrome and click **Add source**.
+
+The page talks to the extension automatically. Extension fetches captions → Railway saves transcript → OpenAI analysis runs on Railway.
+
+Reload the extension after code updates.
+
 ## Load it
 
 1. Open `chrome://extensions`.

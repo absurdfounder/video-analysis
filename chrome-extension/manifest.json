@@ -1,11 +1,22 @@
 {
   "manifest_version": 3,
   "name": "Fruit Price Transcript Miner",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Pull YouTube captions from your browser session and extract timestamped fruit price rows.",
   "action": {
     "default_title": "Open Delhi Fruit Market Miner"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.netlify.app/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["content-bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
   "side_panel": {
     "default_path": "index.html?mode=sidepanel"
   },
