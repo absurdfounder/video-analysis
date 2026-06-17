@@ -6159,6 +6159,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       appView: 'mandi',
       chartExpanded: false,
       extensionBridgeReady: false,
+      extensionTranscriptRetried: false,
       colors: ['#10a37f', '#f7b731', '#4dabf7', '#eb4d4b', '#be2edd', '#badc58', '#ff9f43', '#00d2d3']
     };
 
@@ -6517,9 +6518,53 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       return /^\/api\/transcripts\/[^/?]+$/.test(path) && path !== '/api/transcripts/setup';
     }
 
+    function shouldFallbackToExtensionTranscript(message) {
+      return /download_audio|format is not available|external youtube extractor|yt-dlp|blocked|bot-like|429|extractor failed|caption tracks failed/i.test(String(message || ''));
+    }
+
+    function completeExtensionTranscriptFlow(videoUrl, data) {
+      var id = extractVideoId(videoUrl);
+      resetTranscriptProgress();
+      renderTranscript(data);
+      setTranscriptProgress({
+        percent: 35,
+        stage: 'saving',
+        message: 'Transcript fetched. Saving source and preparing AI extraction.',
+        elapsed: '',
+        attempt: ''
+      });
+      setTranscriptStatus('Transcript fetched: ' + data.job.segment_count + ' line(s). Running AI extraction...', data.job.segment_count ? 'ok' : '');
+      log('Transcript worked via ' + (data.job.methodLabel || data.job.method || 'Chrome extension') + ': ' + data.job.segment_count + ' line(s).');
+      if (data.job.segment_count) {
+        return runAnalysisForVideo(videoUrl, data.job.video_id, data).then(function () {
+          if (id) focusDashboardOnVideo(id);
+          return data;
+        });
+      }
+      return loadAllData();
+    }
+
+    function retryTranscriptViaExtension(videoUrl, language) {
+      if (!state.extensionBridgeReady) {
+        return Promise.reject(new Error('Chrome extension is not connected.'));
+      }
+      log('Worker cloud download blocked. Retrying via Chrome extension (your browser IP)...');
+      setTranscriptStatus('Cloud download blocked. Retrying via Chrome extension...', '');
+      setTranscriptProgress({
+        percent: 14,
+        stage: 'extension_fetch',
+        message: 'Fetching captions via Chrome extension (your browser IP)...',
+        elapsed: '',
+        attempt: ''
+      });
+      return fetchTranscriptViaExtension({ videoUrl: videoUrl, language: language || 'hi' }, videoUrl)
+        .then(function (data) { return completeExtensionTranscriptFlow(videoUrl, data); });
+    }
+
     function workerFetchJson(path, options) {
       if (!WORKER_API_BASE || !window.KRISHI_NETLIFY_STATIC || !isWorkerTranscriptPath(path)) return null;
       if (path === '/api/transcripts/setup' && DIRECT_API_BASE) return null;
+      if (path === '/api/transcripts/transcribe' && state.extensionBridgeReady) return null;
       var apiOptions = options || {};
       var headers = Object.assign({}, apiOptions.headers || {});
       if (!headers.Authorization && !headers.authorization) {
@@ -6852,6 +6897,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         var videoUrl = String(requestBody.videoUrl || requestBody.url || '').trim();
         if (!videoUrl) return Promise.reject(new Error('Paste a YouTube URL first.'));
         if (WORKER_API_BASE && window.KRISHI_NETLIFY_STATIC) {
+          if (state.extensionBridgeReady) {
+            return fetchTranscriptViaExtension(requestBody, videoUrl);
+          }
           return null;
         }
         if (state.extensionBridgeReady) {
@@ -8094,7 +8142,15 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           renderTranscript(data);
           throw new Error(job.message || 'Transcript finished but returned no lines.');
         }
-        if (status === 'failed') throw new Error(job.error || job.message || 'Background transcript failed.');
+        if (status === 'failed') {
+          var failMsg = job.error || job.message || 'Background transcript failed.';
+          if (!state.extensionTranscriptRetried && window.KRISHI_NETLIFY_STATIC && state.extensionBridgeReady
+              && shouldFallbackToExtensionTranscript(failMsg)) {
+            state.extensionTranscriptRetried = true;
+            return retryTranscriptViaExtension(videoUrl, job.language || el('language').value);
+          }
+          throw new Error(failMsg);
+        }
         if (remaining <= 1) throw new Error('Transcript is still processing after ~7 minutes. Try Load stored transcript in a minute.');
         return new Promise(function (resolve) { setTimeout(resolve, delayMs); })
           .then(function () { return pollStoredTranscript(videoUrl, remaining - 1, pollStart); });
@@ -9455,18 +9511,18 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           var missing = [];
           if (!data.openaiConfigured) missing.push('OPENAI_API_KEY');
           if (!data.databaseConfigured) missing.push('DATABASE_URL');
-          if (WORKER_API_BASE) {
-            node.className = missing.length ? 'status bad' : 'status ok';
-            node.textContent = missing.length
-              ? ('Netlify uses Cloudflare Worker for transcript jobs (same as local). Railway still needs ' + missing.join(', ') + ' for AI analysis + save.')
-              : 'Worker transcript: ANDROID + IOS + VR innertube clients with auto-retry on YouTube throttle. Railway saves + runs AI analysis.';
-            return;
-          }
           if (state.extensionBridgeReady) {
             node.className = missing.length ? 'status bad' : 'status ok';
             node.textContent = missing.length
-              ? ('Chrome extension connected for YouTube fetch. Railway still needs ' + missing.join(', ') + ' for AI analysis + save.')
-              : 'Chrome extension connected — fetches captions in your browser (no tab switch). Railway saves + runs OpenAI analysis.';
+              ? ('Chrome extension fetches YouTube via your browser IP. Railway still needs ' + missing.join(', ') + ' for AI analysis + save.')
+              : 'Chrome extension fetches YouTube (browser IP, no cloud block). Railway saves + runs AI analysis.';
+            return;
+          }
+          if (WORKER_API_BASE) {
+            node.className = missing.length ? 'status bad' : 'status ok';
+            node.textContent = missing.length
+              ? ('Cloudflare Worker transcript jobs (install Chrome extension for reliable YouTube). Railway needs ' + missing.join(', ') + '.')
+              : 'Worker transcript: ANDROID + IOS + VR innertube clients with auto-retry on YouTube throttle. Railway saves + runs AI analysis.';
             return;
           }
           if (!data.youtubeCookiesConfigured) missing.push('YOUTUBE_COOKIES');
@@ -9515,10 +9571,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('videoIdLabel').textContent = 'Video ID: ' + id;
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
       el('videoHint').textContent = DIRECT_API_BASE
-        ? (WORKER_API_BASE
-          ? 'Transcript runs on Cloudflare Worker in the background (same flow as local dev).'
-          : (state.extensionBridgeReady
-            ? 'Extension fetches captions in the background — stay on this tab.'
+        ? (state.extensionBridgeReady
+          ? 'Extension fetches captions in your browser (no cloud IP block). Railway saves + analyzes.'
+          : (WORKER_API_BASE
+            ? 'Transcript runs on Cloudflare Worker in the background (same flow as local dev).'
             : 'Install the Fruit Miner Chrome extension for reliable YouTube fetch, or Railway will try server-side yt-dlp.'))
         : (file
           ? 'Audio upload will transcribe on the Worker and skip YouTube download.'
@@ -9532,7 +9588,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var audioUrl = el('audioUrl').value.trim();
       var file = el('audioFile').files[0];
       var language = el('language').value;
-      var useWorkerTranscript = WORKER_API_BASE && window.KRISHI_NETLIFY_STATIC && !file;
+      var useWorkerTranscript = WORKER_API_BASE && window.KRISHI_NETLIFY_STATIC && !file && !state.extensionBridgeReady;
+      state.extensionTranscriptRetried = false;
       openSourceLogs();
       el('runTranscriptBtn').disabled = true;
       resetTranscriptProgress();
@@ -9595,10 +9652,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
             elapsed: '',
             attempt: ''
           });
-          setTranscriptStatus('Transcript fetched: ' + data.job.segment_count + ' line(s). Running AI extraction...', data.job.segment_count ? 'ok' : '');
-          log('Transcript worked via ' + (data.job.methodLabel || data.job.method || 'Railway') + ': ' + data.job.segment_count + ' line(s).');
-          if (data.job.segment_count) return runAnalysisForVideo(videoUrl, data.job.video_id, data);
-          return loadAllData();
+          return completeExtensionTranscriptFlow(videoUrl, data);
         }
         setTranscriptStatus('Transcript run finished: ' + data.job.segment_count + ' segment(s).', data.job.segment_count ? 'ok' : '');
         log('Transcript job ' + data.job.id + ' finished with ' + data.job.segment_count + ' segment(s).');
@@ -9606,6 +9660,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         return null;
       }).catch(function (error) {
         var msg = error.message || '';
+        if (!state.extensionTranscriptRetried && window.KRISHI_NETLIFY_STATIC && state.extensionBridgeReady
+            && shouldFallbackToExtensionTranscript(msg)) {
+          state.extensionTranscriptRetried = true;
+          return retryTranscriptViaExtension(videoUrl, language);
+        }
         var shouldPoll = !file && !audioUrl && extractVideoId(videoUrl)
           && !/failed|Unauthorized|no lines|cookies|not configured|Could not fetch|503/i.test(msg);
         if (shouldPoll) {
