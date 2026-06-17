@@ -6588,6 +6588,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
             cookiesConfigured: false,
             extractorConfigured: true,
             openaiConfigured: Boolean(status.openaiConfigured),
+            youtubeCookiesConfigured: Boolean(status.youtubeCookiesConfigured),
+            databaseConfigured: Boolean(status.databaseConfigured),
+            storage: status.storage || '',
           };
         }).catch(function () {
           return {
@@ -6597,6 +6600,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
             cookiesConfigured: false,
             extractorConfigured: true,
             openaiConfigured: false,
+            youtubeCookiesConfigured: false,
+            databaseConfigured: false,
+            storage: '',
           };
         });
       }
@@ -9283,10 +9289,14 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       fetchJson('/api/transcripts/setup').then(function (data) {
         var node = el('transcriptSetupStatus');
         if (DIRECT_API_BASE) {
-          node.className = data.openaiConfigured ? 'status ok' : 'status bad';
-          node.textContent = data.openaiConfigured
-            ? 'Railway pipeline: subtitles first, audio fallback when needed, then OpenAI extraction for rates and learnings.'
-            : 'Railway transcript is ready, but AI extraction needs OPENAI_API_KEY set on Railway.';
+          var missing = [];
+          if (!data.openaiConfigured) missing.push('OPENAI_API_KEY');
+          if (!data.databaseConfigured) missing.push('DATABASE_URL');
+          if (!data.youtubeCookiesConfigured) missing.push('YOUTUBE_COOKIES');
+          node.className = missing.length ? 'status bad' : 'status ok';
+          node.textContent = missing.length
+            ? ('Railway needs ' + missing.join(', ') + ' for the full reliable pipeline. Without YouTube cookies, some videos may be blocked before transcript.')
+            : 'Railway pipeline: subtitles first, audio fallback when needed, then OpenAI extraction, then Postgres save.';
           return;
         }
         if (data.cookiesConfigured) {

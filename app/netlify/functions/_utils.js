@@ -485,6 +485,6 @@ async function aiExtractForItem(item, options) {
 
 module.exports = {
   fs, os, path, crypto,
-  json, parseBody, safeText, parseVtt, languageScore, guessLanguage, runYtdlp, youtubeCookiesConfigured,
+  json, parseBody, safeText, parseVtt, languageScore, guessLanguage, runYtdlp, youtubeCookiesConfigured, getYoutubeCookiesText,
   extractPricesFromSegments, aiExtractForItem,
 };

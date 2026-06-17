@@ -10,7 +10,9 @@ const {
   languageScore,
   guessLanguage,
   runYtdlp,
+  getYoutubeCookiesText,
 } = require('./_utils');
+const { fetchYouTubeCaptionTranscript } = require('../../lib/youtube-captions');
 
 const OPENAI_TRANSCRIPTION_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const OPENAI_FILE_LIMIT_BYTES = 24 * 1024 * 1024;
@@ -116,6 +118,27 @@ function parseSubtitleFile(filePath) {
   if (ext === '.vtt') return normalizeSubtitleSegments(parseVtt(text));
   if (ext === '.srv1' || ext === '.srv2' || ext === '.srv3' || ext === '.ttml' || ext === '.xml') return parseXmlSubtitle(text);
   return [];
+}
+
+async function fetchYoutubeCaptionTracks(videoUrl, body) {
+  const transcript = await fetchYouTubeCaptionTranscript({
+    YOUTUBE_COOKIES: getYoutubeCookiesText(),
+  }, {
+    videoUrl,
+    videoId: safeText(body.id || body.videoId || body.video_id),
+    language: safeText(body.languages || body.language) || 'hi.*,hi,en.*,en',
+  });
+  const segments = normalizeSubtitleSegments(transcript.segments || []);
+  if (!segments.length) throw new Error('YouTube captionTracks returned no transcript lines.');
+  return {
+    model: transcript.model || 'youtube-captions',
+    language: transcript.language || 'unknown',
+    transcriptText: segments.map(segment => segment.text).join(' '),
+    segments,
+    fileName: '',
+    method: transcript.method || 'captionTracks',
+    methodLabel: transcript.methodLabel || 'YouTube caption tracks',
+  };
 }
 
 async function downloadYoutubeSubtitles(videoUrl, tempRoot, body) {
@@ -358,9 +381,18 @@ exports.handler = async (event) => {
     let transcription = null;
     if (body.preferAudio !== true && body.skipSubtitles !== true) {
       try {
-        transcription = await downloadYoutubeSubtitles(videoUrl, tempRoot, body);
+        transcription = await fetchYoutubeCaptionTracks(videoUrl, body);
       } catch (error) {
         subtitleError = error;
+        try {
+          transcription = await downloadYoutubeSubtitles(videoUrl, tempRoot, body);
+        } catch (ytdlpError) {
+          subtitleError = new Error([
+            error?.message || String(error),
+            ytdlpError?.stderr || ytdlpError?.message || String(ytdlpError),
+          ].filter(Boolean).join(' · '));
+          subtitleError.stage = ytdlpError.stage || error.stage || 'fetch_subtitles';
+        }
       }
     }
 

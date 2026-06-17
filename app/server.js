@@ -1,5 +1,6 @@
 const express = require('express');
 const { loadProjectData, saveProjectData, mergeProjectData, authorizeWrite, storageMode } = require('./netlify/functions/_dataStore');
+const { youtubeCookiesConfigured } = require('./netlify/functions/_utils');
 const { classifyVideosHeuristic } = require('./netlify/functions/_classify');
 const { handler: transcriptHandler } = require('./netlify/functions/transcript');
 const { analyzeTranscriptRich, normalizeSegments } = require('./lib/rich-analysis');
@@ -514,6 +515,7 @@ app.get('/api/status', async (_req, res) => {
       ok: true,
       ytdlpVersion: stdout.trim(),
       openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+      youtubeCookiesConfigured: youtubeCookiesConfigured(),
       databaseConfigured: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_DATABASE_URL),
       storage: storageMode(),
     });
