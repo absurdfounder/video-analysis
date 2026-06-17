@@ -37,6 +37,7 @@ npx @railway/cli variable set "YOUTUBE_COOKIES_BASE64=$COOKIE_B64" \
 npx @railway/cli redeploy \
   --project "$PROJECT_ID" \
   --environment "$ENVIRONMENT_NAME" \
-  --service "$SERVICE_NAME"
+  --service "$SERVICE_NAME" \
+  --yes
 
 echo "Set YOUTUBE_COOKIES_BASE64 and triggered Railway redeploy for $SERVICE_NAME."

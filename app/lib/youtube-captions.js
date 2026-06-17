@@ -36,6 +36,25 @@ function safeText(value) {
   return String(value ?? '').trim();
 }
 
+function cookieHeaderFromNetscape(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (!raw.includes('\t') && raw.includes('=')) return raw;
+  const pairs = [];
+  const seen = new Set();
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line || line.startsWith('#')) continue;
+    const parts = line.split('\t');
+    if (parts.length < 7) continue;
+    const name = safeText(parts[5]);
+    const cookieValue = safeText(parts.slice(6).join('\t'));
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    pairs.push(`${name}=${cookieValue}`);
+  }
+  return pairs.join('; ');
+}
+
 function secondsToClock(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
   const h = Math.floor(total / 3600);
@@ -499,7 +518,7 @@ function buildYouTubeHeaders(env) {
     'accept-language': 'en-US,en;q=0.9,hi;q=0.8',
     'user-agent': INNERTUBE_CLIENTS[0].userAgent,
   };
-  const cookies = safeText(env?.YOUTUBE_COOKIES);
+  const cookies = cookieHeaderFromNetscape(env?.YOUTUBE_COOKIES);
   if (cookies) headers.cookie = cookies;
   return headers;
 }
