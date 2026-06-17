@@ -3025,6 +3025,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       background: #fff0f0;
       color: #b63b3b;
       border-color: #f0c6c6;
+      max-height: 120px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     .test-preview {
@@ -3232,7 +3236,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     .transcript-progress {
       display: none;
-      margin-top: 10px;
+      margin-top: 0;
+      margin-bottom: 10px;
       padding: 12px;
       border: 1px solid #d8e8de;
       border-radius: 12px;
@@ -3241,6 +3246,15 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     .transcript-progress.show {
       display: block;
+    }
+
+    .transcript-progress.failed .transcript-progress-fill {
+      background: linear-gradient(90deg, #d64545, #f08a8a);
+    }
+
+    .transcript-progress.failed {
+      border-color: #f0c6c6;
+      background: #fff8f8;
     }
 
     .transcript-progress-head {
@@ -5789,20 +5803,20 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           <button class="secondary-btn" id="loadStoredBtn">Load</button>
           <button class="secondary-btn" id="clearTranscriptBtn">Clear</button>
         </div>
+        <div id="transcriptProgress" class="transcript-progress" aria-live="polite">
+          <div class="transcript-progress-head">
+            <span id="transcriptProgressLabel">Starting...</span>
+            <span id="transcriptProgressMeta">0:00 · check 0/0</span>
+          </div>
+          <div class="transcript-progress-track">
+            <div id="transcriptProgressFill" class="transcript-progress-fill"></div>
+          </div>
+          <div id="transcriptProgressDetail" class="transcript-progress-detail"></div>
+        </div>
         <div id="transcriptStatus" class="status">Ready.</div>
         <details class="source-log-accordion" id="sourceLogAccordion">
           <summary>Logs</summary>
           <div class="source-log-body">
-            <div id="transcriptProgress" class="transcript-progress" aria-live="polite">
-              <div class="transcript-progress-head">
-                <span id="transcriptProgressLabel">Starting...</span>
-                <span id="transcriptProgressMeta">0:00 · check 0/0</span>
-              </div>
-              <div class="transcript-progress-track">
-                <div id="transcriptProgressFill" class="transcript-progress-fill"></div>
-              </div>
-              <div id="transcriptProgressDetail" class="transcript-progress-detail"></div>
-            </div>
             <div class="log" id="log"></div>
             <div class="source-result">
               <div class="source-result-title">Transcript result</div>
@@ -6168,12 +6182,14 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     var TRANSCRIPT_STAGE_LABELS = {
       queued: 'Queued',
-      fetch_captions: 'Fetching captions',
+      fetch_captions: 'Hetzner transcript',
+      fetch_subtitles: 'Hetzner transcript',
       download_audio: 'Downloading audio',
       openai_transcription: 'Transcribing audio',
       saving: 'Saving transcript',
       railway_transcript: 'Fetching transcript',
-      extension_fetch: 'Chrome extension fetch',
+      hetzner_transcript: 'Hetzner transcript',
+      extension_fetch: 'Chrome extension (YouTube tab)',
       wake: 'Waking YouTube page',
       railway_analysis: 'AI market analysis',
       railway_save: 'Saving rates',
@@ -6519,7 +6535,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     function shouldFallbackToExtensionTranscript(message) {
-      return /download_audio|format is not available|external youtube extractor|yt-dlp|blocked|bot-like|429|extractor failed|caption tracks failed/i.test(String(message || ''));
+      return /fetch_subtitles|download_audio|format is not available|external youtube extractor|hetzner|youtube-transcript|yt-dlp|blocked|bot-like|429|extractor failed|caption tracks failed/i.test(String(message || ''));
     }
 
     function completeExtensionTranscriptFlow(videoUrl, data) {
@@ -6553,7 +6569,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       setTranscriptProgress({
         percent: 14,
         stage: 'extension_fetch',
-        message: 'Fetching captions via Chrome extension (your browser IP)...',
+        message: 'Opening YouTube tab to fetch captions, then returning here...',
         elapsed: '',
         attempt: ''
       });
@@ -6581,14 +6597,40 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     function formatTranscriptFailureHelp(message) {
+      return summarizeTranscriptError(message);
+    }
+
+    function summarizeTranscriptError(message) {
       var text = String(message || '');
-      if (/format is not available|download_audio|extractor failed|yt-dlp|cloud download/i.test(text)) {
-        return text + ' For live Netlify: use local dev (localhost:8787), open the video on youtube.com first and retry, or upload an audio file.';
+      if (/Missing in-page handler|inject transcript helpers|did not finish loading/i.test(text)) {
+        return 'YouTube tab did not load in time. Reload the extension at chrome://extensions, sign in at youtube.com, then retry Add source.';
       }
-      if (/extension|innertube|caption/i.test(text)) {
-        return text + ' Open this exact video on youtube.com, click Show transcript, then click Add source again.';
+      if (/blocked|403|cloud provider|fetch_subtitles|hetzner/i.test(text)) {
+        return 'YouTube blocked server-side fetch. The extension will open the video in a new tab — stay signed in at youtube.com and retry Add source.';
       }
-      return text;
+      if (/timed out/i.test(text)) return 'Transcript fetch timed out. Open the video on youtube.com once, then retry Add source.';
+      if (/extension is not connected/i.test(text)) return 'Chrome extension not connected. Reload the extension and refresh this page.';
+      var short = text.split(' Tip:')[0].split(' · ')[0].trim();
+      if (short.length > 240) short = short.slice(0, 240) + '…';
+      return short || 'Transcript fetch failed.';
+    }
+
+    function extensionProgressFromStage(stage, detail) {
+      var map = {
+        fetch_captions: { percent: 14, label: 'Checking YouTube tabs' },
+        load: { percent: 28, label: 'Opening YouTube video tab' },
+        wake: { percent: 46, label: 'Loading video & captions' },
+        fetch: { percent: 62, label: 'Reading transcript lines' },
+        done: { percent: 78, label: 'Closing YouTube tab' },
+      };
+      var item = map[stage] || { percent: 18, label: 'Extension working' };
+      return {
+        percent: item.percent,
+        stage: 'extension_fetch',
+        message: detail || item.label,
+        elapsed: '',
+        attempt: '',
+      };
     }
 
     function extensionApi(path, body, timeoutMs) {
@@ -6630,16 +6672,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           return;
         }
         if (event.data.type === 'progress') {
-          var stage = event.data.stage || 'extension_fetch';
-          var detail = event.data.detail || 'Extension is fetching captions from YouTube...';
-          var percent = stage === 'done' ? 28 : (stage === 'wake' ? 20 : (stage === 'fetch' ? 22 : (stage === 'load' ? 16 : 14)));
-          setTranscriptProgress({
-            percent: percent,
-            stage: 'extension_fetch',
-            message: detail,
-            elapsed: '',
-            attempt: ''
-          });
+          setTranscriptProgress(extensionProgressFromStage(event.data.stage, event.data.detail));
         }
       });
       window.postMessage({ source: FRUIT_EXTENSION_PAGE, type: 'ping' }, '*');
@@ -6671,11 +6704,50 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       });
     }
 
+    function importExtensionTranscriptToWorker(extData, requestBody, videoUrl) {
+      var id = String(extData.id || requestBody.videoId || requestBody.video_id || extractVideoId(videoUrl) || '').replace(/[^a-zA-Z0-9_-]/g, '');
+      var segments = normalizeDirectSegments(extData.segments || []);
+      return fetchJson('/api/transcripts/transcribe', {
+        method: 'POST',
+        headers: Object.assign({ 'content-type': 'application/json' }, authHeaders()),
+        body: JSON.stringify({
+          videoUrl: videoUrl,
+          videoId: id,
+          id: id,
+          language: extData.language || requestBody.language || 'hi',
+          fromExtension: true,
+          skipFetch: true,
+          segments: segments,
+          transcriptText: extData.transcriptText || segments.map(function (s) { return s.text; }).join(' '),
+          method: extData.method || 'chrome-extension',
+          methodLabel: extData.methodLabel || extData.method || 'Chrome extension (your browser)',
+        }),
+      }).then(function (data) {
+        return {
+          ok: true,
+          job: {
+            id: (data.job && data.job.id) || ('worker_' + id),
+            video_id: id,
+            video_url: videoUrl,
+            status: (data.job && data.job.status) || 'complete',
+            language: extData.language || requestBody.language || 'hi',
+            model: 'chrome-extension',
+            source: 'chrome-extension',
+            method: extData.method || 'chrome-extension',
+            methodLabel: extData.methodLabel || 'Chrome extension (your browser)',
+            segment_count: (data.job && data.job.segment_count) || segments.length,
+          },
+          transcriptText: data.transcriptText || extData.transcriptText || '',
+          segments: data.segments || segments,
+        };
+      });
+    }
+
     function fetchTranscriptViaExtension(requestBody, videoUrl) {
       setTranscriptProgress({
         percent: 14,
         stage: 'fetch_captions',
-        message: 'Fetching captions via Chrome extension (your browser IP, no tab switch)...',
+        message: 'Opening YouTube in a new tab — you will return to this dashboard when captions are ready.',
         elapsed: '',
         attempt: ''
       });
@@ -6688,11 +6760,16 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         setTranscriptProgress({
           percent: 28,
           stage: 'saving',
-          message: 'Captions fetched. Saving on Railway and running AI analysis...',
+          message: DIRECT_API_BASE
+            ? 'Captions fetched. Saving on Railway and running AI analysis...'
+            : 'Captions fetched. Saving on Worker and running AI analysis...',
           elapsed: '',
           attempt: ''
         });
-        return importExtensionTranscriptToRailway(extData, requestBody, videoUrl);
+        if (DIRECT_API_BASE) {
+          return importExtensionTranscriptToRailway(extData, requestBody, videoUrl);
+        }
+        return importExtensionTranscriptToWorker(extData, requestBody, videoUrl);
       });
     }
 
@@ -6952,7 +7029,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     function resetTranscriptProgress() {
       state.lastPollStage = '';
-      el('transcriptProgress').classList.remove('show');
+      var progress = el('transcriptProgress');
+      progress.classList.remove('show', 'failed');
       el('transcriptProgressFill').style.width = '0%';
       el('transcriptProgressLabel').textContent = 'Starting...';
       el('transcriptProgressMeta').textContent = '0:00';
@@ -6965,7 +7043,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var message = options.message || '';
       var elapsed = options.elapsed || '';
       var attempt = options.attempt || '';
-      el('transcriptProgress').classList.add('show');
+      var progress = el('transcriptProgress');
+      progress.classList.add('show');
+      progress.classList.toggle('failed', stage === 'failed');
       el('transcriptProgressFill').style.width = percent + '%';
       el('transcriptProgressLabel').textContent = (TRANSCRIPT_STAGE_LABELS[stage] || stage || 'Working') + ' · ' + percent + '%';
       el('transcriptProgressMeta').textContent = [elapsed, attempt].filter(Boolean).join(' · ');
@@ -6976,7 +7056,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var server = Number(job && job.progress) || 0;
       var stage = job && job.stage;
       if (stage === 'queued') return Math.max(server, 8);
-      if (stage === 'fetch_captions') return Math.max(server, 15);
+      if (stage === 'fetch_captions' || stage === 'fetch_subtitles' || stage === 'hetzner_transcript') return Math.max(server, 15);
       if (stage === 'download_audio' || stage === 'openai_transcription' || job.status === 'running') {
         var bump = Math.min(28, Math.floor(elapsedMs / 3500));
         return Math.max(server, Math.min(88, server + bump));
@@ -8099,7 +8179,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var pollStart = Number(startedAt) || Date.now();
       var attemptNumber = totalAttempts - remaining + 1;
       var delayMs = attemptNumber <= 12 ? 2000 : 5000;
-      setTranscriptStatus('Background transcript in progress. This usually takes 1–3 minutes for a full mandi video.', '');
+      setTranscriptStatus('Background transcript in progress. Hetzner usually returns captions in under a minute.', '');
       return fetchJson('/api/transcripts/' + encodeURIComponent(id)).then(function (data) {
         var job = data.job || {};
         var status = job.status;
@@ -8107,7 +8187,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         var count = Array.isArray(data.segments) ? data.segments.length : 0;
         var elapsed = formatElapsed(Date.now() - pollStart);
         var progress = effectiveTranscriptProgress(job, Date.now() - pollStart);
-        var detail = job.message || 'Waiting for the extractor to finish download + Whisper transcription.';
+        var detail = job.message || 'Waiting for Hetzner to return the YouTube transcript.';
         setTranscriptProgress({
           percent: progress,
           stage: stage,
@@ -8155,8 +8235,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         }
         if (status === 'failed') {
           var failMsg = job.error || job.message || 'Background transcript failed.';
-          if (!state.extensionTranscriptRetried && window.KRISHI_NETLIFY_STATIC && state.extensionBridgeReady
-              && shouldFallbackToExtensionTranscript(failMsg)) {
+          if (!state.extensionTranscriptRetried && state.extensionBridgeReady
+            && shouldFallbackToExtensionTranscript(failMsg)) {
             state.extensionTranscriptRetried = true;
             return retryTranscriptViaExtension(videoUrl, job.language || el('language').value);
           }
@@ -9545,10 +9625,16 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         }
         if (data.cookiesConfigured) {
           node.className = 'status ok';
-          node.textContent = 'Worker transcript: ANDROID + IOS + VR innertube clients with auto-retry when YouTube throttles. Cookies configured for auth fallback.';
-        } else {
+          node.textContent = 'Hetzner VPS fetches YouTube transcripts (youtube-transcript-api), then Worker runs AI price analysis.';
+        } else if (state.extensionBridgeReady) {
           node.className = 'status ok';
-          node.textContent = 'Worker transcript: ANDROID + IOS + VR innertube clients with auto-retry on YouTube throttle.';
+          node.textContent = 'Chrome extension opens YouTube, fetches captions, closes tab, then Worker runs AI analysis.';
+        } else if (data.extractorConfigured) {
+          node.className = 'status ok';
+          node.textContent = 'Hetzner VPS for transcripts (may be IP-blocked). Install Chrome extension for reliable fetch.';
+        } else {
+          node.className = 'status bad';
+          node.textContent = 'Set YOUTUBE_EXTRACTOR_URL to your Hetzner extractor (http://167.233.120.228:3000/api/transcript).';
         }
       }).catch(function () {
         el('transcriptSetupStatus').className = 'status';
@@ -9591,7 +9677,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           ? 'Audio upload will transcribe on the Worker and skip YouTube download.'
           : (audioUrl
             ? 'Direct audio URL will be fetched and transcribed on the Worker.'
-            : 'YouTube jobs use the configured extractor service.'));
+            : 'YouTube: Chrome extension (recommended) or Hetzner VPS, then AI analysis on Worker.'));
     }
 
     function runTranscript() {
@@ -9604,11 +9690,41 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       openSourceLogs();
       el('runTranscriptBtn').disabled = true;
       resetTranscriptProgress();
+
+      if (!file && !audioUrl && videoUrl && state.extensionBridgeReady) {
+        setTranscriptStatus('Opening YouTube tab via extension...', '');
+        log('Extension-first: opening YouTube tab, fetching captions, then returning here for AI analysis.');
+        setTranscriptProgress({
+          percent: 12,
+          stage: 'extension_fetch',
+          message: 'Extension is fetching captions from YouTube using your browser session...',
+          elapsed: '',
+          attempt: ''
+        });
+        return fetchTranscriptViaExtension({ videoUrl: videoUrl, language: language }, videoUrl)
+          .then(function (data) { return completeExtensionTranscriptFlow(videoUrl, data); })
+          .catch(function (error) {
+            var msg = error.message || String(error);
+            log('ERROR: ' + msg);
+            openSourceLogs();
+            setTranscriptProgress({
+              percent: 100,
+              stage: 'failed',
+              message: summarizeTranscriptError(msg),
+              elapsed: '',
+              attempt: ''
+            });
+            setTranscriptStatus(summarizeTranscriptError(msg), 'bad');
+          }).finally(function () {
+            el('runTranscriptBtn').disabled = false;
+          });
+      }
+
       setTranscriptStatus(useWorkerTranscript
-        ? 'Starting background YouTube transcript job...'
-        : (DIRECT_API_BASE ? 'Adding source...' : (file || audioUrl ? 'Starting transcription...' : 'Starting background YouTube transcript job...')), '');
+        ? 'Starting Hetzner transcript job...'
+        : (DIRECT_API_BASE ? 'Adding source...' : (file || audioUrl ? 'Starting transcription...' : 'Starting Hetzner transcript job...')), '');
       log(useWorkerTranscript
-        ? 'Submitting YouTube URL for background transcription on Cloudflare Worker (same as local).'
+        ? 'Submitting YouTube URL — Hetzner fetches transcript, Worker runs AI analysis.'
         : (DIRECT_API_BASE
           ? (state.extensionBridgeReady
             ? 'Fetching YouTube transcript via Chrome extension, then saving on Railway.'
@@ -9671,7 +9787,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         return null;
       }).catch(function (error) {
         var msg = error.message || '';
-        if (!state.extensionTranscriptRetried && window.KRISHI_NETLIFY_STATIC && state.extensionBridgeReady
+        if (!state.extensionTranscriptRetried && state.extensionBridgeReady
             && shouldFallbackToExtensionTranscript(msg)) {
           state.extensionTranscriptRetried = true;
           return retryTranscriptViaExtension(videoUrl, language);
@@ -9682,9 +9798,17 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           log('Request ended early (older worker or timeout). Falling back to polling saved transcript...');
           return pollStoredTranscript(videoUrl, 90, pollStart);
         }
-        resetTranscriptProgress();
-        setTranscriptStatus(formatTranscriptFailureHelp(msg), 'bad');
-        log('ERROR: ' + msg);
+        var failMsg = error.message || '';
+        log('ERROR: ' + failMsg);
+        openSourceLogs();
+        setTranscriptProgress({
+          percent: 100,
+          stage: 'failed',
+          message: summarizeTranscriptError(failMsg),
+          elapsed: '',
+          attempt: ''
+        });
+        setTranscriptStatus(summarizeTranscriptError(failMsg), 'bad');
       }).finally(function () {
         el('runTranscriptBtn').disabled = false;
       });

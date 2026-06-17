@@ -1109,3 +1109,18 @@ function fetchBrowseContinuationInPage(continuation) {
     return { ok: true, data };
   })();
 }
+
+const FRUIT_MINER_PAGE_HANDLERS = {
+  wakeYouTubePageInPage,
+  fetchTranscriptInPage,
+  fetchTranscriptFromPanelInPage,
+  fetchVisibleTranscriptPanelOnlyInPage,
+  fetchCaptionTrackInPage,
+  fetchInnerTubeTranscriptInPage,
+  fetchTextInYouTubePage,
+  waitForYouTubeVideoReadyInPage,
+  fetchBrowseContinuationInPage,
+};
+for (const [name, handler] of Object.entries(FRUIT_MINER_PAGE_HANDLERS)) {
+  globalThis[name] = handler;
+}

@@ -16,3 +16,8 @@ tmp_*.html
 
 # Local deploy-only secrets. Never commit browser cookies.
 app/secrets/
+hetzner/config.env
+
+#hetzner
+hetzner/extractor/.venv/
+hetzner/extractor/node_modules/

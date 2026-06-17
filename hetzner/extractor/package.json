@@ -1,0 +1,16 @@
+{
+  "name": "hetzner-youtube-extractor",
+  "version": "2.0.0",
+  "private": true,
+  "description": "YouTube transcript extractor for Hetzner VPS (youtube-transcript-api)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.22.2"
+  }
+}

@@ -1243,70 +1243,37 @@ async function runExternalYouTubeTranscriptJob(db, env, options) {
   try {
     await updateTranscriptJobProgress(db, jobId, {
       stage: 'fetch_captions',
-      message: 'Trying YouTube caption tracks before audio download...',
-      progress: 15,
-      method: 'captionTracks',
-      methodLabel: 'YouTube caption tracks',
-    });
-    try {
-      const captions = await fetchYouTubeCaptionTranscript(env, {
-        videoUrl,
-        videoId,
-        language: safeText(options.languages) || `${language}.*,${language},en.*,en`,
-      });
-      await finalizeTranscriptJob(db, jobId, {
-        videoId: captions.videoId || videoId,
-        language: captions.language || language,
-        source: captions.source,
-        method: captions.method,
-        methodLabel: captions.methodLabel,
-        segments: captions.segments,
-        payload: {
-          method: captions.method,
-          methodLabel: captions.methodLabel,
-          model: captions.model,
-          extraction: 'youtube-caption-tracks',
-          attempts: captions.attempts || [],
-          segmentCount: captions.segments.length,
-        },
-      });
-      return;
-    } catch (captionError) {
-      await updateTranscriptJobProgress(db, jobId, {
-        stage: 'download_audio',
-        message: `Caption tracks failed (${captionError?.message || captionError}). Falling back to audio extraction...`,
-        progress: 30,
-        captionError: captionError?.message || String(captionError),
-      });
-    }
-    await updateTranscriptJobProgress(db, jobId, {
-      stage: 'download_audio',
-      message: 'Downloading YouTube audio on the extractor service (yt-dlp). This usually takes 30–90 seconds.',
+      message: 'Fetching transcript from Hetzner (youtube-transcript-api)...',
       progress: 20,
+      method: 'youtube-transcript-api',
+      methodLabel: 'Hetzner youtube-transcript-api',
     });
-    const external = await fetchExternalYouTubeTranscript(env, { videoUrl, videoId, language });
-    if (!external) {
-      throw httpError('Configure YOUTUBE_EXTRACTOR_URL to extract YouTube audio before starting background transcript jobs.', 500, {
-        extractorStage: 'configuration',
-      });
-    }
+    const transcript = await fetchYouTubeTranscriptPreferHetzner(env, {
+      videoUrl,
+      videoId,
+      language,
+      languages: safeText(options.languages) || `${language}.*,${language},en.*,en`,
+    });
     await updateTranscriptJobProgress(db, jobId, {
-      stage: 'openai_transcription',
-      message: 'Transcription finished on the extractor. Saving timestamped lines to D1...',
-      progress: 82,
+      stage: 'saving',
+      message: 'Transcript received from Hetzner. Saving timestamped lines to D1...',
+      progress: 75,
     });
-    const segments = external.segments || [];
+    const segments = transcript.segments || [];
     await finalizeTranscriptJob(db, jobId, {
-      videoId: external.videoId || videoId,
-      language: external.language || language,
-      source: external.source,
+      videoId: transcript.videoId || videoId,
+      language: transcript.language || language,
+      source: transcript.source,
+      method: transcript.method,
+      methodLabel: transcript.methodLabel,
       segments,
       payload: {
-        ...(external.payload || {}),
-        method: external.method || 'external-youtube-extractor',
-        methodLabel: external.methodLabel || external.source || 'External YouTube extractor',
-        model: external.model,
-        extraction: 'external-youtube-extractor',
+        ...(transcript.payload || {}),
+        method: transcript.method || 'youtube-transcript-api',
+        methodLabel: transcript.methodLabel || 'Hetzner youtube-transcript-api',
+        model: transcript.model,
+        extraction: 'hetzner-youtube-transcript-api',
+        segmentCount: segments.length,
       },
     });
   } catch (error) {
@@ -1328,6 +1295,7 @@ async function runExternalYouTubeTranscriptJob(db, env, options) {
 }
 
 function shouldRunYoutubeTranscriptInBackground(body) {
+  if (body.fromExtension === true || body.skipFetch === true) return false;
   const videoUrl = safeText(body.videoUrl || body.video_url || body.youtubeUrl || body.youtube_url);
   return Boolean(videoUrl) && !hasAudioInput(body);
 }
@@ -1456,11 +1424,8 @@ async function fetchExternalYouTubeTranscript(env, options) {
         videoUrl: options.videoUrl,
         id: options.videoId,
         language: options.language || 'hi',
-        languages: 'hi.*,hi',
+        languages: safeText(options.languages) || `${safeText(options.language) || 'hi'}.*,${safeText(options.language) || 'hi'},en.*,en`,
         preferAudio: false,
-        openAiApiKey: safeText(env?.OPENAI_API_KEY),
-        workerTranscribeUrl: safeText(env?.WORKER_TRANSCRIBE_URL),
-        workerSyncToken: safeText(env?.SYNC_TOKEN),
       }),
     });
   } catch (error) {
@@ -1502,7 +1467,7 @@ async function fetchExternalYouTubeTranscript(env, options) {
     source: safeText(data.source) || 'external-youtube-extractor',
     method: safeText(data.method) || safeText(data.source) || 'external-youtube-extractor',
     methodLabel: safeText(data.methodLabel) || safeText(data.source) || 'External YouTube extractor',
-    model: safeText(data.model) || 'yt-dlp-extractor',
+    model: safeText(data.model) || 'youtube-transcript-api',
     segments,
     payload: {
       extraction: 'external-youtube-extractor',
@@ -1519,8 +1484,58 @@ function inferExternalExtractorStage(data, message) {
   if (explicit) return explicit;
   const text = `${safeText(message)} ${safeText(data?.source)} ${safeText(data?.version)}`;
   if (/openai|api key|model|transcription|transcribe/i.test(text)) return 'openai_transcription';
-  if (/youtube|yt-dlp|blocked|cookies|bot-like|429|download|audio/i.test(text)) return 'download_audio';
+  if (/blocked|transcript|subtitle|caption|innertube|youtube-transcript/i.test(text)) return 'fetch_subtitles';
+  if (/youtube|yt-dlp|cookies|bot-like|429|download|audio/i.test(text)) return 'download_audio';
   return 'unknown';
+}
+
+async function fetchYouTubeTranscriptPreferHetzner(env, options) {
+  const videoUrl = safeText(options.videoUrl);
+  const videoId = safeText(options.videoId) || extractYouTubeId(videoUrl);
+  const language = safeText(options.language) || 'hi';
+  const languages = safeText(options.languages) || `${language}.*,${language},en.*,en`;
+  const hetznerConfigured = Boolean(safeText(env?.YOUTUBE_EXTRACTOR_URL || env?.YOUTUBE_TRANSCRIPT_PROXY_URL));
+  let hetznerError = null;
+
+  if (hetznerConfigured) {
+    try {
+      return await fetchExternalYouTubeTranscript(env, { videoUrl, videoId, language, languages });
+    } catch (error) {
+      hetznerError = error;
+    }
+  }
+
+  try {
+    const captions = await fetchYouTubeCaptionTranscript(env, {
+      videoUrl,
+      videoId,
+      language: languages,
+    });
+    return {
+      videoId: captions.videoId || videoId,
+      language: captions.language || language,
+      source: captions.source,
+      method: captions.method,
+      methodLabel: captions.methodLabel,
+      model: captions.model,
+      segments: captions.segments,
+      payload: {
+        method: captions.method,
+        methodLabel: captions.methodLabel,
+        model: captions.model,
+        attempts: captions.attempts || [],
+      },
+    };
+  } catch (captionError) {
+    if (hetznerError) throw hetznerError;
+    if (!hetznerConfigured) {
+      throw httpError(
+        `Configure YOUTUBE_EXTRACTOR_URL (Hetzner youtube-transcript-api) for YouTube transcripts. Innertube failed: ${captionError?.message || captionError}`,
+        500,
+      );
+    }
+    throw captionError;
+  }
 }
 
 async function transcribeWithWorkersAI(db, env, body) {
@@ -1535,23 +1550,12 @@ async function transcribeWithWorkersAI(db, env, body) {
   const source = 'workers-ai-whisper';
   const jobId = safeText(body.jobId || body.job_id) || shortId('tx');
   if (videoUrl && !hasAudioInput(body)) {
-    let transcript = null;
-    try {
-      transcript = await fetchYouTubeCaptionTranscript(env, {
-        videoUrl,
-        videoId,
-        language: safeText(body.languages) || `${language}.*,${language},en.*,en`,
-      });
-    } catch (captionError) {
-      const external = await fetchExternalYouTubeTranscript(env, { videoUrl, videoId, language });
-      if (!external) {
-        throw httpError(
-          `Caption tracks failed (${captionError?.message || captionError}). Configure YOUTUBE_EXTRACTOR_URL to extract YouTube audio and transcribe it with OpenAI.`,
-          500,
-        );
-      }
-      transcript = external;
-    }
+    const transcript = await fetchYouTubeTranscriptPreferHetzner(env, {
+      videoUrl,
+      videoId,
+      language,
+      languages: safeText(body.languages) || `${language}.*,${language},en.*,en`,
+    });
     return saveTranscriptResult(db, {
       jobId,
       videoId: transcript.videoId,
@@ -2244,20 +2248,19 @@ export default {
       }
 
       if (path === '/api/transcripts/setup' && request.method === 'GET') {
+        const extractorUrl = safeText(env.YOUTUBE_EXTRACTOR_URL || env.YOUTUBE_TRANSCRIPT_PROXY_URL);
         return jsonResponse({
           ok: true,
-          primaryMethod: 'youtube-caption-tracks',
+          primaryMethod: 'hetzner-youtube-transcript-api',
           methods: [
-            'watch captionTracks',
-            'Innertube WEB captionTracks',
-            'Innertube ANDROID captionTracks',
-            'Innertube IOS captionTracks',
-            'Innertube TVHTML5 captionTracks',
-            'external yt-dlp/audio extractor fallback',
-            'Workers AI Whisper for supplied audio',
+            'Hetzner VPS youtube-transcript-api (primary)',
+            'Worker Innertube caption fallback',
+            'Workers AI analysis after transcript save',
+            'Workers AI Whisper for uploaded audio',
           ],
-          cookiesConfigured: Boolean(safeText(env.YOUTUBE_COOKIES)),
-          extractorConfigured: Boolean(safeText(env.YOUTUBE_EXTRACTOR_URL || env.YOUTUBE_TRANSCRIPT_PROXY_URL)),
+          extractorUrl,
+          cookiesConfigured: false,
+          extractorConfigured: Boolean(extractorUrl),
         }, 200, request);
       }
 
@@ -2282,10 +2285,33 @@ export default {
           return jsonResponse({ ok: false, error: 'Unauthorized. Set Authorization: Bearer <SYNC_TOKEN>.' }, 401, request);
         }
         const body = await parseTranscriptRequest(request);
+        const videoUrl = safeText(body.videoUrl || body.video_url || body.youtubeUrl || body.youtube_url);
+        const videoId = safeText(body.videoId || body.video_id) || extractYouTubeId(videoUrl);
+        const language = safeText(body.language) || 'hi';
+
+        if ((body.fromExtension === true || body.skipFetch === true) && videoUrl && !hasAudioInput(body)) {
+          const segments = normalizeExternalTranscriptSegments(body.segments);
+          if (!segments.length) {
+            return jsonResponse({ ok: false, error: 'Extension import returned no transcript lines.' }, 400, request);
+          }
+          const result = await saveTranscriptResult(env.DB, {
+            videoUrl,
+            videoId,
+            language,
+            source: 'chrome-extension',
+            method: safeText(body.method) || 'chrome-extension',
+            methodLabel: safeText(body.methodLabel) || 'Chrome extension (browser IP)',
+            model: 'chrome-extension',
+            segments,
+            payload: {
+              extraction: 'chrome-extension-import',
+              transcriptText: safeText(body.transcriptText),
+            },
+          });
+          return jsonResponse({ ok: true, ...result }, 200, request);
+        }
+
         if (shouldRunYoutubeTranscriptInBackground(body)) {
-          const videoUrl = safeText(body.videoUrl || body.video_url || body.youtubeUrl || body.youtube_url);
-          const videoId = safeText(body.videoId || body.video_id) || extractYouTubeId(videoUrl);
-          const language = safeText(body.language) || 'hi';
           const jobId = shortId('tx');
           await insertTranscriptJob(env.DB, {
             id: jobId,
@@ -2298,7 +2324,7 @@ export default {
             source: 'background-youtube-extractor',
             payload_json: JSON.stringify({
               stage: 'queued',
-              message: 'Transcript job accepted. Starting YouTube audio download...',
+              message: 'Transcript job accepted. Fetching from Hetzner (youtube-transcript-api)...',
               progress: 8,
             }),
           });

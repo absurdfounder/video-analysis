@@ -2144,6 +2144,39 @@ async function transcript(body) {
   const errors = [];
   if (!/^https?:\/\//i.test(videoUrl) || !id) return { ok: false, error: 'Invalid YouTube video URL.' };
 
+  if (fromWebsite) {
+    broadcastCaptureProgress(id, 'fetch_captions', 'Checking for an open YouTube tab with this video...');
+    try {
+      const openTabResult = await fetchTranscriptFromActiveWatchTabIfMatch(id);
+      if (openTabResult?.ok && openTabResult.segments?.length) {
+        broadcastCaptureProgress(id, 'done', `Captured ${openTabResult.segments.length} lines from open YouTube tab`);
+        return transcriptResponse(id, openTabResult);
+      }
+    } catch (error) {
+      errors.push(cleanError(error));
+    }
+
+    try {
+      broadcastCaptureProgress(id, 'load', 'Opening YouTube video tab (you will be switched back when done)...');
+      const websiteResult = await fetchTranscriptInEphemeralYouTubeTab(videoUrl, id, languages, body.returnTabId || null);
+      if (!websiteResult?.ok || !websiteResult.segments?.length) {
+        return {
+          ok: false,
+          id,
+          error: websiteResult?.error || 'Could not load captions from the YouTube tab. Sign in at youtube.com and retry.',
+        };
+      }
+      broadcastCaptureProgress(id, 'done', `Captured ${websiteResult.segments.length} lines from YouTube tab`);
+      return transcriptResponse(id, websiteResult);
+    } catch (error) {
+      return {
+        ok: false,
+        id,
+        error: cleanError(error) || 'Transcript fetch failed in YouTube tab.',
+      };
+    }
+  }
+
   broadcastCaptureProgress(id, 'fetch_captions', 'Checking for an open YouTube tab with this video...');
   try {
     const openTabResult = await fetchTranscriptFromActiveWatchTabIfMatch(id);
@@ -2169,26 +2202,12 @@ async function transcript(body) {
     broadcastCaptureProgress(id, 'fetch_captions', `Innertube failed: ${message.slice(0, 180)}`);
   }
 
-  if (fromWebsite) {
-    broadcastCaptureProgress(id, 'fetch_captions', 'Trying watch-page caption fetch (no tab)...');
-    try {
-      const backgroundResult = await fetchTranscriptFromBackgroundNetwork(videoUrl, id, languages);
-      if (backgroundResult?.ok && backgroundResult.segments?.length) {
-        broadcastCaptureProgress(id, 'done', `Captured ${backgroundResult.segments.length} lines`);
-        return transcriptResponse(id, backgroundResult);
-      }
-      if (backgroundResult?.error) errors.push(backgroundResult.error);
-    } catch (error) {
-      errors.push(cleanError(error));
-    }
-  }
-
   let result = null;
   try {
     broadcastCaptureProgress(id, 'load', 'Opening hidden YouTube tab as last resort...');
     result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages, {
-      preferWorker: preferWorker || fromWebsite,
-      fromWebsite,
+      preferWorker,
+      fromWebsite: false,
       returnTabId: body.returnTabId || null,
     });
   } catch (tabError) {
@@ -2691,6 +2710,14 @@ async function injectTranscriptHelpers(tabId) {
     world: 'MAIN',
     files: ['transcript-fetch.js'],
   });
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: () => typeof globalThis.fetchTranscriptInPage === 'function',
+  });
+  if (!result) {
+    throw new Error('Could not inject transcript helpers into the YouTube tab.');
+  }
 }
 
 async function runInYouTubeTab(functionName, args = [], tabId = null, options = {}) {
@@ -2727,8 +2754,21 @@ async function fetchTextViaYouTubeTab(url) {
 }
 
 async function waitForYouTubePageReady(tabId, videoId) {
-  const ready = await runInYouTubeTab('waitForYouTubeVideoReadyInPage', [videoId], tabId);
-  if (!ready?.ok) throw new Error(ready?.error || 'YouTube watch page did not finish loading.');
+  await waitForTabComplete(tabId, 45000, videoId);
+  const deadline = Date.now() + 25000;
+  let lastError = 'YouTube watch page did not finish loading.';
+  while (Date.now() < deadline) {
+    try {
+      await injectTranscriptHelpers(tabId);
+      const ready = await runInYouTubeTab('waitForYouTubeVideoReadyInPage', [videoId], tabId, { skipInject: true });
+      if (ready?.ok) return;
+      lastError = ready?.error || lastError;
+    } catch (error) {
+      lastError = cleanError(error) || lastError;
+    }
+    await sleep(300);
+  }
+  throw new Error(lastError);
 }
 
 async function listOpenWatchTabs(excludeTabId = null) {
@@ -2842,6 +2882,31 @@ async function restoreDashboardTab(returnTabId) {
   }
 }
 
+async function openEphemeralYouTubeTab(videoUrl, returnTabId) {
+  if (returnTabId) {
+    try {
+      const returnTab = await chrome.tabs.get(returnTabId);
+      if (returnTab?.windowId) await chrome.windows.update(returnTab.windowId, { focused: true });
+    } catch {
+      // Return tab may have been closed.
+    }
+  }
+  const tab = await chrome.tabs.create({ url: videoUrl, active: true });
+  await chrome.windows.update(tab.windowId, { focused: true });
+  await chrome.tabs.update(tab.id, { active: true });
+  await sleep(400);
+  return tab.id;
+}
+
+async function closeEphemeralYouTubeTab(tabId, returnTabId) {
+  if (tabId) {
+    try { await chrome.tabs.remove(tabId); } catch {
+      // Tab may already be closed.
+    }
+  }
+  await restoreDashboardTab(returnTabId);
+}
+
 async function focusTabForInteraction(tabId) {
   const tab = await chrome.tabs.get(tabId);
   await chrome.windows.update(tab.windowId, { focused: true });
@@ -2849,7 +2914,8 @@ async function focusTabForInteraction(tabId) {
   await sleep(500);
 }
 
-async function fetchTranscriptWithInteractiveFocus(tabId, returnTabId, videoId, languages) {
+async function fetchTranscriptWithInteractiveFocus(tabId, returnTabId, videoId, languages, options = {}) {
+  const shouldRestore = options.restoreTab !== false;
   try {
     broadcastCaptureProgress(videoId, 'wake', 'Auto-playing and scrolling YouTube to load captions...');
     await focusTabForInteraction(tabId);
@@ -2884,7 +2950,24 @@ async function fetchTranscriptWithInteractiveFocus(tabId, returnTabId, videoId, 
       error: pageResult?.error || 'Could not load captions after automatic YouTube interaction.',
     };
   } finally {
-    await restoreDashboardTab(returnTabId);
+    if (shouldRestore) await restoreDashboardTab(returnTabId);
+  }
+}
+
+async function fetchTranscriptInEphemeralYouTubeTab(videoUrl, videoId, languages, returnTabId) {
+  let tabId = null;
+  try {
+    broadcastCaptureProgress(videoId, 'load', 'Opening YouTube and switching to the video tab...');
+    tabId = await openEphemeralYouTubeTab(videoUrl, returnTabId);
+    await waitForYouTubePageReady(tabId, videoId);
+    await prepareWorkerTab(tabId);
+    await installMuteHook(tabId);
+    broadcastCaptureProgress(videoId, 'fetch', 'Fetching captions from the YouTube tab...');
+    const result = await fetchTranscriptWithInteractiveFocus(tabId, returnTabId, videoId, languages, { restoreTab: false });
+    return result;
+  } finally {
+    broadcastCaptureProgress(videoId, 'done', 'Closing YouTube tab and returning to your dashboard...');
+    await closeEphemeralYouTubeTab(tabId, returnTabId);
   }
 }
 
