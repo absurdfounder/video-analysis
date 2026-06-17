@@ -111,6 +111,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'fruit-miner-website') return;
+  websiteBridgePorts.add(port);
+  port.onDisconnect.addListener(() => websiteBridgePorts.delete(port));
+  port.onMessage.addListener((message) => {
+    const path = safeText(message?.path);
+    const body = message?.body || {};
+    handleApi(path, body)
+      .then((data) => {
+        try { port.postMessage({ type: 'response', data }); } catch {}
+      })
+      .catch((error) => {
+        try { port.postMessage({ type: 'response', data: { ok: false, error: cleanError(error) } }); } catch {}
+      });
+  });
+});
+
 async function configureActionPopup(modeOverride = '') {
   const stored = modeOverride ? {} : await chrome.storage.local.get('fruitMinerOpenUIMode');
   const mode = modeOverride || stored.fruitMinerOpenUIMode || 'sidepanel';
@@ -124,7 +141,11 @@ configureActionPopup().catch(() => {});
 async function handleApi(path, body) {
   if (path === '/api/status') return status();
   if (path === '/api/list-videos') return listVideos(body);
-  if (path === '/api/transcript') return transcript(body);
+  if (path === '/api/transcript') {
+    const payload = body.fromWebsite ? { ...body, preferWorker: true } : body;
+    const timeoutMs = body.fromWebsite ? WEBSITE_TRANSCRIPT_TIMEOUT_MS : TRANSCRIPT_FETCH_TIMEOUT_MS;
+    return transcriptWithTimeout(payload, timeoutMs);
+  }
   if (path === '/api/capture-visible-transcript') return captureVisibleTranscript(body);
   if (path === '/api/extract-prices') return extractPrices(body);
   if (path === '/api/extract-prices-ai') return extractPricesAi(body);
@@ -367,6 +388,8 @@ const TRANSCRIPT_BATCH_KEY = 'transcriptBatchJob';
 const BATCH_LOG_LIMIT = 80;
 const BATCH_LOCK_STALE_MS = 90000;
 const TRANSCRIPT_FETCH_TIMEOUT_MS = 45000;
+const WEBSITE_TRANSCRIPT_TIMEOUT_MS = 5 * 60 * 1000;
+const websiteBridgePorts = new Set();
 const AI_OPENAI_TIMEOUT_MS = 180000;
 const AI_BATCH_STALE_MS = 240000;
 let batchProcessing = false;
@@ -2075,6 +2098,13 @@ function findBrowseContinuationToken(node, seen = new Set()) {
 
 function broadcastCaptureProgress(videoId, stage, detail = '') {
   chrome.runtime.sendMessage({ type: 'capture-progress', videoId, stage, detail }).catch(() => {});
+  for (const port of websiteBridgePorts) {
+    try {
+      port.postMessage({ type: 'progress', videoId, stage, detail });
+    } catch {
+      websiteBridgePorts.delete(port);
+    }
+  }
 }
 
 async function fetchTranscriptFromActiveWatchTabIfMatch(videoId) {

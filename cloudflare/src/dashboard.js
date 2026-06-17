@@ -6504,7 +6504,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         var timer = setTimeout(function () {
           window.removeEventListener('message', onMessage);
           reject(new Error('Chrome extension timed out.'));
-        }, Number(timeoutMs) || 180000);
+        }, Number(timeoutMs) || 300000);
         function onMessage(event) {
           if (event.source !== window || !event.data || event.data.source !== FRUIT_EXTENSION_BRIDGE) return;
           if (event.data.requestId !== requestId) return;
@@ -6527,7 +6527,23 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function initExtensionBridge() {
       window.addEventListener('message', function (event) {
         if (event.source !== window || !event.data || event.data.source !== FRUIT_EXTENSION_BRIDGE) return;
-        if (event.data.type === 'ready') state.extensionBridgeReady = true;
+        if (event.data.type === 'ready') {
+          state.extensionBridgeReady = true;
+          refreshTranscriptSetupStatus();
+          return;
+        }
+        if (event.data.type === 'progress') {
+          var stage = event.data.stage || 'extension_fetch';
+          var detail = event.data.detail || 'Extension is fetching captions from YouTube...';
+          var percent = stage === 'done' ? 28 : (stage === 'fetch' ? 22 : (stage === 'load' ? 16 : 14));
+          setTranscriptProgress({
+            percent: percent,
+            stage: 'extension_fetch',
+            message: detail,
+            elapsed: '',
+            attempt: ''
+          });
+        }
       });
       window.postMessage({ source: FRUIT_EXTENSION_PAGE, type: 'ping' }, '*');
       setTimeout(function () {
@@ -6781,13 +6797,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         var videoUrl = String(requestBody.videoUrl || requestBody.url || '').trim();
         if (!videoUrl) return Promise.reject(new Error('Paste a YouTube URL first.'));
         if (state.extensionBridgeReady) {
-          return fetchTranscriptViaExtension(requestBody, videoUrl).catch(function (extError) {
-            return fetchTranscriptViaRailway(requestBody, videoUrl).catch(function (railwayError) {
-              throw new Error((extError && extError.message ? extError.message : 'Extension failed.')
-                + ' Railway fallback also failed: '
-                + (railwayError && railwayError.message ? railwayError.message : 'unknown error'));
-            });
-          });
+          return fetchTranscriptViaExtension(requestBody, videoUrl);
         }
         return fetchTranscriptViaRailway(requestBody, videoUrl);
       }
