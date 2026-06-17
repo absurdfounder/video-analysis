@@ -3029,17 +3029,30 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     .test-preview {
       display: none;
-      grid-template-columns: 150px 1fr;
+      grid-template-columns: minmax(220px, 280px) 1fr;
       gap: 14px;
       padding: 12px;
       border: 1px solid #e8e8e8;
       border-radius: 18px;
       background: #fff;
-      align-items: center;
+      align-items: start;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.05);
     }
 
     .test-preview.show { display: grid; }
+
+    .test-preview-media {
+      display: grid;
+      gap: 8px;
+    }
+
+    .test-preview iframe {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border: 0;
+      border-radius: 14px;
+      background: #111;
+    }
 
     .test-preview img {
       width: 100%;
@@ -5761,7 +5774,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         <input id="language" type="hidden" value="hi" />
         <input id="syncToken" type="hidden" value="" />
         <div class="test-preview" id="videoPreview">
-          <img id="videoThumb" alt="" />
+          <div class="test-preview-media">
+            <iframe id="videoEmbed" title="YouTube preview" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy"></iframe>
+            <img id="videoThumb" alt="" hidden />
+          </div>
           <div>
             <strong id="videoIdLabel"></strong>
             <a id="openVideoLink" href="#" target="_blank" rel="noreferrer" style="color:#105834;font-weight:800;font-size:13px;">Open video</a>
@@ -6157,6 +6173,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       saving: 'Saving transcript',
       railway_transcript: 'Fetching transcript',
       extension_fetch: 'Chrome extension fetch',
+      wake: 'Waking YouTube page',
       railway_analysis: 'AI market analysis',
       railway_save: 'Saving rates',
       analyzing: 'AI price analysis',
@@ -6535,7 +6552,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         if (event.data.type === 'progress') {
           var stage = event.data.stage || 'extension_fetch';
           var detail = event.data.detail || 'Extension is fetching captions from YouTube...';
-          var percent = stage === 'done' ? 28 : (stage === 'fetch' ? 22 : (stage === 'load' ? 16 : 14));
+          var percent = stage === 'done' ? 28 : (stage === 'wake' ? 20 : (stage === 'fetch' ? 22 : (stage === 'load' ? 16 : 14)));
           setTranscriptProgress({
             percent: percent,
             stage: 'extension_fetch',
@@ -9435,15 +9452,21 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var id = extractVideoId(videoUrl);
       if (!id) {
         el('videoPreview').classList.remove('show');
+        var embedClear = el('videoEmbed');
+        if (embedClear) embedClear.removeAttribute('src');
         return;
       }
       el('videoPreview').classList.add('show');
+      var embed = el('videoEmbed');
+      if (embed) {
+        embed.src = 'https://www.youtube.com/embed/' + encodeURIComponent(id) + '?rel=0&modestbranding=1';
+      }
       el('videoThumb').src = 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/hqdefault.jpg';
       el('videoIdLabel').textContent = 'Video ID: ' + id;
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
       el('videoHint').textContent = DIRECT_API_BASE
         ? (state.extensionBridgeReady
-          ? 'Chrome extension will fetch captions from your browser, then Railway saves + analyzes.'
+          ? 'Preview loads here. Extension wakes YouTube automatically — you can stay on this tab.'
           : 'Install the Fruit Miner Chrome extension for reliable YouTube fetch, or Railway will try server-side yt-dlp.')
         : (file
           ? 'Audio upload will transcribe on the Worker and skip YouTube download.'

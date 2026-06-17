@@ -113,11 +113,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'fruit-miner-website') return;
+  const returnTabId = port.sender?.tab?.id || null;
   websiteBridgePorts.add(port);
   port.onDisconnect.addListener(() => websiteBridgePorts.delete(port));
   port.onMessage.addListener((message) => {
     const path = safeText(message?.path);
-    const body = message?.body || {};
+    const body = {
+      ...(message?.body || {}),
+      returnTabId: message?.body?.returnTabId || returnTabId,
+    };
     handleApi(path, body)
       .then((data) => {
         try { port.postMessage({ type: 'response', data }); } catch {}
@@ -2125,7 +2129,11 @@ async function transcript(body) {
 
   let result = null;
   try {
-    result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages, { preferWorker });
+    result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages, {
+      preferWorker: preferWorker || Boolean(body.fromWebsite),
+      fromWebsite: Boolean(body.fromWebsite),
+      returnTabId: body.returnTabId || null,
+    });
   } catch (tabError) {
     try {
       result = await fetchTranscriptFromHtml(videoUrl, id, languages);
@@ -2752,8 +2760,68 @@ async function fetchVisibleTranscriptFromTab(tab, videoId, exact) {
   };
 }
 
+async function restoreDashboardTab(returnTabId) {
+  if (!returnTabId) return;
+  try {
+    const tab = await chrome.tabs.get(returnTabId);
+    if (!tab?.id) return;
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(returnTabId, { active: true });
+  } catch {
+    // Dashboard tab may have been closed.
+  }
+}
+
+async function focusTabForInteraction(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  await chrome.windows.update(tab.windowId, { focused: true });
+  await chrome.tabs.update(tabId, { active: true });
+  await sleep(500);
+}
+
+async function fetchTranscriptWithInteractiveFocus(tabId, returnTabId, videoId, languages) {
+  try {
+    broadcastCaptureProgress(videoId, 'wake', 'Auto-playing and scrolling YouTube to load captions...');
+    await focusTabForInteraction(tabId);
+    await injectTranscriptHelpers(tabId);
+    await runInYouTubeTab('wakeYouTubePageInPage', [], tabId, { skipInject: true });
+    await sleep(600);
+
+    let pageResult = await runInYouTubeTab('fetchTranscriptInPage', [languages, true, false], tabId, { skipInject: true });
+    if (pageResult?.segments?.length) {
+      return {
+        ok: true,
+        language: pageResult.language || 'unknown',
+        fileName: pageResult.fileName || 'youtube-transcript',
+        segments: pageResult.segments,
+        method: pageResult.method || 'youtube-tab-interactive',
+      };
+    }
+
+    pageResult = await runInYouTubeTab('fetchTranscriptInPage', [languages, true, true], tabId, { skipInject: true });
+    if (pageResult?.segments?.length) {
+      return {
+        ok: true,
+        language: pageResult.language || 'unknown',
+        fileName: pageResult.fileName || 'youtube-transcript',
+        segments: pageResult.segments,
+        method: pageResult.method || 'youtube-tab-api',
+      };
+    }
+
+    return {
+      ok: false,
+      error: pageResult?.error || 'Could not load captions after automatic YouTube interaction.',
+    };
+  } finally {
+    await restoreDashboardTab(returnTabId);
+  }
+}
+
 async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options = {}) {
   const preferWorker = Boolean(options.preferWorker);
+  const fromWebsite = Boolean(options.fromWebsite);
+  const returnTabId = options.returnTabId || null;
   const errors = [];
 
   if (!preferWorker) {
@@ -2766,11 +2834,17 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options
     }
   }
 
-  broadcastCaptureProgress(videoId, 'load', 'Loading in background worker tab...');
+  broadcastCaptureProgress(videoId, 'load', fromWebsite
+    ? 'Loading YouTube and waking the page automatically...'
+    : 'Loading in background worker tab...');
   const tabId = await ensureYouTubeTab();
   await prepareWorkerTab(tabId);
   await navigateYouTubeTabQuietly(tabId, videoUrl, videoId);
   await waitForYouTubePageReady(tabId, videoId);
+
+  if (fromWebsite) {
+    return fetchTranscriptWithInteractiveFocus(tabId, returnTabId, videoId, languages);
+  }
 
   broadcastCaptureProgress(videoId, 'fetch', 'Fetching captions via API...');
   await injectTranscriptHelpers(tabId);
