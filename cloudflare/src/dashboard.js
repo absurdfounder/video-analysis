@@ -6151,6 +6151,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       download_audio: 'Downloading audio',
       openai_transcription: 'Transcribing audio',
       saving: 'Saving transcript',
+      railway_transcript: 'Fetching transcript',
+      railway_analysis: 'AI market analysis',
+      railway_save: 'Saving rates',
       analyzing: 'AI price analysis',
       analysis_complete: 'Analysis complete',
       analysis_failed: 'Analysis failed',
@@ -6567,13 +6570,34 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function directRailwayFetchJson(path, options) {
       if (!DIRECT_API_BASE || typeof path !== 'string' || path.indexOf('/api/') !== 0) return null;
 
+      function directFetch(apiPath, apiOptions) {
+        return fetch(DIRECT_API_BASE + apiPath, apiOptions || {}).then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (data) {
+            if (!response.ok || data.ok === false) throw new Error(data.error || ('Railway request failed: ' + response.status));
+            return data;
+          });
+        });
+      }
+
       if (path === '/api/transcripts/setup') {
-        return Promise.resolve({
-          ok: true,
-          primaryMethod: 'railway-yt-dlp-subtitles',
-          methods: ['Railway yt-dlp subtitles', 'Railway yt-dlp audio fallback'],
-          cookiesConfigured: false,
-          extractorConfigured: true,
+        return directFetch('/api/status').then(function (status) {
+          return {
+            ok: true,
+            primaryMethod: 'railway-yt-dlp-subtitles',
+            methods: ['Railway yt-dlp subtitles', 'Railway yt-dlp audio fallback', 'Railway OpenAI market extraction'],
+            cookiesConfigured: false,
+            extractorConfigured: true,
+            openaiConfigured: Boolean(status.openaiConfigured),
+          };
+        }).catch(function () {
+          return {
+            ok: true,
+            primaryMethod: 'railway-yt-dlp-subtitles',
+            methods: ['Railway yt-dlp subtitles', 'Railway yt-dlp audio fallback', 'Railway OpenAI market extraction'],
+            cookiesConfigured: false,
+            extractorConfigured: true,
+            openaiConfigured: false,
+          };
         });
       }
 
@@ -6592,25 +6616,55 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       }
 
       if (path.indexOf('/api/prices') === 0) {
-        return Promise.resolve({ ok: true, items: readJsonStore('krishiRailwayPriceRows', []) });
+        return directFetch(path).catch(function () {
+          return { ok: true, items: readJsonStore('krishiRailwayPriceRows', []) };
+        });
       }
 
       if (path.indexOf('/api/analysis?') === 0) {
-        return Promise.resolve({ ok: true, items: readJsonStore('krishiRailwayAnalysisItems', []) });
+        return directFetch(path).catch(function () {
+          return { ok: true, items: readJsonStore('krishiRailwayAnalysisItems', []) };
+        });
       }
 
       if (path === '/api/analysis/run') {
-        return Promise.resolve({
-          ok: true,
-          priceRowCount: 0,
-          rows: [],
-          message: 'Railway direct mode fetched the transcript. Worker AI price analysis is not used on Netlify.',
+        var analysisBody = parseRequestBody(options);
+        var analysisVideoId = analysisBody.videoId || analysisBody.video_id || extractVideoId(analysisBody.videoUrl || analysisBody.video_url || '');
+        var cachedTranscript = analysisVideoId ? readJsonStore(TRANSCRIPT_CACHE_PREFIX + analysisVideoId, null) : null;
+        if (cachedTranscript && !analysisBody.segments) {
+          analysisBody.segments = cachedTranscript.segments || [];
+          analysisBody.transcriptText = cachedTranscript.transcriptText || '';
+        }
+        return directFetch('/api/analysis/run', {
+          method: 'POST',
+          headers: Object.assign({ 'content-type': 'application/json' }, authHeaders()),
+          body: JSON.stringify(analysisBody),
+        }).then(function (data) {
+          if (Array.isArray(data.priceRows)) writeJsonStore('krishiRailwayPriceRows', data.priceRows);
+          if (data.videoId && data.meta) {
+            var analysisItems = readJsonStore('krishiRailwayAnalysisItems', []);
+            analysisItems = analysisItems.filter(function (item) { return item.video_id !== data.videoId; });
+            analysisItems.unshift({
+              video_id: data.videoId,
+              market_date: data.meta.market_date || '',
+              mention_count: data.meta.mention_count || 0,
+              source: data.meta.source || 'railway-openai',
+              updated_at: new Date().toISOString(),
+              meta: data.meta,
+            });
+            writeJsonStore('krishiRailwayAnalysisItems', analysisItems);
+          }
+          return data;
         });
+      }
+
+      if (path === '/api/analysis/reanalyze-targets') {
+        return directFetch(path);
       }
 
       var analysisMatch = path.match(/^\/api\/analysis\/([^/?]+)/);
       if (analysisMatch) {
-        return Promise.resolve({ ok: true, item: null });
+        return directFetch(path);
       }
 
       if (path === '/api/transcripts/transcribe') {
@@ -6643,7 +6697,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       if (transcriptMatch) {
         var cached = readJsonStore(TRANSCRIPT_CACHE_PREFIX + decodeURIComponent(transcriptMatch[1]), null);
         if (cached) return Promise.resolve(cached);
-        return Promise.reject(new Error('No local Railway transcript is stored for this video yet. Run transcript first.'));
+        return directFetch(path);
       }
 
       return Promise.resolve({ ok: true });
@@ -7756,19 +7810,52 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       });
     }
 
-    function runAnalysisForVideo(videoUrl, title) {
+    function runAnalysisForVideo(videoUrl, title, transcriptData) {
       var id = extractVideoId(videoUrl);
       if (!id) return Promise.resolve(null);
-      setTranscriptStatus('Transcript saved. Running AI price analysis...', '');
-      log('Running AI analysis for ' + id + '...');
+      setTranscriptStatus(DIRECT_API_BASE ? 'Transcript saved. Running AI market analysis on Railway...' : 'Transcript saved. Running AI price analysis...', '');
+      setTranscriptProgress({
+        percent: DIRECT_API_BASE ? 45 : 80,
+        stage: DIRECT_API_BASE ? 'railway_analysis' : 'analyzing',
+        message: DIRECT_API_BASE
+          ? 'OpenAI is extracting price rows, summary, facts, guidance, learnings, and chapters.'
+          : 'Worker is extracting price rows and market intelligence.',
+        elapsed: '',
+        attempt: ''
+      });
+      log((DIRECT_API_BASE ? 'Railway AI analysis' : 'AI analysis') + ' started for ' + id + '.');
+      var payload = { videoId: id, videoUrl: videoUrl, title: title || id };
+      if (transcriptData && Array.isArray(transcriptData.segments)) {
+        payload.segments = transcriptData.segments;
+        payload.transcriptText = transcriptData.transcriptText || '';
+      }
       return fetchJson('/api/analysis/run', {
         method: 'POST',
         headers: Object.assign({ 'content-type': 'application/json' }, authHeaders()),
-        body: JSON.stringify({ videoId: id, videoUrl: videoUrl, title: title || id })
+        body: JSON.stringify(payload)
       }).then(function (data) {
-        log('AI analysis saved ' + data.priceRowCount + ' price row(s).');
-        setTranscriptStatus('Done: transcript + ' + data.priceRowCount + ' price row(s) saved.', data.priceRowCount ? 'ok' : '');
-        return loadAllData().then(function () { return data; });
+        setTranscriptProgress({
+          percent: 92,
+          stage: DIRECT_API_BASE ? 'railway_save' : 'saving',
+          message: 'Saving extracted rates and market intelligence for the dashboard.',
+          elapsed: '',
+          attempt: ''
+        });
+        log('AI analysis saved ' + data.priceRowCount + ' price row(s), '
+          + ((data.meta && data.meta.learnings && data.meta.learnings.length) || 0) + ' learning(s), '
+          + ((data.meta && data.meta.facts && data.meta.facts.length) || 0) + ' fact(s).');
+        setTranscriptStatus('Done: transcript + ' + data.priceRowCount + ' price row(s) + market intelligence saved.', data.priceRowCount ? 'ok' : '');
+        return loadAllData().then(function () {
+          focusDashboardOnVideo(id);
+          setTranscriptProgress({
+            percent: 100,
+            stage: 'analysis_complete',
+            message: 'Rate List, All Data, summary, and learnings are refreshed.',
+            elapsed: '',
+            attempt: ''
+          });
+          return data;
+        });
       }).catch(function (error) {
         log('ERROR: AI analysis failed — ' + (error.message || error));
         setTranscriptStatus(error.message || 'AI analysis failed.', 'bad');
@@ -9196,8 +9283,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       fetchJson('/api/transcripts/setup').then(function (data) {
         var node = el('transcriptSetupStatus');
         if (DIRECT_API_BASE) {
-          node.className = 'status ok';
-          node.textContent = 'Railway transcript: direct yt-dlp subtitles first, with audio fallback when needed.';
+          node.className = data.openaiConfigured ? 'status ok' : 'status bad';
+          node.textContent = data.openaiConfigured
+            ? 'Railway pipeline: subtitles first, audio fallback when needed, then OpenAI extraction for rates and learnings.'
+            : 'Railway transcript is ready, but AI extraction needs OPENAI_API_KEY set on Railway.';
           return;
         }
         if (data.cookiesConfigured) {
@@ -9251,6 +9340,15 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       resetTranscriptProgress();
       setTranscriptStatus(DIRECT_API_BASE ? 'Adding source...' : (file || audioUrl ? 'Starting transcription...' : 'Starting background YouTube transcript job...'), '');
       log(DIRECT_API_BASE ? 'Adding YouTube source through Railway.' : (file || audioUrl ? 'Starting transcript request.' : 'Submitting YouTube URL for background transcription.'));
+      if (DIRECT_API_BASE) {
+        setTranscriptProgress({
+          percent: 12,
+          stage: 'railway_transcript',
+          message: 'Railway is checking YouTube subtitle tracks before audio fallback.',
+          elapsed: '',
+          attempt: ''
+        });
+      }
       var request;
       if (file) {
         var form = new FormData();
@@ -9282,8 +9380,16 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         resetTranscriptProgress();
         renderTranscript(data);
         if (DIRECT_API_BASE) {
-          setTranscriptStatus('Source added: ' + data.job.segment_count + ' transcript line(s).', data.job.segment_count ? 'ok' : '');
-          log('Source added via ' + (data.job.methodLabel || data.job.method || 'Railway') + ': ' + data.job.segment_count + ' line(s).');
+          setTranscriptProgress({
+            percent: 35,
+            stage: 'saving',
+            message: 'Transcript fetched. Saving source and preparing AI extraction.',
+            elapsed: '',
+            attempt: ''
+          });
+          setTranscriptStatus('Transcript fetched: ' + data.job.segment_count + ' line(s). Running AI extraction...', data.job.segment_count ? 'ok' : '');
+          log('Transcript worked via ' + (data.job.methodLabel || data.job.method || 'Railway') + ': ' + data.job.segment_count + ' line(s).');
+          if (data.job.segment_count) return runAnalysisForVideo(videoUrl, data.job.video_id, data);
           return loadAllData();
         }
         setTranscriptStatus('Transcript run finished: ' + data.job.segment_count + ' segment(s).', data.job.segment_count ? 'ok' : '');

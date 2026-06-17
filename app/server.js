@@ -2,6 +2,7 @@ const express = require('express');
 const { loadProjectData, saveProjectData, mergeProjectData, authorizeWrite } = require('./netlify/functions/_dataStore');
 const { classifyVideosHeuristic } = require('./netlify/functions/_classify');
 const { handler: transcriptHandler } = require('./netlify/functions/transcript');
+const { analyzeTranscriptRich, normalizeSegments } = require('./lib/rich-analysis');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -91,6 +92,80 @@ function timestampUrl(videoUrl, seconds) {
     const joiner = String(videoUrl || '').includes('?') ? '&' : '?';
     return `${videoUrl}${joiner}t=${sec}s`;
   }
+}
+
+function extractYouTubeId(value) {
+  const raw = safeText(value);
+  if (!raw) return '';
+  if (/^[\w-]{11}$/.test(raw)) return raw;
+  try {
+    const url = new URL(raw);
+    if (url.hostname.includes('youtu.be')) return safeText(url.pathname.split('/').filter(Boolean)[0]);
+    if (url.searchParams.get('v')) return safeText(url.searchParams.get('v'));
+    const parts = url.pathname.split('/').filter(Boolean);
+    const markerIndex = parts.findIndex((part) => ['embed', 'shorts', 'live'].includes(part));
+    if (markerIndex >= 0) return safeText(parts[markerIndex + 1]);
+  } catch {}
+  const match = raw.match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([\w-]{11})/);
+  return match ? match[1] : '';
+}
+
+function transcriptTextFromSegments(segments) {
+  return (Array.isArray(segments) ? segments : []).map((segment) => safeText(segment.text)).filter(Boolean).join(' ');
+}
+
+function normalizeTranscriptPayload(payload, requestBody = {}) {
+  const videoUrl = safeText(requestBody.videoUrl || requestBody.video_url || payload.videoUrl || payload.video_url);
+  const id = safeText(payload.id || requestBody.id || requestBody.videoId || requestBody.video_id || extractYouTubeId(videoUrl));
+  const segments = normalizeSegments(payload.segments || []);
+  return {
+    id,
+    url: videoUrl || (id ? `https://www.youtube.com/watch?v=${id}` : ''),
+    title: safeText(requestBody.title || payload.title || id),
+    upload_date: safeText(requestBody.uploadDate || requestBody.upload_date || payload.uploadDate || payload.upload_date),
+    language: safeText(payload.language || requestBody.language || 'hi'),
+    transcriptText: safeText(payload.transcriptText) || transcriptTextFromSegments(segments),
+    segments,
+    method: safeText(payload.method),
+    methodLabel: safeText(payload.methodLabel || payload.method),
+  };
+}
+
+async function saveTranscriptPayload(payload, requestBody = {}) {
+  const transcript = normalizeTranscriptPayload(payload, requestBody);
+  if (!transcript.id) return transcript;
+  const existing = await loadProjectData();
+  const merged = mergeProjectData(existing, {
+    videos: [{
+      id: transcript.id,
+      title: transcript.title || transcript.id,
+      url: transcript.url,
+      upload_date: transcript.upload_date,
+      status: transcript.segments.length ? 'ok' : 'empty',
+      language: transcript.language,
+      transcriptText: transcript.transcriptText,
+      segments: transcript.segments,
+      transcriptLineCount: transcript.segments.length,
+      transcriptMethod: transcript.method,
+      transcriptMethodLabel: transcript.methodLabel,
+    }],
+    knownVideoIds: [transcript.id],
+  });
+  await saveProjectData(merged);
+  return transcript;
+}
+
+function analysisItemsFromProject(data, limit = 100) {
+  const entries = Object.entries(data.videoAnalysis || {}).map(([videoId, meta]) => ({
+    video_id: videoId,
+    market_date: safeText(meta?.market_date),
+    mention_count: Number(meta?.mention_count) || 0,
+    source: safeText(meta?.source),
+    updated_at: data.updatedAt || null,
+    meta,
+  }));
+  entries.sort((a, b) => safeText(b.meta?.market_date_sort || b.market_date).localeCompare(safeText(a.meta?.market_date_sort || a.market_date)));
+  return entries.slice(0, limit);
 }
 
 function parseVtt(vttText) {
@@ -441,6 +516,93 @@ app.get('/api/status', async (_req, res) => {
   }
 });
 
+app.get('/api/prices', async (req, res) => {
+  try {
+    const data = await loadProjectData();
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 5000), 10000));
+    res.json({ ok: true, items: (data.priceRows || []).slice(0, limit) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/analysis', async (req, res) => {
+  try {
+    const data = await loadProjectData();
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
+    res.json({ ok: true, items: analysisItemsFromProject(data, limit) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/analysis/reanalyze-targets', async (_req, res) => {
+  try {
+    const data = await loadProjectData();
+    const items = (data.videos || [])
+      .filter((video) => video.id && Array.isArray(video.segments) && video.segments.length)
+      .map((video) => ({
+        video_id: video.id,
+        video_url: video.url,
+        title: video.title || video.id,
+        transcriptLineCount: video.segments.length,
+      }));
+    res.json({ ok: true, items });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/analysis/:videoId', async (req, res) => {
+  try {
+    const data = await loadProjectData();
+    const meta = data.videoAnalysis?.[req.params.videoId];
+    if (!meta) return res.status(404).json({ ok: false, error: 'Analysis not found.' });
+    res.json({
+      ok: true,
+      item: {
+        video_id: req.params.videoId,
+        market_date: safeText(meta.market_date),
+        mention_count: Number(meta.mention_count) || 0,
+        source: safeText(meta.source),
+        updated_at: data.updatedAt || null,
+        meta,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get('/api/transcripts/:videoId', async (req, res) => {
+  try {
+    const data = await loadProjectData();
+    const video = (data.videos || []).find((item) => item.id === req.params.videoId);
+    if (!video || !Array.isArray(video.segments) || !video.segments.length) {
+      return res.status(404).json({ ok: false, error: 'Transcript not found.' });
+    }
+    const segments = normalizeSegments(video.segments);
+    res.json({
+      ok: true,
+      job: {
+        id: `railway_${video.id}`,
+        video_id: video.id,
+        video_url: video.url,
+        status: 'complete',
+        language: video.language || 'hi',
+        source: video.transcriptMethod || 'railway-direct',
+        method: video.transcriptMethod || 'railway-direct',
+        methodLabel: video.transcriptMethodLabel || video.transcriptMethod || 'Railway direct',
+        segment_count: segments.length,
+      },
+      transcriptText: video.transcriptText || transcriptTextFromSegments(segments),
+      segments,
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.post('/api/list-videos', async (req, res) => {
   try {
     const channelUrl = safeText(req.body.channelUrl);
@@ -498,9 +660,73 @@ app.post('/api/transcript', async (req, res) => {
       body: JSON.stringify(req.body || {}),
     });
     const payload = typeof result.body === 'string' ? JSON.parse(result.body) : result.body;
+    if ((Number(result.statusCode) || 200) < 400 && payload?.ok !== false && Array.isArray(payload?.segments)) {
+      await saveTranscriptPayload(payload, req.body || {});
+    }
     res.status(Number(result.statusCode) || 200).json(payload);
   } catch (error) {
     res.status(500).json({ ok: false, error: error.stderr || error.message });
+  }
+});
+
+app.post('/api/analysis/run', async (req, res) => {
+  try {
+    if (!authorizeWrite({ headers: { authorization: req.headers.authorization || '' } })) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized. Set Authorization: Bearer <DATA_SYNC_TOKEN>.' });
+    }
+    const body = req.body || {};
+    const videoUrl = safeText(body.videoUrl || body.video_url);
+    const videoId = safeText(body.videoId || body.video_id) || extractYouTubeId(videoUrl);
+    if (!videoId) return res.status(400).json({ ok: false, error: 'Send videoId or videoUrl.' });
+
+    const existing = await loadProjectData();
+    const storedVideo = (existing.videos || []).find((item) => item.id === videoId) || {};
+    const segments = normalizeSegments(body.segments && body.segments.length ? body.segments : storedVideo.segments || []);
+    if (!segments.length) return res.status(404).json({ ok: false, error: 'No stored transcript found for this video.' });
+
+    const title = safeText(body.title || storedVideo.title || videoId);
+    const uploadDate = safeText(body.uploadDate || body.upload_date || storedVideo.upload_date);
+    const url = videoUrl || storedVideo.url || `https://www.youtube.com/watch?v=${videoId}`;
+    const apiKey = safeText(body.apiKey || process.env.OPENAI_API_KEY);
+    const model = safeText(body.model || process.env.OPENAI_MODEL || 'gpt-4o-mini');
+    const result = await analyzeTranscriptRich({
+      apiKey,
+      model,
+      videoId,
+      videoUrl: url,
+      title,
+      uploadDate,
+      segments,
+    });
+
+    const cleanExisting = {
+      ...existing,
+      priceRows: (existing.priceRows || []).filter((row) => row.video_id !== videoId),
+      videoAnalysis: Object.fromEntries(Object.entries(existing.videoAnalysis || {}).filter(([id]) => id !== videoId)),
+    };
+    const merged = mergeProjectData(cleanExisting, {
+      videos: [{
+        id: videoId,
+        title,
+        url,
+        upload_date: uploadDate,
+        status: 'analyzed',
+        priceStatus: result.priceRows.length ? 'ok' : 'empty',
+        priceRowCount: result.priceRows.length,
+        transcriptLineCount: segments.length,
+        language: storedVideo.language || body.language || 'hi',
+        transcriptText: storedVideo.transcriptText || transcriptTextFromSegments(segments),
+        segments,
+        analysisMeta: result.meta,
+      }],
+      priceRows: result.priceRows,
+      videoAnalysis: { [videoId]: result.meta },
+      knownVideoIds: [videoId],
+    });
+    await saveProjectData(merged);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
