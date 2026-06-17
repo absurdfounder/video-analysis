@@ -3030,12 +3030,13 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     .test-preview {
       display: none;
       grid-template-columns: 150px 1fr;
-      gap: 12px;
-      padding: 10px;
-      border: 1px solid #dedede;
-      border-radius: 15px;
+      gap: 14px;
+      padding: 12px;
+      border: 1px solid #e8e8e8;
+      border-radius: 18px;
       background: #fff;
       align-items: center;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.05);
     }
 
     .test-preview.show { display: grid; }
@@ -3044,7 +3045,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       width: 100%;
       aspect-ratio: 16 / 9;
       object-fit: cover;
-      border-radius: 10px;
+      border-radius: 14px;
       background: #ddd;
     }
 
@@ -3081,7 +3082,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     .log {
-      max-height: 140px;
+      max-height: 180px;
       overflow: auto;
       padding: 10px;
       border-radius: 12px;
@@ -3091,6 +3092,129 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       font-size: 12px;
       line-height: 1.45;
       white-space: pre-wrap;
+    }
+
+    #testModal .modal-panel {
+      width: min(640px, calc(100vw - 32px));
+      max-height: min(86dvh, 720px);
+      border-radius: 24px;
+      overflow: hidden;
+    }
+
+    #testModal .modal-head {
+      padding: 24px 28px 16px;
+      border-bottom: none;
+    }
+
+    #testModal .modal-head h2 {
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    #testModal .modal-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 0 28px 28px;
+      gap: 14px;
+    }
+
+    .source-field {
+      display: grid;
+      gap: 8px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .source-field input {
+      min-height: 54px;
+      border-radius: 14px !important;
+      padding: 0 16px !important;
+      font-size: 15px;
+      box-shadow: inset 0 0 0 1px transparent;
+    }
+
+    .source-field input:focus {
+      border-color: var(--text) !important;
+      box-shadow: 0 0 0 3px rgba(34, 34, 34, 0.08);
+    }
+
+    .source-modal-actions {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .source-modal-actions .primary-btn,
+    .source-modal-actions .secondary-btn {
+      min-height: 44px;
+      border-radius: 12px;
+      padding: 0 16px;
+    }
+
+    .source-log-accordion {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--white);
+      overflow: hidden;
+    }
+
+    .source-log-accordion summary {
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 13px 14px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+      list-style: none;
+    }
+
+    .source-log-accordion summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .source-log-accordion summary::after {
+      content: "⌄";
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1;
+      transition: transform 0.16s ease;
+    }
+
+    .source-log-accordion[open] summary::after {
+      transform: rotate(180deg);
+    }
+
+    .source-log-accordion .log {
+      border-radius: 0;
+      border-top: 1px solid var(--border);
+      background: #fafafa;
+    }
+
+    .source-log-body {
+      display: grid;
+      gap: 12px;
+      padding: 0 12px 12px;
+    }
+
+    .source-log-body .transcript-progress {
+      margin: 0;
+    }
+
+    .source-result {
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+
+    .source-result-title {
+      font-size: 13px;
+      font-weight: 850;
+      margin-bottom: 8px;
     }
 
     .transcript-progress {
@@ -5313,9 +5437,15 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
       .top-actions .secondary-btn,
       .top-actions .share-btn,
-      #reanalyzeAllBtn,
-      #openTesterTop {
+      #reanalyzeAllBtn {
         display: none !important;
+      }
+
+      #openTesterTop {
+        display: inline-flex !important;
+        min-height: 36px;
+        padding: 8px 12px;
+        font-size: 13px;
       }
 
       .top-actions .text-btn {
@@ -5337,7 +5467,24 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       .modal {
         padding-bottom: var(--bottom-nav-height);
       }
-    }    }
+
+      #testModal .modal-panel {
+        width: min(100%, calc(100vw - 24px));
+        max-height: calc(100dvh - var(--bottom-nav-height) - 28px);
+      }
+
+      #testModal .modal-head {
+        padding: 20px 20px 12px;
+      }
+
+      #testModal .modal-body {
+        padding: 0 20px 20px;
+      }
+
+      .source-modal-actions {
+        grid-template-columns: 1fr;
+      }
+    }
 
   </style>
 </head>
@@ -5359,7 +5506,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           </div>
           <button class="secondary-btn" id="refreshBtn" type="button">Refresh</button>
           <button class="secondary-btn" id="reanalyzeAllBtn" type="button">Re-analyze</button>
-          <button class="share-btn" id="openTesterTop" type="button">Test</button>
+          <button class="share-btn" id="openTesterTop" type="button">Add Source</button>
         </div>
       </header>
 
@@ -5601,20 +5748,18 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-head">
         <div>
-          <h2 id="modalTitle">Test transcript worker</h2>
-          <p style="margin-top:5px;color:var(--muted);font-size:13px;">Paste a YouTube URL, or upload a downloaded audio file (best when cloud extractors are blocked). YouTube-only jobs call your configured extractor (<code>YOUTUBE_EXTRACTOR_URL</code>); locally that should be <code>http://127.0.0.1:3000/api/transcript</code> with <code>npm start</code> running in <code>app/</code>.</p>
-          <p id="transcriptSetupStatus" class="status" style="margin-top:8px;"></p>
+          <h2 id="modalTitle">Add source</h2>
+          <p>Import a mandi video from YouTube.</p>
         </div>
-        <button class="modal-close" id="closeTesterBtn">×</button>
+        <button class="modal-close" id="closeTesterBtn" type="button" aria-label="Close">×</button>
       </div>
       <div class="modal-body">
-        <div class="modal-grid">
-          <label class="span-2">YouTube video URL<input id="videoUrl" placeholder="https://www.youtube.com/watch?v=..." /></label>
-          <label class="span-2">Optional direct audio/video URL<input id="audioUrl" placeholder="https://.../audio.mp3, .wav, .m4a, .mp4" /></label>
-          <label>Optional audio/video upload<input id="audioFile" type="file" accept="audio/*,video/*" /></label>
-          <label>Language<select id="language"><option value="hi">Hindi / Hinglish</option><option value="en">English</option></select></label>
-          <label class="span-2">Sync token, if your Worker has one<input id="syncToken" type="password" placeholder="optional" autocomplete="off" /></label>
-        </div>
+        <p id="transcriptSetupStatus" class="status"></p>
+        <label class="source-field">Video link<input id="videoUrl" placeholder="https://www.youtube.com/watch?v=..." inputmode="url" autocomplete="off" /></label>
+        <input id="audioUrl" type="hidden" value="" />
+        <input id="audioFile" type="file" accept="audio/*,video/*" hidden />
+        <input id="language" type="hidden" value="hi" />
+        <input id="syncToken" type="hidden" value="" />
         <div class="test-preview" id="videoPreview">
           <img id="videoThumb" alt="" />
           <div>
@@ -5623,28 +5768,33 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
             <p id="videoHint" style="margin-top:6px;color:#666;font-size:12px;line-height:1.4;"></p>
           </div>
         </div>
-        <div class="modal-actions">
-          <button class="primary-btn" id="runTranscriptBtn">Run transcript</button>
-          <button class="secondary-btn" id="loadStoredBtn">Load stored transcript</button>
-          <button class="secondary-btn" id="clearTranscriptBtn">Clear result</button>
+        <div class="modal-actions source-modal-actions">
+          <button class="primary-btn" id="runTranscriptBtn">Add source</button>
+          <button class="secondary-btn" id="loadStoredBtn">Load</button>
+          <button class="secondary-btn" id="clearTranscriptBtn">Clear</button>
         </div>
         <div id="transcriptStatus" class="status">Ready.</div>
-        <div id="transcriptProgress" class="transcript-progress" aria-live="polite">
-          <div class="transcript-progress-head">
-            <span id="transcriptProgressLabel">Starting...</span>
-            <span id="transcriptProgressMeta">0:00 · check 0/0</span>
+        <details class="source-log-accordion" id="sourceLogAccordion">
+          <summary>Logs</summary>
+          <div class="source-log-body">
+            <div id="transcriptProgress" class="transcript-progress" aria-live="polite">
+              <div class="transcript-progress-head">
+                <span id="transcriptProgressLabel">Starting...</span>
+                <span id="transcriptProgressMeta">0:00 · check 0/0</span>
+              </div>
+              <div class="transcript-progress-track">
+                <div id="transcriptProgressFill" class="transcript-progress-fill"></div>
+              </div>
+              <div id="transcriptProgressDetail" class="transcript-progress-detail"></div>
+            </div>
+            <div class="log" id="log"></div>
+            <div class="source-result">
+              <div class="source-result-title">Transcript result</div>
+              <div id="transcriptMeta" style="font-size:13px;color:#666;margin-bottom:8px;">No transcript loaded.</div>
+              <div id="transcriptBox" class="transcript-box"><div class="status">Add a source or load a saved transcript.</div></div>
+            </div>
           </div>
-          <div class="transcript-progress-track">
-            <div id="transcriptProgressFill" class="transcript-progress-fill"></div>
-          </div>
-          <div id="transcriptProgressDetail" class="transcript-progress-detail"></div>
-        </div>
-        <div class="log" id="log"></div>
-        <div>
-          <div style="font-weight:850;margin-bottom:8px;">Transcript result</div>
-          <div id="transcriptMeta" style="font-size:13px;color:#666;margin-bottom:8px;">No transcript loaded.</div>
-          <div id="transcriptBox" class="transcript-box"><div class="status">Run a transcript or load a stored one.</div></div>
-        </div>
+        </details>
       </div>
     </div>
   </div>
@@ -6326,6 +6476,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var now = new Date().toLocaleTimeString();
       el('log').textContent += '[' + now + '] ' + message + '\n';
       el('log').scrollTop = el('log').scrollHeight;
+    }
+
+    function openSourceLogs() {
+      var logs = el('sourceLogAccordion');
+      if (logs) logs.open = true;
     }
 
     var DIRECT_API_BASE = String(window.KRISHI_API_BASE || '').replace(/\/+$/, '');
@@ -8737,7 +8892,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
 
     function authHeaders() {
       var token = (el('settingsSyncToken') && el('settingsSyncToken').value.trim())
-        || el('syncToken').value.trim();
+        || (el('syncToken') ? el('syncToken').value.trim() : '');
       if (token) localStorage.setItem('fruitMandiSyncToken', token);
       return token ? { Authorization: 'Bearer ' + token } : {};
     }
@@ -9077,11 +9232,13 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('videoThumb').src = 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/hqdefault.jpg';
       el('videoIdLabel').textContent = 'Video ID: ' + id;
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
-      el('videoHint').textContent = file
-        ? 'Audio upload will transcribe on the Worker (Workers AI) and skip YouTube download.'
-        : (audioUrl
-          ? 'Direct audio URL will be fetched and transcribed on the Worker.'
-          : 'YouTube-only jobs download audio via the extractor service. If blocked on Netlify, run app/ locally or upload audio here.');
+      el('videoHint').textContent = DIRECT_API_BASE
+        ? 'Railway will fetch subtitles first and use audio fallback only when needed.'
+        : (file
+          ? 'Audio upload will transcribe on the Worker and skip YouTube download.'
+          : (audioUrl
+            ? 'Direct audio URL will be fetched and transcribed on the Worker.'
+            : 'YouTube jobs use the configured extractor service.'));
     }
 
     function runTranscript() {
@@ -9089,10 +9246,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var audioUrl = el('audioUrl').value.trim();
       var file = el('audioFile').files[0];
       var language = el('language').value;
+      openSourceLogs();
       el('runTranscriptBtn').disabled = true;
       resetTranscriptProgress();
-      setTranscriptStatus(file || audioUrl ? 'Starting transcription...' : 'Starting background YouTube transcript job...', '');
-      log(file || audioUrl ? 'Starting transcript request.' : 'Submitting YouTube URL for background transcription.');
+      setTranscriptStatus(DIRECT_API_BASE ? 'Adding source...' : (file || audioUrl ? 'Starting transcription...' : 'Starting background YouTube transcript job...'), '');
+      log(DIRECT_API_BASE ? 'Adding YouTube source through Railway.' : (file || audioUrl ? 'Starting transcript request.' : 'Submitting YouTube URL for background transcription.'));
       var request;
       if (file) {
         var form = new FormData();
@@ -9123,6 +9281,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         }
         resetTranscriptProgress();
         renderTranscript(data);
+        if (DIRECT_API_BASE) {
+          setTranscriptStatus('Source added: ' + data.job.segment_count + ' transcript line(s).', data.job.segment_count ? 'ok' : '');
+          log('Source added via ' + (data.job.methodLabel || data.job.method || 'Railway') + ': ' + data.job.segment_count + ' line(s).');
+          return loadAllData();
+        }
         setTranscriptStatus('Transcript run finished: ' + data.job.segment_count + ' segment(s).', data.job.segment_count ? 'ok' : '');
         log('Transcript job ' + data.job.id + ' finished with ' + data.job.segment_count + ' segment(s).');
         if (data.job.segment_count) return runAnalysisForVideo(videoUrl, data.job.video_id);
@@ -9149,6 +9312,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         setTranscriptStatus('Paste a YouTube URL or video ID first.', 'bad');
         return;
       }
+      openSourceLogs();
       setTranscriptStatus('Loading stored transcript...', '');
       fetchJson('/api/transcripts/' + encodeURIComponent(id)).then(function (data) {
         renderTranscript(data);
@@ -9441,7 +9605,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('runTranscriptBtn').addEventListener('click', runTranscript);
       el('loadStoredBtn').addEventListener('click', loadStoredTranscript);
       el('clearTranscriptBtn').addEventListener('click', function () {
-        el('transcriptBox').innerHTML = '<div class="status">Run a transcript or load a stored one.</div>';
+        el('transcriptBox').innerHTML = '<div class="status">Add a source or load a saved transcript.</div>';
         el('transcriptMeta').textContent = 'No transcript loaded.';
         resetTranscriptProgress();
         setTranscriptStatus('Ready.', '');
