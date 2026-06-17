@@ -2125,13 +2125,27 @@ async function transcript(body) {
   const videoUrl = normalizeWatchUrl(rawVideoUrl, id);
   const languages = safeText(body.languages || 'hi.*,hi,en.*');
   const preferWorker = Boolean(body.preferWorker);
+  const fromWebsite = Boolean(body.fromWebsite);
   if (!/^https?:\/\//i.test(videoUrl) || !id) return { ok: false, error: 'Invalid YouTube video URL.' };
+
+  if (fromWebsite) {
+    broadcastCaptureProgress(id, 'fetch_captions', 'Fetching captions via your browser (no tab switch)...');
+    try {
+      const backgroundResult = await fetchTranscriptFromBackgroundNetwork(videoUrl, id, languages);
+      if (backgroundResult?.ok && backgroundResult.segments?.length) {
+        broadcastCaptureProgress(id, 'done', `Captured ${backgroundResult.segments.length} lines`);
+        return transcriptResponse(id, backgroundResult);
+      }
+    } catch {
+      // Fall through to background-tab fetch.
+    }
+  }
 
   let result = null;
   try {
     result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages, {
-      preferWorker: preferWorker || Boolean(body.fromWebsite),
-      fromWebsite: Boolean(body.fromWebsite),
+      preferWorker: preferWorker || fromWebsite,
+      fromWebsite,
       returnTabId: body.returnTabId || null,
     });
   } catch (tabError) {
@@ -2215,10 +2229,13 @@ function transcriptResponse(id, result) {
 }
 
 async function fetchTranscriptFromHtml(videoUrl, id, languages) {
-  const tabId = await ensureYouTubeTab();
-  const html = await fetchText(videoUrl);
-  const result = await buildTranscriptFromPlayerHtml(html, id, languages, tabId, 'html-fallback');
-  if (!result?.segments?.length) throw new Error('No captions found in page HTML.');
+  const html = await fetchYouTubeWatchHtml(videoUrl);
+  const result = await buildTranscriptFromPlayerHtml(html, id, languages, null, 'html-fallback', {
+    useBackgroundNetwork: true,
+    html,
+    videoUrl,
+  });
+  if (!result?.segments?.length) throw new Error(result?.error || 'No captions found in page HTML.');
   return { ...result, ok: true };
 }
 
@@ -2843,6 +2860,32 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options
   await waitForYouTubePageReady(tabId, videoId);
 
   if (fromWebsite) {
+    broadcastCaptureProgress(videoId, 'fetch', 'Trying captions in a hidden YouTube tab...');
+    await injectTranscriptHelpers(tabId);
+    let pageResult = await runInYouTubeTab('fetchTranscriptInPage', [languages, true, true], tabId, { skipInject: true });
+    if (pageResult?.segments?.length) {
+      return {
+        ok: true,
+        language: pageResult.language || 'unknown',
+        fileName: pageResult.fileName || 'youtube-transcript',
+        segments: pageResult.segments,
+        method: pageResult.method || 'youtube-tab-api-quiet',
+      };
+    }
+
+    pageResult = await runInYouTubeTab('wakeYouTubePageInPage', [], tabId, { skipInject: true });
+    await sleep(800);
+    pageResult = await runInYouTubeTab('fetchTranscriptInPage', [languages, true, false], tabId, { skipInject: true });
+    if (pageResult?.segments?.length) {
+      return {
+        ok: true,
+        language: pageResult.language || 'unknown',
+        fileName: pageResult.fileName || 'youtube-transcript',
+        segments: pageResult.segments,
+        method: pageResult.method || 'youtube-tab-quiet',
+      };
+    }
+
     return fetchTranscriptWithInteractiveFocus(tabId, returnTabId, videoId, languages);
   }
 
@@ -2886,7 +2929,305 @@ async function fetchTranscriptInYouTubeTab(videoUrl, videoId, languages, options
   throw new Error(errors.filter(Boolean).join(' · ') || 'Could not download captions. Stay signed in at youtube.com and retry.');
 }
 
-async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, methodPrefix) {
+async function fetchYouTubeWatchHtml(videoUrl) {
+  const response = await fetch(videoUrl, { credentials: 'include' });
+  if (!response.ok) throw new Error(`YouTube page fetch failed: HTTP ${response.status}`);
+  return response.text();
+}
+
+function extractTranscriptParams(player, html) {
+  const fromPlayer = player?.captions?.playerCaptionsTracklistRenderer?.openTranscriptParams;
+  if (fromPlayer) return fromPlayer;
+
+  const htmlText = String(html || '');
+  const patterns = [
+    /"openTranscriptParams":"([^"]+)"/,
+    /"getTranscriptEndpoint":\{"params":"([^"]+)"/,
+    /"apiUrl":"\/youtubei\/v1\/get_transcript"[\s\S]{0,500}?"params":"([^"]+)"/,
+    /"params":"([^"]+)"[\s\S]{0,500}?"apiUrl":"\/youtubei\/v1\/get_transcript"/,
+  ];
+  for (const pattern of patterns) {
+    const match = htmlText.match(pattern);
+    if (match?.[1]) return match[1].replace(/\\u0026/g, '&');
+  }
+  return '';
+}
+
+function extractYouTubeClientConfig(html) {
+  const text = String(html || '');
+  const pick = (pattern) => {
+    const match = text.match(pattern);
+    return match?.[1] ? match[1].replace(/\\u0026/g, '&') : '';
+  };
+  return {
+    apiKey: pick(/"INNERTUBE_API_KEY":"([^"]+)"/) || pick(/INNERTUBE_API_KEY['"]:\s*['"]([^'"]+)/),
+    clientVersion: pick(/"INNERTUBE_CLIENT_VERSION":"([^"]+)"/) || '2.20260101.00.00',
+    visitorData: pick(/"VISITOR_DATA":"([^"]+)"/),
+    hl: pick(/"HL":"([^"]+)"/) || 'en',
+    gl: pick(/"GL":"([^"]+)"/) || 'US',
+  };
+}
+
+function vttTimeToSeconds(ts) {
+  const parts = String(ts).replace(',', '.').split(':');
+  if (parts.length === 3) return Number(parts[0]) * 3600 + Number(parts[1]) * 60 + Number(parts[2]);
+  if (parts.length === 2) return Number(parts[0]) * 60 + Number(parts[1]);
+  return Number(ts) || 0;
+}
+
+function secondsToClockLabel(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+function normalizeCaptionSegments(segments) {
+  return (Array.isArray(segments) ? segments : []).map((segment) => ({
+    start: Number(segment.start) || 0,
+    end: Number(segment.end) || Number(segment.start) || 0,
+    duration: Number(segment.duration) || 0,
+    timestamp_label: segment.timestamp_label || secondsToClockLabel(segment.start),
+    text: stripHtml(segment.text || ''),
+  })).filter((segment) => segment.text);
+}
+
+async function fetchCaptionTrackInBackground(baseUrl) {
+  const formats = [
+    { fmt: 'vtt', parser: parseVttCaptions },
+    { fmt: '', parser: parseXmlCaptions },
+    { fmt: 'json3', parser: parseJson3Captions },
+    { fmt: 'srv3', parser: parseXmlCaptions },
+    { fmt: 'srv1', parser: parseXmlCaptions },
+  ];
+
+  for (const { fmt, parser } of formats) {
+    try {
+      const url = new URL(baseUrl);
+      if (fmt) url.searchParams.set('fmt', fmt);
+      else url.searchParams.delete('fmt');
+      const response = await fetch(url.toString(), { credentials: 'include' });
+      const text = await response.text();
+      if (!response.ok || !text.trim()) continue;
+      const segments = normalizeCaptionSegments(parser(text));
+      if (segments.length) return { ok: true, segments, format: fmt || 'xml' };
+    } catch {
+      continue;
+    }
+  }
+
+  return { ok: false, error: 'All caption formats returned empty.' };
+}
+
+function parseVttCaptions(vttText) {
+  const lines = String(vttText || '').replace(/\r/g, '').split('\n');
+  const segments = [];
+  let current = null;
+
+  function pushCurrent() {
+    if (!current || !current.textParts.length) return;
+    const text = stripHtml(current.textParts.join(' '));
+    if (!text) return;
+    segments.push({
+      start: Number(current.start.toFixed(3)),
+      end: Number(current.end.toFixed(3)),
+      duration: Number(Math.max(0, current.end - current.start).toFixed(3)),
+      timestamp_label: secondsToClockLabel(current.start),
+      text,
+    });
+  }
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line === 'WEBVTT' || line.startsWith('Kind:') || line.startsWith('Language:')) continue;
+    if (/^(NOTE|STYLE|REGION)\b/.test(line)) continue;
+    const match = line.match(/(\d{1,2}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s+-->\s+(\d{1,2}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/);
+    if (match) {
+      pushCurrent();
+      current = { start: vttTimeToSeconds(match[1]), end: vttTimeToSeconds(match[2]), textParts: [] };
+    } else if (current && !/^\d+$/.test(line)) {
+      current.textParts.push(line);
+    }
+  }
+  pushCurrent();
+  return segments.filter((seg, index) => seg.text && (!index || seg.text !== segments[index - 1].text));
+}
+
+function parseXmlCaptions(xmlText) {
+  const segments = [];
+  const blocks = [...String(xmlText || '').matchAll(/<text\b([^>]*)>([\s\S]*?)<\/text>/gi)];
+  for (const block of blocks) {
+    const attrs = block[1] || '';
+    const start = Number((attrs.match(/\bstart="([^"]+)"/) || [])[1] || 0);
+    const duration = Number((attrs.match(/\bdur="([^"]+)"/) || [])[1] || 0);
+    const text = stripHtml(block[2] || '');
+    if (!text) continue;
+    const end = start + duration;
+    segments.push({
+      start: Number(start.toFixed(3)),
+      end: Number(end.toFixed(3)),
+      duration: Number(Math.max(0, duration).toFixed(3)),
+      timestamp_label: secondsToClockLabel(start),
+      text,
+    });
+  }
+  return segments;
+}
+
+function parseJson3Captions(jsonText) {
+  let data = null;
+  try {
+    data = JSON.parse(String(jsonText || ''));
+  } catch {
+    return [];
+  }
+  const segments = [];
+  for (const event of data?.events || []) {
+    const text = (event?.segs || []).map(seg => seg?.utf8 || '').join('').replace(/\n/g, ' ').trim();
+    if (!text || text === '\n') continue;
+    const start = Number(event.tStartMs || 0) / 1000;
+    const duration = Number(event.dDurationMs || 0) / 1000;
+    const end = start + duration;
+    segments.push({
+      start: Number(start.toFixed(3)),
+      end: Number(end.toFixed(3)),
+      duration: Number(Math.max(0, duration).toFixed(3)),
+      timestamp_label: secondsToClockLabel(start),
+      text: stripHtml(text),
+    });
+  }
+  return segments.filter(segment => segment.text);
+}
+
+function parseInnerTubeTranscriptPayload(data) {
+  const listRenderer = findKeyDeep(data, 'transcriptSegmentListRenderer');
+  const initialSegments = Array.isArray(listRenderer?.initialSegments) ? listRenderer.initialSegments : [];
+  const segments = [];
+
+  for (const item of initialSegments) {
+    const renderer = item?.transcriptSegmentRenderer || item;
+    const snippet = renderer?.snippet;
+    let text = '';
+    if (Array.isArray(snippet?.runs)) text = stripHtml(snippet.runs.map(run => run?.text || '').join(''));
+    else text = stripHtml(snippet?.simpleText || snippet?.text || '');
+    const startMs = Number(renderer?.startMs || renderer?.startOffsetMs || 0);
+    const endMs = Number(renderer?.endMs || 0);
+    if (!text) continue;
+    const start = startMs / 1000;
+    const end = endMs > startMs ? endMs / 1000 : start;
+    segments.push({
+      start: Number(start.toFixed(3)),
+      end: Number(end.toFixed(3)),
+      duration: Number(Math.max(0, end - start).toFixed(3)),
+      timestamp_label: stripHtml(renderer?.startTimeText?.simpleText || secondsToClockLabel(start)),
+      text,
+    });
+  }
+
+  if (segments.length) return segments;
+
+  const cueGroups = findKeyDeep(data, 'cueGroups');
+  if (!Array.isArray(cueGroups)) return [];
+  for (const group of cueGroups) {
+    for (const cue of group?.transcriptCueGroupRenderer?.cues || []) {
+      const renderer = cue?.transcriptCueRenderer;
+      const text = stripHtml(renderer?.cue?.simpleText || renderer?.cue?.runs?.map(run => run.text).join('') || '');
+      const startMs = Number(renderer?.startOffsetMs || renderer?.startMs || 0);
+      if (!text) continue;
+      const start = startMs / 1000;
+      const duration = Number(renderer?.durationMs || 0) / 1000;
+      const end = start + duration;
+      segments.push({
+        start: Number(start.toFixed(3)),
+        end: Number(end.toFixed(3)),
+        duration: Number(Math.max(0, duration).toFixed(3)),
+        timestamp_label: secondsToClockLabel(start),
+        text,
+      });
+    }
+  }
+  return segments;
+}
+
+function findKeyDeep(value, key) {
+  if (!value || typeof value !== 'object') return null;
+  if (Object.prototype.hasOwnProperty.call(value, key)) return value[key];
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findKeyDeep(item, key);
+      if (found) return found;
+    }
+    return null;
+  }
+  for (const child of Object.values(value)) {
+    const found = findKeyDeep(child, key);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function fetchInnerTubeTranscriptInBackground(params, html, videoUrl) {
+  if (!params) return { ok: false, error: 'No transcript params available.' };
+  const cfg = extractYouTubeClientConfig(html);
+  if (!cfg.apiKey) return { ok: false, error: 'YouTube API key missing in page HTML.' };
+
+  const headers = {
+    'content-type': 'application/json',
+    'X-Youtube-Client-Name': '1',
+    'X-Youtube-Client-Version': cfg.clientVersion,
+  };
+  if (cfg.visitorData) headers['X-Goog-Visitor-Id'] = cfg.visitorData;
+
+  const response = await fetch(`https://www.youtube.com/youtubei/v1/get_transcript?key=${encodeURIComponent(cfg.apiKey)}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({
+      context: {
+        client: {
+          clientName: 'WEB',
+          clientVersion: cfg.clientVersion,
+          hl: cfg.hl,
+          gl: cfg.gl,
+          originalUrl: videoUrl,
+        },
+        user: {},
+        request: { useSsl: true },
+      },
+      params,
+    }),
+  });
+
+  const raw = await response.text();
+  let data = null;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: `innerTube transcript parse failed (HTTP ${response.status}).` };
+  }
+
+  const segments = parseInnerTubeTranscriptPayload(data);
+  if (!segments.length) {
+    const apiError = data?.error?.message || data?.errors?.[0]?.message || '';
+    return {
+      ok: false,
+      error: apiError
+        ? `innerTube error: ${apiError}`
+        : `innerTube transcript empty (HTTP ${response.status}).`,
+    };
+  }
+
+  return { ok: true, segments, format: 'innertube' };
+}
+
+async function fetchTranscriptFromBackgroundNetwork(videoUrl, id, languages) {
+  const html = await fetchYouTubeWatchHtml(videoUrl);
+  return buildTranscriptFromPlayerHtml(html, id, languages, null, 'background-network', { useBackgroundNetwork: true, html, videoUrl });
+}
+
+async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, methodPrefix, options = {}) {
   try {
     const player = extractJsonObject(html, 'ytInitialPlayerResponse');
     if (player?.videoDetails?.videoId !== videoId) {
@@ -2896,12 +3237,17 @@ async function buildTranscriptFromPlayerHtml(html, videoId, languages, tabId, me
     const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
     const selected = tracks.length ? chooseCaptionTrack(tracks, languages) : null;
     const params = extractTranscriptParams(player, html);
+    const useBackgroundNetwork = Boolean(options.useBackgroundNetwork);
 
     const captionPromise = selected?.baseUrl
-      ? runInYouTubeTab('fetchCaptionTrackInPage', [selected.baseUrl], tabId)
+      ? (useBackgroundNetwork
+        ? fetchCaptionTrackInBackground(selected.baseUrl)
+        : runInYouTubeTab('fetchCaptionTrackInPage', [selected.baseUrl], tabId))
       : Promise.resolve(null);
     const innerTubePromise = params
-      ? runInYouTubeTab('fetchInnerTubeTranscriptInPage', [params], tabId)
+      ? (useBackgroundNetwork
+        ? fetchInnerTubeTranscriptInBackground(params, html, options.videoUrl || '')
+        : runInYouTubeTab('fetchInnerTubeTranscriptInPage', [params], tabId))
       : Promise.resolve(null);
     const [captionResult, innerTubeResult] = await Promise.all([captionPromise, innerTubePromise]);
 

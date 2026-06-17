@@ -6509,7 +6509,28 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     var DIRECT_API_BASE = String(window.KRISHI_API_BASE || '').replace(/\/+$/, '');
+    var WORKER_API_BASE = String(window.KRISHI_WORKER_API_BASE || '').replace(/\/+$/, '');
     var TRANSCRIPT_CACHE_PREFIX = 'krishiRailwayTranscript:';
+
+    function isWorkerTranscriptPath(path) {
+      if (path === '/api/transcripts/transcribe' || path === '/api/transcripts/setup' || path === '/api/tasks/ongoing') return true;
+      return /^\/api\/transcripts\/[^/?]+$/.test(path);
+    }
+
+    function workerFetchJson(path, options) {
+      if (!WORKER_API_BASE || !window.KRISHI_NETLIFY_STATIC || !isWorkerTranscriptPath(path)) return null;
+      if (path === '/api/transcripts/transcribe' && state.extensionBridgeReady) return null;
+      var apiOptions = options || {};
+      var headers = Object.assign({}, apiOptions.headers || {});
+      if (!headers.authorization && state.apiToken) headers.authorization = 'Bearer ' + state.apiToken;
+      return fetch(WORKER_API_BASE + path, Object.assign({}, apiOptions, { headers: headers })).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) {
+          var accepted = response.status === 202 && data.ok !== false;
+          if ((!response.ok && !accepted) || data.ok === false) throw new Error(data.error || ('Worker request failed: ' + response.status));
+          return data;
+        });
+      });
+    }
 
     function extensionApi(path, body, timeoutMs) {
       return new Promise(function (resolve, reject) {
@@ -6592,12 +6613,26 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     function fetchTranscriptViaExtension(requestBody, videoUrl) {
+      setTranscriptProgress({
+        percent: 14,
+        stage: 'fetch_captions',
+        message: 'Fetching captions via Chrome extension (your browser IP, no tab switch)...',
+        elapsed: '',
+        attempt: ''
+      });
       return extensionApi('/api/transcript', {
         videoUrl: videoUrl,
         id: requestBody.videoId || requestBody.video_id || extractVideoId(videoUrl),
         language: requestBody.language || 'hi',
         languages: requestBody.languages || 'hi.*,hi,en.*,en',
       }).then(function (extData) {
+        setTranscriptProgress({
+          percent: 28,
+          stage: 'saving',
+          message: 'Captions fetched. Saving on Railway and running AI analysis...',
+          elapsed: '',
+          attempt: ''
+        });
         return importExtensionTranscriptToRailway(extData, requestBody, videoUrl);
       });
     }
@@ -6813,6 +6848,9 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         }
         var videoUrl = String(requestBody.videoUrl || requestBody.url || '').trim();
         if (!videoUrl) return Promise.reject(new Error('Paste a YouTube URL first.'));
+        if (WORKER_API_BASE && window.KRISHI_NETLIFY_STATIC && !state.extensionBridgeReady) {
+          return null;
+        }
         if (state.extensionBridgeReady) {
           return fetchTranscriptViaExtension(requestBody, videoUrl);
         }
@@ -6830,6 +6868,8 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     }
 
     function fetchJson(path, options) {
+      var worker = workerFetchJson(path, options || {});
+      if (worker) return worker;
       var direct = directRailwayFetchJson(path, options || {});
       if (direct) return direct;
       return fetch(path, options || {}).then(function (response) {
@@ -9416,7 +9456,14 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
             node.className = missing.length ? 'status bad' : 'status ok';
             node.textContent = missing.length
               ? ('Chrome extension connected for YouTube fetch. Railway still needs ' + missing.join(', ') + ' for AI analysis + save.')
-              : 'Chrome extension connected — YouTube uses your browser IP. Railway saves transcript + runs OpenAI analysis.';
+              : 'Chrome extension connected — fetches captions in your browser (no tab switch). Railway saves + runs OpenAI analysis.';
+            return;
+          }
+          if (WORKER_API_BASE) {
+            node.className = missing.length ? 'status bad' : 'status ok';
+            node.textContent = missing.length
+              ? ('Netlify uses Cloudflare Worker for transcript jobs (same as local). Railway still needs ' + missing.join(', ') + ' for AI analysis + save.')
+              : 'Netlify transcript jobs run on Cloudflare Worker (background download, same as local). Railway handles AI analysis + save.';
             return;
           }
           if (!data.youtubeCookiesConfigured) missing.push('YOUTUBE_COOKIES');
@@ -9466,8 +9513,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
       el('videoHint').textContent = DIRECT_API_BASE
         ? (state.extensionBridgeReady
-          ? 'Preview loads here. Extension wakes YouTube automatically — you can stay on this tab.'
-          : 'Install the Fruit Miner Chrome extension for reliable YouTube fetch, or Railway will try server-side yt-dlp.')
+          ? 'Extension fetches captions in the background — stay on this tab.'
+          : (WORKER_API_BASE
+            ? 'Transcript runs on Cloudflare Worker in the background (same flow as local dev).'
+            : 'Install the Fruit Miner Chrome extension for reliable YouTube fetch, or Railway will try server-side yt-dlp.'))
         : (file
           ? 'Audio upload will transcribe on the Worker and skip YouTube download.'
           : (audioUrl
