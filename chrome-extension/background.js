@@ -1,4 +1,4 @@
-importScripts('classify.js', 'transcript-fetch.js');
+importScripts('classify.js', 'transcript-fetch.js', 'innertube-captions.js');
 
 const STORAGE_DEFAULTS = {
   channelUrl: 'https://www.youtube.com/@delhifruitmarket/videos',
@@ -2119,6 +2119,21 @@ async function fetchTranscriptFromActiveWatchTabIfMatch(videoId) {
   return fetchVisibleTranscriptFromTab(activeTab, videoId, true);
 }
 
+async function fetchTranscriptViaInnertubeApi(videoId, languages) {
+  broadcastCaptureProgress(videoId, 'fetch_captions', 'Fetching captions via Innertube ANDROID API (no tab)...');
+  const result = await fetchInnertubeCaptionTranscript(videoId, languages);
+  if (!result?.ok || !result.segments?.length) {
+    return { ok: false, error: 'Innertube API returned no caption lines.' };
+  }
+  return {
+    ok: true,
+    language: result.language || 'unknown',
+    fileName: result.fileName || 'innertube-captions',
+    segments: result.segments,
+    method: result.method || 'innertube-android',
+  };
+}
+
 async function transcript(body) {
   const rawVideoUrl = safeText(body.videoUrl || body.url);
   const id = safeText(body.id || getVideoId(rawVideoUrl));
@@ -2126,23 +2141,51 @@ async function transcript(body) {
   const languages = safeText(body.languages || 'hi.*,hi,en.*');
   const preferWorker = Boolean(body.preferWorker);
   const fromWebsite = Boolean(body.fromWebsite);
+  const errors = [];
   if (!/^https?:\/\//i.test(videoUrl) || !id) return { ok: false, error: 'Invalid YouTube video URL.' };
 
+  broadcastCaptureProgress(id, 'fetch_captions', 'Checking for an open YouTube tab with this video...');
+  try {
+    const openTabResult = await fetchTranscriptFromActiveWatchTabIfMatch(id);
+    if (openTabResult?.ok && openTabResult.segments?.length) {
+      broadcastCaptureProgress(id, 'done', `Captured ${openTabResult.segments.length} lines from open YouTube tab`);
+      return transcriptResponse(id, openTabResult);
+    }
+    if (openTabResult?.error) errors.push(openTabResult.error);
+  } catch (error) {
+    errors.push(cleanError(error));
+  }
+
+  try {
+    const innertubeResult = await fetchTranscriptViaInnertubeApi(id, languages);
+    if (innertubeResult?.ok && innertubeResult.segments?.length) {
+      broadcastCaptureProgress(id, 'done', `Captured ${innertubeResult.segments.length} lines via Innertube`);
+      return transcriptResponse(id, innertubeResult);
+    }
+    if (innertubeResult?.error) errors.push(innertubeResult.error);
+  } catch (error) {
+    const message = cleanError(error);
+    errors.push(message);
+    broadcastCaptureProgress(id, 'fetch_captions', `Innertube failed: ${message.slice(0, 180)}`);
+  }
+
   if (fromWebsite) {
-    broadcastCaptureProgress(id, 'fetch_captions', 'Fetching captions via your browser (no tab switch)...');
+    broadcastCaptureProgress(id, 'fetch_captions', 'Trying watch-page caption fetch (no tab)...');
     try {
       const backgroundResult = await fetchTranscriptFromBackgroundNetwork(videoUrl, id, languages);
       if (backgroundResult?.ok && backgroundResult.segments?.length) {
         broadcastCaptureProgress(id, 'done', `Captured ${backgroundResult.segments.length} lines`);
         return transcriptResponse(id, backgroundResult);
       }
-    } catch {
-      // Fall through to background-tab fetch.
+      if (backgroundResult?.error) errors.push(backgroundResult.error);
+    } catch (error) {
+      errors.push(cleanError(error));
     }
   }
 
   let result = null;
   try {
+    broadcastCaptureProgress(id, 'load', 'Opening hidden YouTube tab as last resort...');
     result = await fetchTranscriptInYouTubeTab(videoUrl, id, languages, {
       preferWorker: preferWorker || fromWebsite,
       fromWebsite,
@@ -2152,16 +2195,26 @@ async function transcript(body) {
     try {
       result = await fetchTranscriptFromHtml(videoUrl, id, languages);
     } catch (fallbackError) {
+      const summary = errors.filter(Boolean).join(' · ');
       return {
         ok: false,
         id,
-        error: `${tabError.message || tabError}. Open youtube.com in this Chrome profile, sign in, play the video once, then retry.`,
+        error: [
+          tabError.message || tabError,
+          summary,
+          'Tip: open this exact video on youtube.com, click Show transcript, then retry Add source.',
+        ].filter(Boolean).join(' '),
       };
     }
   }
 
   if (!result?.ok) {
-    return { ok: false, id, error: result?.error || 'Transcript fetch failed.' };
+    const summary = errors.filter(Boolean).join(' · ');
+    return {
+      ok: false,
+      id,
+      error: result?.error || summary || 'Transcript fetch failed.',
+    };
   }
 
   const segments = result.segments || [];

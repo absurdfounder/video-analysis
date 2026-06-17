@@ -6580,6 +6580,17 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       });
     }
 
+    function formatTranscriptFailureHelp(message) {
+      var text = String(message || '');
+      if (/format is not available|download_audio|extractor failed|yt-dlp|cloud download/i.test(text)) {
+        return text + ' For live Netlify: use local dev (localhost:8787), open the video on youtube.com first and retry, or upload an audio file.';
+      }
+      if (/extension|innertube|caption/i.test(text)) {
+        return text + ' Open this exact video on youtube.com, click Show transcript, then click Add source again.';
+      }
+      return text;
+    }
+
     function extensionApi(path, body, timeoutMs) {
       return new Promise(function (resolve, reject) {
         if (!state.extensionBridgeReady) {
@@ -9672,7 +9683,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           return pollStoredTranscript(videoUrl, 90, pollStart);
         }
         resetTranscriptProgress();
-        setTranscriptStatus(msg, 'bad');
+        setTranscriptStatus(formatTranscriptFailureHelp(msg), 'bad');
         log('ERROR: ' + msg);
       }).finally(function () {
         el('runTranscriptBtn').disabled = false;
