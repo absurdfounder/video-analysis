@@ -237,14 +237,29 @@ const MANDI_PRODUCE = [
   { name: 'orange', terms: ['संतरा', 'orange', 'kinnow', 'santra', 'mausambi'] },
 ];
 
-const MANGO_VARIETIES = [
+const MANDI_VARIETIES = [
   ['दिश्यारी', 'Dussehri'], ['dussehri', 'Dussehri'], ['dusheri', 'Dussehri'], ['dishyari', 'Dussehri'],
   ['लंगड़ा', 'Langda'], ['langda', 'Langda'], ['langra', 'Langda'],
   ['गोल्डन', 'Golden'], ['golden', 'Golden'],
   ['केसर', 'Kesar'], ['kesar', 'Kesar'], ['gir', 'Gir Kesar'], ['gujarat', 'Gujarat Kesar'],
-  ['चौसा', 'Chausa'], ['chausa', 'Chausa'], ['chosa', 'Chausa'],
+  ['चौसा', 'Chausa'], ['chausa', 'Chausa'], ['chosa', 'Chausa'], ['choosa', 'Chausa'], ['chusa', 'Chausa'],
   ['सफेद', 'Safeda'], ['safeda', 'Safeda'], ['safed', 'Safeda'],
   ['टोटापुरी', 'Totapuri'], ['totapuri', 'Totapuri'], ['tota', 'Totapuri'],
+  ['कश्मीरी', 'Kashmiri'], ['kashmiri', 'Kashmiri'],
+  ['black amber', 'Black Amber'], ['ब्लैक एम्बर', 'Black Amber'],
+  ['red diamond', 'Red Diamond'], ['रेड डायमंड', 'Red Diamond'],
+  ['dietman', 'Dietman'], ['pepsi', 'Pepsi'],
+  ['shimla', 'Shimla'], ['शिमला', 'Shimla'],
+  ['royal gala', 'Royal Gala'], ['गाला', 'Gala'], ['gala', 'Gala'],
+  ['golden delicious', 'Golden Delicious'], ['delicious', 'Delicious'],
+  ['kinnaur', 'Kinnaur'], ['किन्नौर', 'Kinnaur'],
+  ['fuji', 'Fuji'], ['फूजी', 'Fuji'],
+  ['शक्करपारा', 'Shakkarpara'], ['शक्करपारे', 'Shakkarpara'], ['शक्करपारों', 'Shakkarpara'],
+  ['shakkarpara', 'Shakkarpara'], ['shakkar para', 'Shakkarpara'],
+  ['आड़ू', 'Peach'], ['आड़ू', 'Peach'], ['aadu', 'Peach'], ['peach', 'Peach'],
+  ['chipsona', 'Chipsona'], ['चिपसोना', 'Chipsona'],
+  ['jalandhar', 'Jalandhar'], ['जालंधर', 'Jalandhar'],
+  ['pahadi', 'Pahadi'], ['पहाड़ी', 'Pahadi'],
 ];
 
 const MANDI_EXTRACTION_SYSTEM = [
@@ -322,9 +337,25 @@ function detectCommodities(text, title = '') {
 
 function detectVariety(text) {
   const hay = safeText(text).toLowerCase();
-  for (const [needle, label] of MANGO_VARIETIES) {
-    if (hay.includes(needle)) return label;
+  for (const [needle, label] of MANDI_VARIETIES) {
+    if (hay.includes(needle.toLowerCase())) return label;
   }
+  return '';
+}
+
+function detectVarietyNearPrice(text, matchIndex) {
+  const hay = safeText(text);
+  const index = Number.isFinite(matchIndex) ? matchIndex : hay.length;
+  const near = hay.slice(Math.max(0, index - 140), Math.min(hay.length, index + 60));
+  return detectVariety(near) || detectVariety(hay);
+}
+
+function detectGradeFromText(text) {
+  const hay = safeText(text);
+  let match = hay.match(/(?:grade|ग्रेड|नंबर|नम्बर|no\.?)\s*([0-9]+)/i);
+  if (match) return `Grade ${match[1]}`;
+  match = hay.match(/([0-9]+)\s*(?:नंबर|नम्बर|number|no\.?)/i);
+  if (match) return `Grade ${match[1]}`;
   return '';
 }
 
@@ -413,7 +444,11 @@ function extractPricesFromSegments({ segments, title, videoId, videoUrl, uploadD
       if (!targets.length) continue;
 
       const seconds = Math.max(0, Math.floor(Number(list[i].start_seconds) || 0));
-      const variety = detectVariety(windowText);
+      const variety = detectVarietyNearPrice(windowText, match.index);
+      const quality_grade = detectGradeFromText(windowText.slice(
+        Math.max(0, match.index - 140),
+        Math.min(windowText.length, match.index + 80),
+      ));
       for (const commodity of targets) {
         const info = produceInfo(commodity);
         rows.push({
@@ -422,7 +457,7 @@ function extractPricesFromSegments({ segments, title, videoId, videoUrl, uploadD
           fruit_label: info?.label || commodity,
           fruit_emoji: info?.emoji || '',
           variety,
-          quality_grade: '',
+          quality_grade,
           quality_label: '',
           size_label: '',
           party_name: '',

@@ -7288,6 +7288,18 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         ['black amber', 'Black Amber'], ['ब्लैक एम्बर', 'Black Amber'],
         ['red diamond', 'Red Diamond'], ['रेड डायमंड', 'Red Diamond'],
         ['dietman', 'Dietman'], ['pepsi', 'Pepsi'],
+        ['कश्मीरी', 'Kashmiri'], ['kashmiri', 'Kashmiri'],
+        ['shimla', 'Shimla'], ['शिमला', 'Shimla'],
+        ['royal gala', 'Royal Gala'], ['गाला', 'Gala'], ['gala', 'Gala'],
+        ['golden delicious', 'Golden Delicious'], ['delicious', 'Delicious'],
+        ['kinnaur', 'Kinnaur'], ['किन्नौर', 'Kinnaur'],
+        ['fuji', 'Fuji'], ['फूजी', 'Fuji'],
+        ['शक्करपारा', 'Shakkarpara'], ['शक्करपारे', 'Shakkarpara'], ['शक्करपारों', 'Shakkarpara'],
+        ['shakkarpara', 'Shakkarpara'], ['shakkar para', 'Shakkarpara'],
+        ['आड़ू', 'Peach'], ['आड़ू', 'Peach'], ['aadu', 'Peach'], ['peach', 'Peach'],
+        ['chipsona', 'Chipsona'], ['चिपसोना', 'Chipsona'],
+        ['jalandhar', 'Jalandhar'], ['जालंधर', 'Jalandhar'],
+        ['pahadi', 'Pahadi'], ['पहाड़ी', 'Pahadi'],
         ['चौसा', 'Chausa'], ['chausa', 'Chausa'], ['chosa', 'Chausa'], ['choosa', 'Chausa'], ['chusa', 'Chausa'],
         ['दिश्यारी', 'Dussehri'], ['dussehri', 'Dussehri'], ['dusheri', 'Dussehri'], ['dishyari', 'Dussehri'],
         ['लंगड़ा', 'Langda'], ['langda', 'Langda'], ['langra', 'Langda'],
@@ -7299,6 +7311,16 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       for (var i = 0; i < needles.length; i += 1) {
         if (hay.indexOf(needles[i][0].toLowerCase()) >= 0) return needles[i][1];
       }
+      return '';
+    }
+
+    function detectDisplayGrade(text) {
+      var hay = String(text || '');
+      if (!hay) return '';
+      var match = hay.match(/(?:grade|ग्रेड|नंबर|नम्बर|no\.?)\s*([0-9]+)/i);
+      if (match) return 'Grade ' + match[1];
+      match = hay.match(/([0-9]+)\s*(?:नंबर|नम्बर|number|no\.?)/i);
+      if (match) return 'Grade ' + match[1];
       return '';
     }
 
@@ -7342,19 +7364,41 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         }
       }
 
+      if (!String(copy.quality_grade || '').trim() && !String(copy.quality_label || '').trim()) {
+        var detectedGrade = detectDisplayGrade(contextHay);
+        if (detectedGrade) copy.quality_grade = detectedGrade;
+      }
+
       var unit = String(copy.unit || '').trim().toLowerCase();
       if (unit !== 'kg') copy.unit = 'unknown';
       return copy;
     }
 
     function rowDisplayLabel(row) {
+      row = normalizeDisplayRow(row);
       var variety = String(row.variety || '').trim();
       var grade = gradeLabel(row);
+      if (grade === 'Unspecified') {
+        var inferredGrade = detectDisplayGrade([row.original_line, row.context, row.price_notes].join(' '));
+        if (inferredGrade) grade = inferredGrade;
+      }
       var size = sizeLabel(row);
       var parts = [];
       if (variety) parts.push(variety);
       if (grade && grade !== 'Unspecified' && grade.toLowerCase() !== variety.toLowerCase()) parts.push(grade);
       if (size && size !== 'Any size') parts.push(size);
+      if (!parts.length) {
+        var area = areaLabel(row);
+        if (area && area !== 'Unknown area') parts.push(area);
+      }
+      if (!parts.length) {
+        var party = String(row.party_name || '').trim();
+        if (party) parts.push(party);
+      }
+      if (!parts.length) {
+        var ts = String(row.timestamp_label || '').trim();
+        if (ts) return 'Lot · ' + ts;
+      }
       return parts.length ? parts.join(' · ') : 'Unspecified';
     }
 
