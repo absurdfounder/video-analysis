@@ -6520,10 +6520,12 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function workerFetchJson(path, options) {
       if (!WORKER_API_BASE || !window.KRISHI_NETLIFY_STATIC || !isWorkerTranscriptPath(path)) return null;
       if (path === '/api/transcripts/setup' && DIRECT_API_BASE) return null;
-      if (path === '/api/transcripts/transcribe' && state.extensionBridgeReady) return null;
       var apiOptions = options || {};
       var headers = Object.assign({}, apiOptions.headers || {});
-      if (!headers.authorization && state.apiToken) headers.authorization = 'Bearer ' + state.apiToken;
+      if (!headers.Authorization && !headers.authorization) {
+        var storedToken = localStorage.getItem('fruitMandiSyncToken') || '';
+        if (storedToken) headers.Authorization = 'Bearer ' + storedToken;
+      }
       return fetch(WORKER_API_BASE + path, Object.assign({}, apiOptions, { headers: headers })).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) {
           var accepted = response.status === 202 && data.ok !== false;
@@ -6849,7 +6851,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         }
         var videoUrl = String(requestBody.videoUrl || requestBody.url || '').trim();
         if (!videoUrl) return Promise.reject(new Error('Paste a YouTube URL first.'));
-        if (WORKER_API_BASE && window.KRISHI_NETLIFY_STATIC && !state.extensionBridgeReady) {
+        if (WORKER_API_BASE && window.KRISHI_NETLIFY_STATIC) {
           return null;
         }
         if (state.extensionBridgeReady) {
@@ -9453,18 +9455,18 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           var missing = [];
           if (!data.openaiConfigured) missing.push('OPENAI_API_KEY');
           if (!data.databaseConfigured) missing.push('DATABASE_URL');
+          if (WORKER_API_BASE) {
+            node.className = missing.length ? 'status bad' : 'status ok';
+            node.textContent = missing.length
+              ? ('Netlify uses Cloudflare Worker for transcript jobs (same as local). Railway still needs ' + missing.join(', ') + ' for AI analysis + save.')
+              : 'Worker transcript: ANDROID + IOS + VR innertube clients with auto-retry on YouTube throttle. Railway saves + runs AI analysis.';
+            return;
+          }
           if (state.extensionBridgeReady) {
             node.className = missing.length ? 'status bad' : 'status ok';
             node.textContent = missing.length
               ? ('Chrome extension connected for YouTube fetch. Railway still needs ' + missing.join(', ') + ' for AI analysis + save.')
               : 'Chrome extension connected — fetches captions in your browser (no tab switch). Railway saves + runs OpenAI analysis.';
-            return;
-          }
-          if (WORKER_API_BASE) {
-            node.className = missing.length ? 'status bad' : 'status ok';
-            node.textContent = missing.length
-              ? ('Netlify uses Cloudflare Worker for transcript jobs (same as local). Railway still needs ' + missing.join(', ') + ' for AI analysis + save.')
-              : 'Netlify transcript jobs run on Cloudflare Worker (background download, same as local). Railway handles AI analysis + save.';
             return;
           }
           if (!data.youtubeCookiesConfigured) missing.push('YOUTUBE_COOKIES');
@@ -9513,10 +9515,10 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('videoIdLabel').textContent = 'Video ID: ' + id;
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
       el('videoHint').textContent = DIRECT_API_BASE
-        ? (state.extensionBridgeReady
-          ? 'Extension fetches captions in the background — stay on this tab.'
-          : (WORKER_API_BASE
-            ? 'Transcript runs on Cloudflare Worker in the background (same flow as local dev).'
+        ? (WORKER_API_BASE
+          ? 'Transcript runs on Cloudflare Worker in the background (same flow as local dev).'
+          : (state.extensionBridgeReady
+            ? 'Extension fetches captions in the background — stay on this tab.'
             : 'Install the Fruit Miner Chrome extension for reliable YouTube fetch, or Railway will try server-side yt-dlp.'))
         : (file
           ? 'Audio upload will transcribe on the Worker and skip YouTube download.'
@@ -9530,16 +9532,21 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var audioUrl = el('audioUrl').value.trim();
       var file = el('audioFile').files[0];
       var language = el('language').value;
+      var useWorkerTranscript = WORKER_API_BASE && window.KRISHI_NETLIFY_STATIC && !file;
       openSourceLogs();
       el('runTranscriptBtn').disabled = true;
       resetTranscriptProgress();
-      setTranscriptStatus(DIRECT_API_BASE ? 'Adding source...' : (file || audioUrl ? 'Starting transcription...' : 'Starting background YouTube transcript job...'), '');
-      log(DIRECT_API_BASE
-        ? (state.extensionBridgeReady
-          ? 'Fetching YouTube transcript via Chrome extension, then saving on Railway.'
-          : 'Adding YouTube source through Railway (install extension for better reliability).')
-        : (file || audioUrl ? 'Starting transcript request.' : 'Submitting YouTube URL for background transcription.'));
-      if (DIRECT_API_BASE) {
+      setTranscriptStatus(useWorkerTranscript
+        ? 'Starting background YouTube transcript job...'
+        : (DIRECT_API_BASE ? 'Adding source...' : (file || audioUrl ? 'Starting transcription...' : 'Starting background YouTube transcript job...')), '');
+      log(useWorkerTranscript
+        ? 'Submitting YouTube URL for background transcription on Cloudflare Worker (same as local).'
+        : (DIRECT_API_BASE
+          ? (state.extensionBridgeReady
+            ? 'Fetching YouTube transcript via Chrome extension, then saving on Railway.'
+            : 'Adding YouTube source through Railway (install extension for better reliability).')
+          : (file || audioUrl ? 'Starting transcript request.' : 'Submitting YouTube URL for background transcription.')));
+      if (DIRECT_API_BASE && !useWorkerTranscript) {
         setTranscriptProgress({
           percent: 12,
           stage: state.extensionBridgeReady ? 'extension_fetch' : 'railway_transcript',
