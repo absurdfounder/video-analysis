@@ -4,7 +4,7 @@ compatibility_date = "2024-11-01"
 account_id = "1fbabfe04c39df8f27c8cbf69121313e"
 
 [vars]
-YOUTUBE_EXTRACTOR_URL = "https://videostudy.netlify.app/api/transcript"
+YOUTUBE_EXTRACTOR_URL = "https://video-analysis-extractor-production.up.railway.app/api/transcript"
 
 [ai]
 binding = "AI"

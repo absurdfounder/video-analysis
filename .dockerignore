@@ -1,0 +1,10 @@
+.git
+.netlify
+.wrangler
+app/node_modules
+app/bin
+node_modules
+npm-debug.log
+Dockerfile
+README_FIX.md
+PUSH_NETLIFY_FIX.md

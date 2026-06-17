@@ -166,7 +166,7 @@ function getYtdlpPath() {
   ].filter(Boolean);
   const ytdlpPath = candidates.find(candidate => fs.existsSync(candidate));
   if (!ytdlpPath) {
-    throw new Error('yt-dlp binary not found. Netlify build should run npm --prefix app run install-ytdlp.');
+    throw new Error('yt-dlp binary not found. The deploy build should run npm --prefix app run install-ytdlp.');
   }
   try { fs.chmodSync(ytdlpPath, 0o755); } catch {}
   return ytdlpPath;
@@ -204,15 +204,15 @@ function cleanYtdlpError(errorText) {
   const text = safeText(errorText);
   if (/sign in to confirm.*not a bot/i.test(text)) {
     return [
-      'YouTube blocked this Netlify extractor server before the audio could be downloaded.',
-      'Add YouTube cookies in Netlify as YOUTUBE_COOKIES or YOUTUBE_COOKIES_BASE64, redeploy, then retry audio transcription.',
+      'YouTube blocked this extractor server before captions or audio could be downloaded.',
+      'Add YouTube cookies as YOUTUBE_COOKIES or YOUTUBE_COOKIES_BASE64, redeploy, then retry transcript extraction.',
       'Use a dedicated/throwaway YouTube account for cookies.',
     ].join(' ');
   }
   if (/cookies.*authentication|cookies-from-browser|exporting-youtube-cookies/i.test(text)) {
     return [
       'YouTube needs login cookies before this server can download the video audio.',
-      'Add YouTube cookies in Netlify as YOUTUBE_COOKIES or YOUTUBE_COOKIES_BASE64, redeploy, then retry audio transcription.',
+      'Add YouTube cookies as YOUTUBE_COOKIES or YOUTUBE_COOKIES_BASE64, redeploy, then retry transcript extraction.',
     ].join(' ');
   }
   return text || 'yt-dlp failed';
@@ -223,8 +223,9 @@ function runYtdlp(url, flags = {}, options = {}) {
     const effectiveFlags = { ...flags };
     const cookiePath = writeYoutubeCookiesFile(options);
     if (cookiePath && !effectiveFlags.cookies) effectiveFlags.cookies = cookiePath;
+    const ytdlpPath = getYtdlpPath();
     const args = [...flagsToArgs(effectiveFlags), url].filter(Boolean);
-    execFile(getYtdlpPath(), args, {
+    execFile(ytdlpPath, args, {
       timeout: options.timeout || 25000,
       killSignal: 'SIGKILL',
       cwd: options.cwd || process.cwd(),

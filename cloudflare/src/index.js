@@ -11,6 +11,7 @@ import {
   detectProduceNames,
   lookupProduce,
 } from './produce-dictionary.js';
+import { fetchYouTubeCaptionTranscript } from './youtube-captions.js';
 
 const WHISPER_MODEL = '@cf/openai/whisper-large-v3-turbo';
 const AUDIO_LIMIT_BYTES = 24 * 1024 * 1024;
@@ -1204,15 +1205,19 @@ async function finalizeTranscriptJob(db, jobId, options) {
   const videoId = safeText(options.videoId);
   const language = safeText(options.language) || 'hi';
   const source = safeText(options.source) || 'external-youtube-extractor';
+  const method = safeText(options.method || options.payload?.method || source);
+  const methodLabel = safeText(options.methodLabel || options.payload?.methodLabel || source);
   const segments = Array.isArray(options.segments) ? options.segments : [];
   const transcriptText = transcriptTextFromSegments(segments);
   await updateTranscriptJobProgress(db, jobId, {
     stage: 'saving',
     message: segments.length
-      ? `Fetched ${segments.length} caption line(s). Saving to D1...`
+      ? `Fetched ${segments.length} caption line(s) via ${methodLabel}. Saving to D1...`
       : 'No transcript lines returned. Finalizing job...',
     progress: 90,
     segmentCount: segments.length,
+    method,
+    methodLabel,
   });
   await replaceTranscriptSegments(db, jobId, videoId, segments, language, source);
   await updateTranscriptJob(db, jobId, {
@@ -1222,8 +1227,10 @@ async function finalizeTranscriptJob(db, jobId, options) {
     payload_json: JSON.stringify({
       ...(options.payload || {}),
       stage: segments.length ? 'complete' : 'empty',
-      message: segments.length ? `Saved ${segments.length} transcript line(s).` : 'No transcript lines returned.',
+      message: segments.length ? `Saved ${segments.length} transcript line(s) via ${methodLabel}.` : 'No transcript lines returned.',
       progress: 100,
+      method,
+      methodLabel,
     }),
   });
 }
@@ -1234,6 +1241,44 @@ async function runExternalYouTubeTranscriptJob(db, env, options) {
   const videoId = safeText(options.videoId) || extractYouTubeId(videoUrl);
   const language = safeText(options.language) || 'hi';
   try {
+    await updateTranscriptJobProgress(db, jobId, {
+      stage: 'fetch_captions',
+      message: 'Trying YouTube caption tracks before audio download...',
+      progress: 15,
+      method: 'captionTracks',
+      methodLabel: 'YouTube caption tracks',
+    });
+    try {
+      const captions = await fetchYouTubeCaptionTranscript(env, {
+        videoUrl,
+        videoId,
+        language: safeText(options.languages) || `${language}.*,${language},en.*,en`,
+      });
+      await finalizeTranscriptJob(db, jobId, {
+        videoId: captions.videoId || videoId,
+        language: captions.language || language,
+        source: captions.source,
+        method: captions.method,
+        methodLabel: captions.methodLabel,
+        segments: captions.segments,
+        payload: {
+          method: captions.method,
+          methodLabel: captions.methodLabel,
+          model: captions.model,
+          extraction: 'youtube-caption-tracks',
+          attempts: captions.attempts || [],
+          segmentCount: captions.segments.length,
+        },
+      });
+      return;
+    } catch (captionError) {
+      await updateTranscriptJobProgress(db, jobId, {
+        stage: 'download_audio',
+        message: `Caption tracks failed (${captionError?.message || captionError}). Falling back to audio extraction...`,
+        progress: 30,
+        captionError: captionError?.message || String(captionError),
+      });
+    }
     await updateTranscriptJobProgress(db, jobId, {
       stage: 'download_audio',
       message: 'Downloading YouTube audio on the extractor service (yt-dlp). This usually takes 30–90 seconds.',
@@ -1258,6 +1303,8 @@ async function runExternalYouTubeTranscriptJob(db, env, options) {
       segments,
       payload: {
         ...(external.payload || {}),
+        method: external.method || 'external-youtube-extractor',
+        methodLabel: external.methodLabel || external.source || 'External YouTube extractor',
         model: external.model,
         extraction: 'external-youtube-extractor',
       },
@@ -1327,6 +1374,8 @@ async function saveTranscriptResult(db, options) {
   const language = safeText(options.language) || 'hi';
   const model = safeText(options.model) || 'transcript-extractor';
   const source = safeText(options.source) || 'transcript-extractor';
+  const method = safeText(options.method || options.payload?.method || source);
+  const methodLabel = safeText(options.methodLabel || options.payload?.methodLabel || source);
   const segments = Array.isArray(options.segments) ? options.segments : [];
   const transcriptText = transcriptTextFromSegments(segments);
   await insertTranscriptJob(db, {
@@ -1346,7 +1395,11 @@ async function saveTranscriptResult(db, options) {
     status: segments.length ? 'complete' : 'empty',
     transcript_text: transcriptText,
     segment_count: segments.length,
-    payload_json: JSON.stringify(options.payload || {}),
+    payload_json: JSON.stringify({
+      ...(options.payload || {}),
+      method,
+      methodLabel,
+    }),
   });
 
   return {
@@ -1359,6 +1412,8 @@ async function saveTranscriptResult(db, options) {
       model,
       source,
       segment_count: segments.length,
+      method,
+      methodLabel,
     },
     transcriptText,
     segments: segments.map(({ raw, ...segment }) => segment),
@@ -1402,7 +1457,7 @@ async function fetchExternalYouTubeTranscript(env, options) {
         id: options.videoId,
         language: options.language || 'hi',
         languages: 'hi.*,hi',
-        preferAudio: true,
+        preferAudio: false,
         openAiApiKey: safeText(env?.OPENAI_API_KEY),
         workerTranscribeUrl: safeText(env?.WORKER_TRANSCRIBE_URL),
         workerSyncToken: safeText(env?.SYNC_TOKEN),
@@ -1445,10 +1500,14 @@ async function fetchExternalYouTubeTranscript(env, options) {
     videoId: safeText(data.id || data.videoId || options.videoId) || extractYouTubeId(options.videoUrl),
     language: safeText(data.language || options.language) || 'hi',
     source: safeText(data.source) || 'external-youtube-extractor',
+    method: safeText(data.method) || safeText(data.source) || 'external-youtube-extractor',
+    methodLabel: safeText(data.methodLabel) || safeText(data.source) || 'External YouTube extractor',
     model: safeText(data.model) || 'yt-dlp-extractor',
     segments,
     payload: {
       extraction: 'external-youtube-extractor',
+      method: safeText(data.method) || safeText(data.source) || 'external-youtube-extractor',
+      methodLabel: safeText(data.methodLabel) || safeText(data.source) || 'External YouTube extractor',
       fileName: data.fileName || '',
       segmentCount: segments.length,
     },
@@ -1476,19 +1535,40 @@ async function transcribeWithWorkersAI(db, env, body) {
   const source = 'workers-ai-whisper';
   const jobId = safeText(body.jobId || body.job_id) || shortId('tx');
   if (videoUrl && !hasAudioInput(body)) {
-    const external = await fetchExternalYouTubeTranscript(env, { videoUrl, videoId, language });
-    if (!external) {
-      throw httpError('Configure YOUTUBE_EXTRACTOR_URL to extract YouTube audio and transcribe it with OpenAI.', 500);
+    let transcript = null;
+    try {
+      transcript = await fetchYouTubeCaptionTranscript(env, {
+        videoUrl,
+        videoId,
+        language: safeText(body.languages) || `${language}.*,${language},en.*,en`,
+      });
+    } catch (captionError) {
+      const external = await fetchExternalYouTubeTranscript(env, { videoUrl, videoId, language });
+      if (!external) {
+        throw httpError(
+          `Caption tracks failed (${captionError?.message || captionError}). Configure YOUTUBE_EXTRACTOR_URL to extract YouTube audio and transcribe it with OpenAI.`,
+          500,
+        );
+      }
+      transcript = external;
     }
     return saveTranscriptResult(db, {
       jobId,
-      videoId: external.videoId,
+      videoId: transcript.videoId,
       videoUrl,
-      language: external.language,
-      model: external.model,
-      source: external.source,
-      segments: external.segments,
-      payload: external.payload,
+      language: transcript.language,
+      model: transcript.model,
+      source: transcript.source,
+      method: transcript.method,
+      methodLabel: transcript.methodLabel,
+      segments: transcript.segments,
+      payload: {
+        ...(transcript.payload || {}),
+        method: transcript.method,
+        methodLabel: transcript.methodLabel,
+        model: transcript.model,
+        attempts: transcript.attempts || transcript.payload?.attempts || [],
+      },
     });
   }
   const chunks = await normalizeAudioChunks(body);
@@ -1683,6 +1763,8 @@ function enrichTranscriptPayload(item) {
   item.job.stage = safeText(payload.stage);
   item.job.message = safeText(payload.message);
   item.job.progress = Number(payload.progress) || 0;
+  item.job.method = safeText(payload.method || item.job.source || item.job.model);
+  item.job.methodLabel = safeText(payload.methodLabel || payload.method || item.job.source || item.job.model);
   return item;
 }
 
@@ -2159,6 +2241,24 @@ export default {
       if (path === '/api/analysis' && request.method === 'GET') {
         const result = await listAnalysis(env.DB, url);
         return jsonResponse({ ok: true, ...result }, 200, request);
+      }
+
+      if (path === '/api/transcripts/setup' && request.method === 'GET') {
+        return jsonResponse({
+          ok: true,
+          primaryMethod: 'youtube-caption-tracks',
+          methods: [
+            'watch captionTracks',
+            'Innertube WEB captionTracks',
+            'Innertube ANDROID captionTracks',
+            'Innertube IOS captionTracks',
+            'Innertube TVHTML5 captionTracks',
+            'external yt-dlp/audio extractor fallback',
+            'Workers AI Whisper for supplied audio',
+          ],
+          cookiesConfigured: Boolean(safeText(env.YOUTUBE_COOKIES)),
+          extractorConfigured: Boolean(safeText(env.YOUTUBE_EXTRACTOR_URL || env.YOUTUBE_TRANSCRIPT_PROXY_URL)),
+        }, 200, request);
       }
 
       if (path === '/api/analysis/run' && request.method === 'POST') {

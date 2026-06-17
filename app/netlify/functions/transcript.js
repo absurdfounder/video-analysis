@@ -1,9 +1,21 @@
-const { fs, os, path, crypto, json, parseBody, safeText, runYtdlp } = require('./_utils');
+const {
+  fs,
+  os,
+  path,
+  crypto,
+  json,
+  parseBody,
+  safeText,
+  parseVtt,
+  languageScore,
+  guessLanguage,
+  runYtdlp,
+} = require('./_utils');
 
 const OPENAI_TRANSCRIPTION_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const OPENAI_FILE_LIMIT_BYTES = 24 * 1024 * 1024;
-const EXTRACTOR_VERSION = 'youtube-audio-openai-v2';
-const EXTRACTOR_SOURCE = 'youtube-audio-openai-whisper';
+const EXTRACTOR_VERSION = 'youtube-subtitles-first-v3';
+const EXTRACTOR_SOURCE = 'youtube-subtitles-first';
 
 function secondsToClock(seconds) {
   const s = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -35,6 +47,138 @@ function pickAudioFile(tempRoot) {
     })
     .sort((a, b) => fs.statSync(b).size - fs.statSync(a).size);
   return files[0] || '';
+}
+
+function normalizeSubtitleSegments(segments) {
+  return (Array.isArray(segments) ? segments : []).map((segment, index) => {
+    const start = Number(segment.start_seconds ?? segment.start ?? 0);
+    const endValue = segment.end_seconds ?? segment.end;
+    const end = endValue == null ? null : Number(endValue);
+    return {
+      start: Number.isFinite(start) ? Number(start.toFixed(3)) : 0,
+      end: Number.isFinite(end) ? Number(end.toFixed(3)) : null,
+      duration: Number.isFinite(end) ? Number(Math.max(0, end - start).toFixed(3)) : null,
+      timestamp_label: safeText(segment.timestamp_label) || secondsToClock(start),
+      text: safeText(segment.text),
+      segment_index: index,
+    };
+  }).filter(segment => segment.text);
+}
+
+function parseJson3Subtitle(text) {
+  let data = {};
+  try { data = JSON.parse(String(text || '')); } catch { return []; }
+  const segments = (Array.isArray(data.events) ? data.events : []).map((event) => {
+    const rawText = (Array.isArray(event.segs) ? event.segs : [])
+      .map(seg => String(seg?.utf8 ?? ''))
+      .join('')
+      .replace(/\n/g, ' ');
+    const start = Number(event.tStartMs || 0) / 1000;
+    const duration = Number(event.dDurationMs || 0) / 1000;
+    return {
+      start,
+      end: duration > 0 ? start + duration : null,
+      timestamp_label: secondsToClock(start),
+      text: rawText,
+    };
+  });
+  return normalizeSubtitleSegments(segments);
+}
+
+function parseXmlSubtitle(text) {
+  const segments = [];
+  const blocks = String(text || '').matchAll(/<text\b([^>]*)>([\s\S]*?)<\/text>/g);
+  for (const block of blocks) {
+    const attrs = block[1] || '';
+    const start = Number((attrs.match(/\bstart="([^"]+)"/) || [])[1] || 0);
+    const duration = Number((attrs.match(/\bdur="([^"]+)"/) || [])[1] || 0);
+    const body = String(block[2] || '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+    segments.push({
+      start,
+      end: duration > 0 ? start + duration : null,
+      timestamp_label: secondsToClock(start),
+      text: body,
+    });
+  }
+  return normalizeSubtitleSegments(segments);
+}
+
+function parseSubtitleFile(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const text = fs.readFileSync(filePath, 'utf8');
+  if (ext === '.json3') return parseJson3Subtitle(text);
+  if (ext === '.vtt') return normalizeSubtitleSegments(parseVtt(text));
+  if (ext === '.srv1' || ext === '.srv2' || ext === '.srv3' || ext === '.ttml' || ext === '.xml') return parseXmlSubtitle(text);
+  return [];
+}
+
+async function downloadYoutubeSubtitles(videoUrl, tempRoot, body) {
+  const outTemplate = path.join(tempRoot, '%(id)s.%(ext)s');
+  const languages = safeText(body.languages || body.language) || 'hi.*,hi,en.*,en';
+  let ytdlpError = null;
+  try {
+    await runYtdlp(videoUrl, {
+      skipDownload: true,
+      writeSubs: true,
+      writeAutoSubs: true,
+      subLangs: languages,
+      subFormat: 'json3/vtt/srv3/best',
+      output: outTemplate,
+      noPlaylist: true,
+      noWarnings: true,
+    }, {
+      timeout: Number(body.subtitleTimeoutMs) || 60000,
+      cwd: tempRoot,
+      maxBuffer: 1024 * 1024 * 80,
+    });
+  } catch (error) {
+    ytdlpError = error;
+  }
+
+  const subtitleFiles = fs.readdirSync(tempRoot)
+    .map(file => path.join(tempRoot, file))
+    .filter(filePath => {
+      const ext = path.extname(filePath).toLowerCase();
+      if (!['.json3', '.vtt', '.srv1', '.srv2', '.srv3', '.ttml', '.xml'].includes(ext)) return false;
+      try { return fs.statSync(filePath).size > 0; } catch { return false; }
+    })
+    .sort((a, b) => languageScore(path.basename(a)) - languageScore(path.basename(b)));
+
+  const errors = [];
+  for (const subtitlePath of subtitleFiles) {
+    try {
+      const segments = parseSubtitleFile(subtitlePath);
+      if (segments.length) {
+        return {
+          model: 'yt-dlp-subtitles',
+          language: guessLanguage(path.basename(subtitlePath)),
+          transcriptText: segments.map(segment => segment.text).join(' '),
+          segments,
+          fileName: path.basename(subtitlePath),
+          method: `yt-dlp-subtitles:${path.extname(subtitlePath).slice(1)}`,
+          methodLabel: `yt-dlp subtitles (${guessLanguage(path.basename(subtitlePath))})`,
+        };
+      }
+      errors.push(`${path.basename(subtitlePath)}: no lines`);
+    } catch (error) {
+      errors.push(`${path.basename(subtitlePath)}: ${error.message}`);
+    }
+  }
+
+  const detail = [
+    ytdlpError ? (ytdlpError.stderr || ytdlpError.message) : '',
+    errors.length ? errors.join(' · ') : '',
+    subtitleFiles.length ? '' : 'yt-dlp did not find subtitle files.',
+  ].filter(Boolean).join(' · ');
+  const error = new Error(detail || 'yt-dlp did not return usable subtitle lines.');
+  error.stage = 'fetch_subtitles';
+  throw error;
 }
 
 async function downloadYoutubeAudio(videoUrl, tempRoot, body) {
@@ -201,6 +345,7 @@ exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') return json(405, { ok: false, error: 'POST required.' });
 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fruit-youtube-audio-'));
+  let subtitleError = null;
   try {
     const body = parseBody(event);
     const videoUrl = safeText(body.videoUrl || body.url);
@@ -210,20 +355,38 @@ exports.handler = async (event) => {
       return json(400, { ok: false, error: 'Invalid video URL.' });
     }
 
-    const audioPath = await downloadYoutubeAudio(videoUrl, tempRoot, body);
-    const audioStat = fs.statSync(audioPath);
-    const transcription = await transcribeWithWorker(audioPath, body, videoUrl, id)
-      || await transcribeWithOpenAI(audioPath, body);
+    let transcription = null;
+    if (body.preferAudio !== true && body.skipSubtitles !== true) {
+      try {
+        transcription = await downloadYoutubeSubtitles(videoUrl, tempRoot, body);
+      } catch (error) {
+        subtitleError = error;
+      }
+    }
+
+    let audioPath = '';
+    let audioStat = { size: 0 };
+    if (!transcription) {
+      audioPath = await downloadYoutubeAudio(videoUrl, tempRoot, body);
+      audioStat = fs.statSync(audioPath);
+      transcription = await transcribeWithWorker(audioPath, body, videoUrl, id)
+        || await transcribeWithOpenAI(audioPath, body);
+      transcription.method = transcription.method || 'audio-openai-whisper';
+      transcription.methodLabel = transcription.methodLabel || 'audio download + Whisper';
+    }
 
     return json(200, {
       ok: true,
       id,
       source: EXTRACTOR_SOURCE,
       version: EXTRACTOR_VERSION,
+      method: transcription.method || EXTRACTOR_SOURCE,
+      methodLabel: transcription.methodLabel || EXTRACTOR_SOURCE,
       model: transcription.model,
       language: transcription.language,
-      fileName: path.basename(audioPath),
+      fileName: transcription.fileName || path.basename(audioPath),
       audioBytes: audioStat.size,
+      subtitleError: subtitleError ? (subtitleError.stderr || subtitleError.message) : '',
       segmentCount: transcription.segments.length,
       transcriptText: transcription.transcriptText,
       segments: transcription.segments,
@@ -235,6 +398,7 @@ exports.handler = async (event) => {
       version: EXTRACTOR_VERSION,
       stage: error.stage || 'unknown',
       error: error.stderr || error.message,
+      subtitleError: subtitleError ? (subtitleError.stderr || subtitleError.message) : '',
     });
   } finally {
     try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
