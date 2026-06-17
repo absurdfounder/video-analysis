@@ -1,15 +1,4 @@
 [build]
-  # Force Netlify to build from repo root even if the UI still has Base directory = app/public.
   base = "."
-  command = "npm --prefix app install && npm --prefix app run install-ytdlp"
-  publish = "app/public"
-  functions = "app/netlify/functions"
-
-[functions]
-  included_files = ["app/bin/yt-dlp", "app/package.json", "app/secrets/youtube-cookies.txt"]
-  node_bundler = "esbuild"
-
-[[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/:splat"
-  status = 200
+  command = "node scripts/build-netlify-dashboard.js"
+  publish = "netlify-dist"

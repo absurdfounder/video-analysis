@@ -9,6 +9,7 @@ cloudflare/data/india_produce_dictionary.json
 
 # Local Netlify folder
 .netlify
+netlify-dist/
 
 # Generated YouTube/debug dumps can contain page API keys and cookies.
 tmp_*.html

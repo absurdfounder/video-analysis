@@ -6328,7 +6328,175 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('log').scrollTop = el('log').scrollHeight;
     }
 
+    var DIRECT_API_BASE = String(window.KRISHI_API_BASE || '').replace(/\/+$/, '');
+    var TRANSCRIPT_CACHE_PREFIX = 'krishiRailwayTranscript:';
+
+    function readJsonStore(key, fallback) {
+      try {
+        var value = localStorage.getItem(key);
+        return value ? JSON.parse(value) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    }
+
+    function writeJsonStore(key, value) {
+      try {
+        localStorage.setItem(key, JSON.stringify(value));
+      } catch (e) {}
+    }
+
+    function parseRequestBody(options) {
+      var body = options && options.body;
+      if (!body) return {};
+      if (typeof FormData !== 'undefined' && body instanceof FormData) {
+        var formBody = {};
+        body.forEach(function (value, key) {
+          formBody[key] = value;
+        });
+        return formBody;
+      }
+      if (typeof body === 'string') {
+        try { return JSON.parse(body); } catch (e) { return {}; }
+      }
+      return body || {};
+    }
+
+    function normalizeDirectSegments(segments) {
+      return (Array.isArray(segments) ? segments : []).map(function (segment, index) {
+        var start = Number(segment.start_seconds != null ? segment.start_seconds : (segment.start != null ? segment.start : 0));
+        var endValue = segment.end_seconds != null ? segment.end_seconds : segment.end;
+        var end = endValue == null ? null : Number(endValue);
+        return {
+          segment_index: Number.isFinite(Number(segment.segment_index)) ? Number(segment.segment_index) : index,
+          start_seconds: Number.isFinite(start) ? start : 0,
+          end_seconds: Number.isFinite(end) ? end : null,
+          timestamp_label: segment.timestamp_label || secondsToClock(start),
+          text: String(segment.text || segment.caption || segment.line || ''),
+          language: segment.language || '',
+          source: segment.source || 'railway-direct',
+        };
+      }).filter(function (segment) {
+        return segment.text;
+      });
+    }
+
+    function normalizeDirectTranscript(data, requestBody) {
+      var videoUrl = String(requestBody.videoUrl || requestBody.url || data.videoUrl || '');
+      var id = String(data.id || requestBody.videoId || requestBody.video_id || requestBody.id || extractVideoId(videoUrl) || '').replace(/[^a-zA-Z0-9_-]/g, '');
+      var segments = normalizeDirectSegments(data.segments);
+      var transcript = {
+        ok: true,
+        job: {
+          id: 'railway_' + (id || Date.now()),
+          video_id: id,
+          video_url: videoUrl,
+          status: segments.length ? 'complete' : 'empty',
+          language: data.language || requestBody.language || 'hi',
+          model: data.model || 'railway-yt-dlp',
+          source: data.source || 'railway-direct',
+          method: data.method || data.source || 'railway-direct',
+          methodLabel: data.methodLabel || data.method || 'Railway direct',
+          segment_count: segments.length,
+          message: segments.length
+            ? ('Fetched ' + segments.length + ' transcript line(s) via ' + (data.methodLabel || data.method || 'Railway') + '.')
+            : 'Railway returned no transcript lines.',
+        },
+        transcriptText: data.transcriptText || segments.map(function (segment) { return segment.text; }).join(' '),
+        segments: segments,
+      };
+      if (id) writeJsonStore(TRANSCRIPT_CACHE_PREFIX + id, transcript);
+      return transcript;
+    }
+
+    function directRailwayFetchJson(path, options) {
+      if (!DIRECT_API_BASE || typeof path !== 'string' || path.indexOf('/api/') !== 0) return null;
+
+      if (path === '/api/transcripts/setup') {
+        return Promise.resolve({
+          ok: true,
+          primaryMethod: 'railway-yt-dlp-subtitles',
+          methods: ['Railway yt-dlp subtitles', 'Railway yt-dlp audio fallback'],
+          cookiesConfigured: false,
+          extractorConfigured: true,
+        });
+      }
+
+      if (path === '/api/tasks/ongoing') {
+        return Promise.resolve({
+          ok: true,
+          tasks: [],
+          pipeline: { summary: { processing: 0, waiting: 0, done: 0, failed: 0, total: 0 }, items: [] },
+          queueCount: 0,
+          autoPipelineEnabled: false,
+        });
+      }
+
+      if (path.indexOf('/api/settings') === 0) {
+        return Promise.resolve({ ok: true, settings: {}, updated: false });
+      }
+
+      if (path.indexOf('/api/prices') === 0) {
+        return Promise.resolve({ ok: true, items: readJsonStore('krishiRailwayPriceRows', []) });
+      }
+
+      if (path.indexOf('/api/analysis?') === 0) {
+        return Promise.resolve({ ok: true, items: readJsonStore('krishiRailwayAnalysisItems', []) });
+      }
+
+      if (path === '/api/analysis/run') {
+        return Promise.resolve({
+          ok: true,
+          priceRowCount: 0,
+          rows: [],
+          message: 'Railway direct mode fetched the transcript. Worker AI price analysis is not used on Netlify.',
+        });
+      }
+
+      var analysisMatch = path.match(/^\/api\/analysis\/([^/?]+)/);
+      if (analysisMatch) {
+        return Promise.resolve({ ok: true, item: null });
+      }
+
+      if (path === '/api/transcripts/transcribe') {
+        var requestBody = parseRequestBody(options);
+        if (requestBody.audio && typeof File !== 'undefined' && requestBody.audio instanceof File) {
+          return Promise.reject(new Error('Railway direct mode supports YouTube URL transcripts. For uploaded audio, use the Railway API from a server request.'));
+        }
+        var videoUrl = String(requestBody.videoUrl || requestBody.url || '').trim();
+        if (!videoUrl) return Promise.reject(new Error('Paste a YouTube URL first.'));
+        return fetch(DIRECT_API_BASE + '/api/transcript', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            id: requestBody.videoId || requestBody.video_id || extractVideoId(videoUrl),
+            videoUrl: videoUrl,
+            language: requestBody.language || 'hi',
+            languages: requestBody.languages || 'hi.*,hi,en.*,en',
+            audioUrl: requestBody.audioUrl || requestBody.audio_url || '',
+            preferAudio: false,
+          }),
+        }).then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (data) {
+            if (!response.ok || data.ok === false) throw new Error(data.error || ('Railway request failed: ' + response.status));
+            return normalizeDirectTranscript(data, requestBody);
+          });
+        });
+      }
+
+      var transcriptMatch = path.match(/^\/api\/transcripts\/([^/?]+)/);
+      if (transcriptMatch) {
+        var cached = readJsonStore(TRANSCRIPT_CACHE_PREFIX + decodeURIComponent(transcriptMatch[1]), null);
+        if (cached) return Promise.resolve(cached);
+        return Promise.reject(new Error('No local Railway transcript is stored for this video yet. Run transcript first.'));
+      }
+
+      return Promise.resolve({ ok: true });
+    }
+
     function fetchJson(path, options) {
+      var direct = directRailwayFetchJson(path, options || {});
+      if (direct) return direct;
       return fetch(path, options || {}).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) {
           var accepted = response.status === 202 && data.ok !== false;
@@ -8872,6 +9040,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function refreshTranscriptSetupStatus() {
       fetchJson('/api/transcripts/setup').then(function (data) {
         var node = el('transcriptSetupStatus');
+        if (DIRECT_API_BASE) {
+          node.className = 'status ok';
+          node.textContent = 'Railway transcript: direct yt-dlp subtitles first, with audio fallback when needed.';
+          return;
+        }
         if (data.cookiesConfigured) {
           node.className = 'status ok';
           node.textContent = 'Worker transcript: ANDROID + IOS + VR innertube clients with auto-retry when YouTube throttles. Cookies configured for auth fallback.';
