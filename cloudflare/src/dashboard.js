@@ -6513,12 +6513,13 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     var TRANSCRIPT_CACHE_PREFIX = 'krishiRailwayTranscript:';
 
     function isWorkerTranscriptPath(path) {
-      if (path === '/api/transcripts/transcribe' || path === '/api/transcripts/setup' || path === '/api/tasks/ongoing') return true;
-      return /^\/api\/transcripts\/[^/?]+$/.test(path);
+      if (path === '/api/transcripts/transcribe' || path === '/api/tasks/ongoing') return true;
+      return /^\/api\/transcripts\/[^/?]+$/.test(path) && path !== '/api/transcripts/setup';
     }
 
     function workerFetchJson(path, options) {
       if (!WORKER_API_BASE || !window.KRISHI_NETLIFY_STATIC || !isWorkerTranscriptPath(path)) return null;
+      if (path === '/api/transcripts/setup' && DIRECT_API_BASE) return null;
       if (path === '/api/transcripts/transcribe' && state.extensionBridgeReady) return null;
       var apiOptions = options || {};
       var headers = Object.assign({}, apiOptions.headers || {});
