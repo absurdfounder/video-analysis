@@ -4,6 +4,9 @@ const path = require('path');
 const DATA_KEY = 'project';
 const LOCAL_PATH = path.join(__dirname, '..', '..', 'data', 'project.json');
 
+let pgPool = null;
+let pgReady = false;
+
 function emptyProject() {
   return {
     version: 2,
@@ -16,6 +19,64 @@ function emptyProject() {
   };
 }
 
+function databaseUrl() {
+  return process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_DATABASE_URL || '';
+}
+
+function shouldUsePostgres() {
+  return Boolean(databaseUrl());
+}
+
+function getPgPool() {
+  const url = databaseUrl();
+  if (!url) return null;
+  if (!pgPool) {
+    const { Pool } = require('pg');
+    pgPool = new Pool({
+      connectionString: url,
+      max: Number(process.env.PG_POOL_MAX || 5),
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+    });
+  }
+  return pgPool;
+}
+
+async function ensurePgStore() {
+  if (pgReady) return;
+  const pool = getPgPool();
+  if (!pool) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_store (
+      key TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  pgReady = true;
+}
+
+async function loadPgProjectData() {
+  await ensurePgStore();
+  const pool = getPgPool();
+  const result = await pool.query('SELECT data FROM project_store WHERE key = $1', [DATA_KEY]);
+  if (!result.rows.length) return emptyProject();
+  return { ...emptyProject(), ...result.rows[0].data };
+}
+
+async function savePgProjectData(data) {
+  await ensurePgStore();
+  const payload = { ...data, updatedAt: new Date().toISOString() };
+  const pool = getPgPool();
+  await pool.query(
+    `INSERT INTO project_store (key, data, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
+    [DATA_KEY, JSON.stringify(payload)],
+  );
+  return payload;
+}
+
 async function getBlobStore() {
   try {
     const { getStore } = require('@netlify/blobs');
@@ -26,6 +87,8 @@ async function getBlobStore() {
 }
 
 async function loadProjectData() {
+  if (shouldUsePostgres()) return loadPgProjectData();
+
   const store = await getBlobStore();
   if (store) {
     const data = await store.get(DATA_KEY, { type: 'json' });
@@ -42,6 +105,8 @@ async function loadProjectData() {
 }
 
 async function saveProjectData(data) {
+  if (shouldUsePostgres()) return savePgProjectData(data);
+
   const payload = { ...data, updatedAt: new Date().toISOString() };
   const store = await getBlobStore();
   if (store) {
@@ -119,9 +184,15 @@ function authorizeWrite(event) {
   return header === `Bearer ${token}`;
 }
 
+function storageMode() {
+  if (shouldUsePostgres()) return 'postgres';
+  return 'json-or-netlify-blobs';
+}
+
 module.exports = {
   loadProjectData,
   saveProjectData,
   mergeProjectData,
   authorizeWrite,
+  storageMode,
 };

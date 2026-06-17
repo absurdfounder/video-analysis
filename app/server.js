@@ -1,5 +1,5 @@
 const express = require('express');
-const { loadProjectData, saveProjectData, mergeProjectData, authorizeWrite } = require('./netlify/functions/_dataStore');
+const { loadProjectData, saveProjectData, mergeProjectData, authorizeWrite, storageMode } = require('./netlify/functions/_dataStore');
 const { classifyVideosHeuristic } = require('./netlify/functions/_classify');
 const { handler: transcriptHandler } = require('./netlify/functions/transcript');
 const { analyzeTranscriptRich, normalizeSegments } = require('./lib/rich-analysis');
@@ -510,7 +510,13 @@ async function aiExtractForItem(item, options) {
 app.get('/api/status', async (_req, res) => {
   try {
     const { stdout } = await run('yt-dlp', ['--version'], { timeout: 15000 });
-    res.json({ ok: true, ytdlpVersion: stdout.trim(), openaiConfigured: Boolean(process.env.OPENAI_API_KEY) });
+    res.json({
+      ok: true,
+      ytdlpVersion: stdout.trim(),
+      openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+      databaseConfigured: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_DATABASE_URL),
+      storage: storageMode(),
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: 'yt-dlp not found. Install it first: python3 -m pip install -U yt-dlp or brew install yt-dlp.' });
   }
