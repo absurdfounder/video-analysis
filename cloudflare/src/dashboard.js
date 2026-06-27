@@ -7128,6 +7128,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       return 'https://www.youtube.com/embed/' + encodeURIComponent(videoId)
         + '?start=' + start
         + '&autoplay=' + (shouldAutoplay ? '1' : '0')
+        + (shouldAutoplay ? '&mute=1' : '')
         + '&rel=0'
         + '&modestbranding=1'
         + '&playsinline=1'
