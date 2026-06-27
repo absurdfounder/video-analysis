@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { execFile } = require('child_process');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3007;
 
 app.use((req, res, next) => {
   const origin = process.env.CORS_ORIGIN || '*';
