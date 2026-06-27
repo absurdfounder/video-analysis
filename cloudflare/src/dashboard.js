@@ -8157,26 +8157,40 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       });
     }
 
+    function fetchYouTubeTitle(videoId) {
+      return fetch('https://www.youtube.com/oembed?url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + videoId) + '&format=json')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { return (d && d.title) ? d.title : ''; })
+        .catch(function () { return ''; });
+    }
+
     function runAnalysisForVideo(videoUrl, title, transcriptData) {
       var id = extractVideoId(videoUrl);
       if (!id) return Promise.resolve(null);
-      setTranscriptStatus(DIRECT_API_BASE ? 'Transcript saved. Running AI market analysis on Railway...' : 'Transcript saved. Running AI price analysis...', '');
-      setTranscriptProgress({
-        percent: DIRECT_API_BASE ? 45 : 80,
-        stage: DIRECT_API_BASE ? 'railway_analysis' : 'analyzing',
-        message: DIRECT_API_BASE
-          ? 'OpenAI is extracting price rows, summary, facts, guidance, learnings, and chapters.'
-          : 'Worker is extracting price rows and market intelligence.',
-        elapsed: '',
-        attempt: ''
-      });
-      log((DIRECT_API_BASE ? 'Railway AI analysis' : 'AI analysis') + ' started for ' + id + '.');
-      var payload = { videoId: id, videoUrl: videoUrl, title: title || id };
-      if (transcriptData && Array.isArray(transcriptData.segments)) {
-        payload.segments = transcriptData.segments;
-        payload.transcriptText = transcriptData.transcriptText || '';
-      }
-      return fetchJson('/api/analysis/run', {
+
+      var needsTitle = !title || title === id || /^[\w-]{11}$/.test(title);
+      var titlePromise = needsTitle ? fetchYouTubeTitle(id) : Promise.resolve(title);
+
+      return titlePromise.then(function (resolvedTitle) {
+        var finalTitle = resolvedTitle || title || id;
+        var today = new Date().toISOString().slice(0, 10);
+        setTranscriptStatus(DIRECT_API_BASE ? 'Transcript saved. Running AI market analysis on Railway...' : 'Transcript saved. Running AI price analysis...', '');
+        setTranscriptProgress({
+          percent: DIRECT_API_BASE ? 45 : 80,
+          stage: DIRECT_API_BASE ? 'railway_analysis' : 'analyzing',
+          message: DIRECT_API_BASE
+            ? 'OpenAI is extracting price rows, summary, facts, guidance, learnings, and chapters.'
+            : 'Worker is extracting price rows and market intelligence.',
+          elapsed: '',
+          attempt: ''
+        });
+        log((DIRECT_API_BASE ? 'Railway AI analysis' : 'AI analysis') + ' started for ' + id + ' — title: ' + finalTitle);
+        var payload = { videoId: id, videoUrl: videoUrl, title: finalTitle, uploadDate: today };
+        if (transcriptData && Array.isArray(transcriptData.segments)) {
+          payload.segments = transcriptData.segments;
+          payload.transcriptText = transcriptData.transcriptText || '';
+        }
+        return fetchJson('/api/analysis/run', {
         method: 'POST',
         headers: Object.assign({ 'content-type': 'application/json' }, authHeaders()),
         body: JSON.stringify(payload)
@@ -8203,10 +8217,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           });
           return data;
         });
-      }).catch(function (error) {
-        log('ERROR: AI analysis failed — ' + (error.message || error));
-        setTranscriptStatus(error.message || 'AI analysis failed.', 'bad');
-        throw error;
+        }).catch(function (error) {
+          log('ERROR: AI analysis failed — ' + (error.message || error));
+          setTranscriptStatus(error.message || 'AI analysis failed.', 'bad');
+          throw error;
+        });
       });
     }
 
