@@ -6580,7 +6580,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     function workerFetchJson(path, options) {
       if (!WORKER_API_BASE || !window.KRISHI_NETLIFY_STATIC || !isWorkerTranscriptPath(path)) return null;
       if (path === '/api/transcripts/setup' && DIRECT_API_BASE) return null;
-      if (path === '/api/transcripts/transcribe' && state.extensionBridgeReady) return null;
       var apiOptions = options || {};
       var headers = Object.assign({}, apiOptions.headers || {});
       if (!headers.Authorization && !headers.authorization) {
@@ -6985,13 +6984,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         var videoUrl = String(requestBody.videoUrl || requestBody.url || '').trim();
         if (!videoUrl) return Promise.reject(new Error('Paste a YouTube URL first.'));
         if (WORKER_API_BASE && window.KRISHI_NETLIFY_STATIC) {
-          if (state.extensionBridgeReady) {
-            return fetchTranscriptViaExtension(requestBody, videoUrl);
-          }
           return null;
-        }
-        if (state.extensionBridgeReady) {
-          return fetchTranscriptViaExtension(requestBody, videoUrl);
         }
         return fetchTranscriptViaRailway(requestBody, videoUrl);
       }
@@ -8279,11 +8272,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         }
         if (status === 'failed') {
           var failMsg = job.error || job.message || 'Background transcript failed.';
-          if (!state.extensionTranscriptRetried && state.extensionBridgeReady
-            && shouldFallbackToExtensionTranscript(failMsg)) {
-            state.extensionTranscriptRetried = true;
-            return retryTranscriptViaExtension(videoUrl, job.language || el('language').value);
-          }
           throw new Error(failMsg);
         }
         if (remaining <= 1) throw new Error('Transcript is still processing after ~7 minutes. Try Load stored transcript in a minute.');
@@ -9646,39 +9634,25 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
           var missing = [];
           if (!data.openaiConfigured) missing.push('OPENAI_API_KEY');
           if (!data.databaseConfigured) missing.push('DATABASE_URL');
-          if (state.extensionBridgeReady) {
-            node.className = missing.length ? 'status bad' : 'status ok';
-            node.textContent = missing.length
-              ? ('Chrome extension fetches YouTube via your browser IP. Railway still needs ' + missing.join(', ') + ' for AI analysis + save.')
-              : 'Chrome extension fetches YouTube (browser IP, no cloud block). Railway saves + runs AI analysis.';
-            return;
-          }
           if (WORKER_API_BASE) {
             node.className = missing.length ? 'status bad' : 'status ok';
             node.textContent = missing.length
-              ? ('Cloudflare Worker transcript jobs (install Chrome extension for reliable YouTube). Railway needs ' + missing.join(', ') + '.')
-              : 'Worker transcript: ANDROID + IOS + VR innertube clients with auto-retry on YouTube throttle. Railway saves + runs AI analysis.';
+              ? ('Hetzner VPS fetches YouTube transcripts. Worker needs ' + missing.join(', ') + ' for AI analysis.')
+              : 'Hetzner VPS fetches YouTube transcripts directly, then Worker runs AI price analysis.';
             return;
           }
-          if (!data.youtubeCookiesConfigured) missing.push('YOUTUBE_COOKIES');
           node.className = missing.length ? 'status bad' : 'status ok';
           node.textContent = missing.length
-            ? ('Install the Chrome extension for reliable YouTube fetch, or add ' + missing.join(', ') + ' on Railway.')
-            : 'Railway pipeline: subtitles first, audio fallback when needed, then OpenAI extraction, then Postgres save.';
+            ? ('Hetzner VPS fetches YouTube transcripts. Railway needs ' + missing.join(', ') + '.')
+            : 'Hetzner VPS fetches transcripts. Railway saves + runs AI analysis.';
           return;
         }
-        if (data.cookiesConfigured) {
+        if (data.extractorConfigured || data.cookiesConfigured) {
           node.className = 'status ok';
-          node.textContent = 'Hetzner VPS fetches YouTube transcripts (youtube-transcript-api), then Worker runs AI price analysis.';
-        } else if (state.extensionBridgeReady) {
-          node.className = 'status ok';
-          node.textContent = 'Chrome extension opens YouTube, fetches captions, closes tab, then Worker runs AI analysis.';
-        } else if (data.extractorConfigured) {
-          node.className = 'status ok';
-          node.textContent = 'Hetzner VPS for transcripts (may be IP-blocked). Install Chrome extension for reliable fetch.';
+          node.textContent = 'Hetzner VPS fetches YouTube transcripts directly, then Worker runs AI price analysis.';
         } else {
           node.className = 'status bad';
-          node.textContent = 'Set YOUTUBE_EXTRACTOR_URL to your Hetzner extractor (http://167.233.120.228:3000/api/transcript).';
+          node.textContent = 'Set YOUTUBE_EXTRACTOR_URL to your Hetzner extractor (http://167.233.111.96:3000/api/transcript).';
         }
       }).catch(function () {
         el('transcriptSetupStatus').className = 'status';
@@ -9712,16 +9686,14 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       el('videoIdLabel').textContent = 'Video ID: ' + id;
       el('openVideoLink').href = videoUrl || ('https://www.youtube.com/watch?v=' + id);
       el('videoHint').textContent = DIRECT_API_BASE
-        ? (state.extensionBridgeReady
-          ? 'Extension fetches captions in your browser (no cloud IP block). Railway saves + analyzes.'
-          : (WORKER_API_BASE
+        ? (WORKER_API_BASE
             ? 'Transcript runs on Cloudflare Worker in the background (same flow as local dev).'
-            : 'Install the Fruit Miner Chrome extension for reliable YouTube fetch, or Railway will try server-side yt-dlp.'))
+            : 'Railway will try server-side transcript fetch.')
         : (file
           ? 'Audio upload will transcribe on the Worker and skip YouTube download.'
           : (audioUrl
             ? 'Direct audio URL will be fetched and transcribed on the Worker.'
-            : 'YouTube: Chrome extension (recommended) or Hetzner VPS, then AI analysis on Worker.'));
+            : 'YouTube: Hetzner VPS fetches transcript, then Worker runs AI analysis.'));
     }
 
     function runTranscript() {
@@ -9729,40 +9701,11 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
       var audioUrl = el('audioUrl').value.trim();
       var file = el('audioFile').files[0];
       var language = el('language').value;
-      var useWorkerTranscript = WORKER_API_BASE && window.KRISHI_NETLIFY_STATIC && !file && !state.extensionBridgeReady;
+      var useWorkerTranscript = WORKER_API_BASE && window.KRISHI_NETLIFY_STATIC && !file;
       state.extensionTranscriptRetried = false;
       openSourceLogs();
       el('runTranscriptBtn').disabled = true;
       resetTranscriptProgress();
-
-      if (!file && !audioUrl && videoUrl && state.extensionBridgeReady) {
-        setTranscriptStatus('Opening YouTube tab via extension...', '');
-        log('Extension-first: opening YouTube tab, fetching captions, then returning here for AI analysis.');
-        setTranscriptProgress({
-          percent: 12,
-          stage: 'extension_fetch',
-          message: 'Extension is fetching captions from YouTube using your browser session...',
-          elapsed: '',
-          attempt: ''
-        });
-        return fetchTranscriptViaExtension({ videoUrl: videoUrl, language: language }, videoUrl)
-          .then(function (data) { return completeExtensionTranscriptFlow(videoUrl, data); })
-          .catch(function (error) {
-            var msg = error.message || String(error);
-            log('ERROR: ' + msg);
-            openSourceLogs();
-            setTranscriptProgress({
-              percent: 100,
-              stage: 'failed',
-              message: summarizeTranscriptError(msg),
-              elapsed: '',
-              attempt: ''
-            });
-            setTranscriptStatus(summarizeTranscriptError(msg), 'bad');
-          }).finally(function () {
-            el('runTranscriptBtn').disabled = false;
-          });
-      }
 
       setTranscriptStatus(useWorkerTranscript
         ? 'Starting Hetzner transcript job...'
@@ -9831,11 +9774,6 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         return null;
       }).catch(function (error) {
         var msg = error.message || '';
-        if (!state.extensionTranscriptRetried && state.extensionBridgeReady
-            && shouldFallbackToExtensionTranscript(msg)) {
-          state.extensionTranscriptRetried = true;
-          return retryTranscriptViaExtension(videoUrl, language);
-        }
         var shouldPoll = !file && !audioUrl && extractVideoId(videoUrl)
           && !/failed|Unauthorized|no lines|cookies|not configured|Could not fetch|503/i.test(msg);
         if (shouldPoll) {
