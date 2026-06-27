@@ -8493,7 +8493,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         if (!byFruit[fruit]) byFruit[fruit] = [];
         byFruit[fruit].push(row);
       });
-      return Object.keys(byFruit).sort().map(function (fruit) {
+      return Object.keys(byFruit).map(function (fruit) {
         var fruitRows = byFruit[fruit];
         var latestDate = fruitRows.reduce(function (best, row) {
           var d = rowDate(row) || '';
@@ -8507,9 +8507,12 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
         return {
           fruit: fruit,
           rows: sortedRows,
+          latestDate: latestDate,
           lastUpdate: latestDate ? formatTallyDate({ market_date_sort: latestDate }) : 'Unknown',
           rateCount: dedupeRateRows(sortedRows).length,
         };
+      }).sort(function (a, b) {
+        return String(b.latestDate).localeCompare(String(a.latestDate)) || a.fruit.localeCompare(b.fruit);
       });
     }
 
