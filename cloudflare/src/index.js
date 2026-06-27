@@ -2400,6 +2400,37 @@ export default {
         return jsonResponse({ ok: true, ...item }, 200, request);
       }
 
+      if (path === '/api/tasks/ongoing' && request.method === 'GET') {
+        const runningJobs = await env.DB.prepare(
+          `SELECT id, video_id, video_url, status, language, model, source, error, segment_count, payload_json, created_at, updated_at
+           FROM transcript_jobs WHERE status = 'running' ORDER BY updated_at DESC LIMIT 20`,
+        ).all();
+        const tasks = (runningJobs.results || []).map((job) => {
+          let payload = {};
+          try { payload = JSON.parse(job.payload_json || '{}'); } catch { payload = {}; }
+          return {
+            id: job.id,
+            video_id: job.video_id,
+            video_url: job.video_url,
+            status: job.status,
+            stage: safeText(payload.stage) || 'running',
+            message: safeText(payload.message) || 'Fetching transcript...',
+            progress: Number(payload.progress) || 0,
+            method: safeText(payload.method || job.source),
+            methodLabel: safeText(payload.methodLabel || payload.method || job.source),
+            created_at: job.created_at,
+            updated_at: job.updated_at,
+          };
+        });
+        return jsonResponse({
+          ok: true,
+          tasks,
+          pipeline: { summary: { processing: tasks.length, waiting: 0, done: 0, failed: 0, total: tasks.length }, items: tasks },
+          queueCount: 0,
+          autoPipelineEnabled: false,
+        }, 200, request);
+      }
+
       if (path === '/api/vectors/status' && request.method === 'GET') {
         const status = await getVectorStatus(env.DB, env);
         return jsonResponse({ ok: true, ...status }, 200, request);
