@@ -25,8 +25,12 @@ function parseLanguageList(value) {
 function fetchWithYoutubeTranscriptApi(videoId, body) {
   const languages = parseLanguageList(body.languages || body.language);
   return new Promise((resolve, reject) => {
+    const proxyEnv = {};
+    if (process.env.WEBSHARE_PROXY_USERNAME) proxyEnv.WEBSHARE_PROXY_USERNAME = process.env.WEBSHARE_PROXY_USERNAME;
+    if (process.env.WEBSHARE_PROXY_PASSWORD) proxyEnv.WEBSHARE_PROXY_PASSWORD = process.env.WEBSHARE_PROXY_PASSWORD;
     const proc = spawn(PYTHON, [FETCH_SCRIPT, videoId, languages.join(',')], {
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...proxyEnv },
     });
     let stdout = '';
     let stderr = '';

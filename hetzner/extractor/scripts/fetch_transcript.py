@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fetch YouTube transcript via youtube-transcript-api; prints JSON to stdout."""
 import json
+import os
 import sys
 
 
@@ -23,6 +24,32 @@ def parse_languages(raw):
     return langs or ["hi", "en"]
 
 
+def build_api():
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    username = os.environ.get("WEBSHARE_PROXY_USERNAME", "").strip()
+    password = os.environ.get("WEBSHARE_PROXY_PASSWORD", "").strip()
+
+    if username and password:
+        try:
+            from youtube_transcript_api.proxies import WebshareProxyConfig
+            return YouTubeTranscriptApi(
+                proxy_config=WebshareProxyConfig(
+                    proxy_username=username,
+                    proxy_password=password,
+                )
+            )
+        except (ImportError, TypeError):
+            proxy_url = f"http://{username}:{password}@p.webshare.io:80"
+            proxies = {"http": proxy_url, "https": proxy_url}
+            try:
+                return YouTubeTranscriptApi(proxies=proxies)
+            except TypeError:
+                pass
+
+    return YouTubeTranscriptApi()
+
+
 def main():
     if len(sys.argv) < 2:
         print("video_id required", file=sys.stderr)
@@ -31,9 +58,7 @@ def main():
     video_id = sys.argv[1].strip()
     languages = parse_languages(sys.argv[2] if len(sys.argv) > 2 else "hi,en")
 
-    from youtube_transcript_api import YouTubeTranscriptApi
-
-    ytt = YouTubeTranscriptApi()
+    ytt = build_api()
     try:
         transcript = ytt.fetch(video_id, languages=languages)
     except Exception as error:

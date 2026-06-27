@@ -2638,7 +2638,12 @@ function sleep(ms) {
 async function waitForTabComplete(tabId, timeoutMs = 15000, expectedVideoId = '') {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const tab = await chrome.tabs.get(tabId);
+    let tab;
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch {
+      throw new Error('YouTube tab was closed before captions could be fetched. Please retry Add source.');
+    }
     if (tab.status === 'complete') {
       if (!expectedVideoId || String(tab.url || '').includes(expectedVideoId)) return tab;
     }
@@ -2705,18 +2710,28 @@ async function navigateYouTubeTabQuietly(tabId, videoUrl, videoId) {
 }
 
 async function injectTranscriptHelpers(tabId) {
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    world: 'MAIN',
-    files: ['transcript-fetch.js'],
-  });
-  const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: 'MAIN',
-    func: () => typeof globalThis.fetchTranscriptInPage === 'function',
-  });
-  if (!result) {
-    throw new Error('Could not inject transcript helpers into the YouTube tab.');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        files: ['transcript-fetch.js'],
+      });
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: () => typeof globalThis.fetchTranscriptInPage === 'function',
+      });
+      if (!result) throw new Error('Could not inject transcript helpers into the YouTube tab.');
+      return;
+    } catch (error) {
+      const msg = String(error?.message || error);
+      if (attempt < 2 && /Frame with ID \d+ was removed|Cannot access contents of|frame.*removed|No tab with id/i.test(msg)) {
+        await sleep(500 + attempt * 400);
+        continue;
+      }
+      throw error;
+    }
   }
 }
 
@@ -2729,19 +2744,36 @@ async function runInYouTubeTab(functionName, args = [], tabId = null, options = 
       // File may already be injected on this tab.
     }
   }
-  const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId: targetTabId },
-    world: 'MAIN',
-    func: (name, fnArgs) => {
-      const handler = globalThis[name];
-      if (typeof handler !== 'function') {
-        return { ok: false, error: `Missing in-page handler: ${name}` };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: targetTabId },
+        world: 'MAIN',
+        func: (name, fnArgs) => {
+          const handler = globalThis[name];
+          if (typeof handler !== 'function') {
+            return { ok: false, error: `Missing in-page handler: ${name}` };
+          }
+          return handler(...fnArgs);
+        },
+        args: [functionName, args],
+      });
+      return result;
+    } catch (error) {
+      const msg = String(error?.message || error);
+      if (/No tab with id/i.test(msg)) {
+        cachedYouTubeTabId = null;
+        await setStoredWorkerTabId(null);
+        throw error;
       }
-      return handler(...fnArgs);
-    },
-    args: [functionName, args],
-  });
-  return result;
+      if (attempt < 2 && /Frame with ID \d+ was removed|Cannot access contents of|frame.*removed/i.test(msg)) {
+        await sleep(600 + attempt * 400);
+        try { await injectTranscriptHelpers(targetTabId); } catch {}
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 async function fetchTextViaYouTubeTab(url) {
