@@ -6530,7 +6530,7 @@ export const DASHBOARD_HTML = String.raw`<!doctype html>
     var TRANSCRIPT_CACHE_PREFIX = 'krishiRailwayTranscript:';
 
     function isWorkerTranscriptPath(path) {
-      if (path === '/api/transcripts/transcribe' || path === '/api/tasks/ongoing') return true;
+      if (path === '/api/transcripts/transcribe' || path === '/api/tasks/ongoing' || path === '/api/analysis/run') return true;
       return /^\/api\/transcripts\/[^/?]+$/.test(path) && path !== '/api/transcripts/setup';
     }
 

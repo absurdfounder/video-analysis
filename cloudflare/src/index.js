@@ -2143,8 +2143,15 @@ function normalizeAnalysisRows({ videoId, videoUrl, title, uploadDate, meta, row
 async function analyzeStoredTranscript(db, env, body) {
   const videoId = safeText(body.videoId || body.video_id) || extractYouTubeId(body.videoUrl || body.video_url);
   if (!videoId) throw httpError('Send videoId or videoUrl.', 400);
-  const stored = await getTranscriptByVideo(db, videoId);
-  if (!stored || !stored.segments?.length) throw httpError('No stored transcript found for this video.', 404);
+  let stored = await getTranscriptByVideo(db, videoId);
+  if (!stored || !stored.segments?.length) {
+    const bodySegments = normalizeExternalTranscriptSegments(body.segments || []);
+    if (!bodySegments.length) throw httpError('No stored transcript found for this video.', 404);
+    stored = {
+      segments: bodySegments,
+      job: { video_url: safeText(body.videoUrl || body.video_url || `https://www.youtube.com/watch?v=${videoId}`), language: safeText(body.language) || 'hi' },
+    };
+  }
 
   const existingVideo = await getVideo(db, videoId).catch(() => null);
   const videoUrl = safeText(body.videoUrl || body.video_url || stored.job?.video_url || existingVideo?.url);
@@ -2398,6 +2405,19 @@ export default {
         const item = await getTranscriptJob(env.DB, transcriptJobMatch[1]);
         if (!item) return jsonResponse({ ok: false, error: 'Transcript job not found.' }, 404, request);
         return jsonResponse({ ok: true, ...item }, 200, request);
+      }
+
+      if (path === '/api/test-hetzner' && request.method === 'GET') {
+        const url = safeText(env.YOUTUBE_EXTRACTOR_URL || '');
+        if (!url) return jsonResponse({ ok: false, error: 'YOUTUBE_EXTRACTOR_URL not set' }, 500, request);
+        const healthUrl = url.replace(/\/api\/transcript$/, '/api/health');
+        try {
+          const res = await fetch(healthUrl, { method: 'GET' });
+          const data = await res.json().catch(() => ({}));
+          return jsonResponse({ ok: true, status: res.status, url: healthUrl, data }, 200, request);
+        } catch (e) {
+          return jsonResponse({ ok: false, error: e.message, url: healthUrl }, 500, request);
+        }
       }
 
       if (path === '/api/tasks/ongoing' && request.method === 'GET') {
