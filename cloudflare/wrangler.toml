@@ -4,7 +4,7 @@ compatibility_date = "2024-11-01"
 account_id = "1fbabfe04c39df8f27c8cbf69121313e"
 
 [vars]
-YOUTUBE_EXTRACTOR_URL = "http://167.233.111.96:3000/api/transcript"
+YOUTUBE_EXTRACTOR_URL = "https://logs-african-respect-vat.trycloudflare.com/api/transcript"
 
 [ai]
 binding = "AI"
